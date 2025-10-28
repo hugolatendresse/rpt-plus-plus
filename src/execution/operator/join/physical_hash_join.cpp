@@ -1061,7 +1061,11 @@ public:
 		} else {
 			return 0;
 		}
-		return count / ((idx_t)STANDARD_VECTOR_SIZE * parallel_scan_chunk_count);
+		idx_t thread_num = count / ((idx_t)STANDARD_VECTOR_SIZE * parallel_scan_chunk_count);
+		if (thread_num > 0) {
+			thread_num = std::max<idx_t>(thread_num, 8);
+		}
+		return thread_num;
 	}
 
 public:
