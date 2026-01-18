@@ -36,7 +36,7 @@ WHERE A.id2 % 5 = 0    -- Filter on A
   AND C.id2 % 13 = 0;  -- Filter on C
 ```
 
-The query plan demonstrates a **chained forward transfer** (C → B → A) followed by a **backward broadcast** (A → B & C). 
+The query plan demonstrates a **chain forward pass** (C → B → A) followed by a **broadcast backward pass** (A → B & C). 
 
 ## Advanced Build Configuration
 
