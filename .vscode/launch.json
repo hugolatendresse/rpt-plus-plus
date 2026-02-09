@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Debug DuckDB (interactive)",
+        "type": "lldb",
+        // Microsoft C/C++: use "type": "cppdbg" and set "MIMode": "gdb" (or "lldb" if you use LLDB).
+        // TODO what about anysphere's C/C++ extension?
+        "request": "launch",
+        "program": "${workspaceFolder}/build/debug/duckdb",
+        "args": [],
+        "cwd": "${workspaceFolder}",
+        "preLaunchTask": ""
+      },
+      {
+        "name": "Debug DuckDB (with query script)",
+        "type": "lldb",
+        "request": "launch",
+        "program": "${workspaceFolder}/build/debug/duckdb",
+        "args": [
+          "-f",
+          "${workspaceFolder}/scripts/debug/minimal_three_way_join.sql"
+        ],
+        "cwd": "${workspaceFolder}"
+      }
+    ]
+  }
