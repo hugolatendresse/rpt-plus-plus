@@ -9,8 +9,8 @@
         "request": "launch",
         "program": "${workspaceFolder}/build/debug/duckdb",
         "args": [],
-        "cwd": "${workspaceFolder}",
-        "preLaunchTask": "Build Debug"
+        // "preLaunchTask": "Build Debug",
+        "cwd": "${workspaceFolder}"
       },
       {
         "name": "Debug DuckDB (with query script)",
@@ -21,8 +21,8 @@
           "-f",
           "${workspaceFolder}/scripts/debug/minimal_three_way_join.sql"
         ],
-        "cwd": "${workspaceFolder}",
-        "preLaunchTask": "Build Debug"
+        "preLaunchTask": "Build Debug",
+        "cwd": "${workspaceFolder}"
       }
     ]
   }
