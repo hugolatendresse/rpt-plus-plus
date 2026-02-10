@@ -3,8 +3,7 @@ DROP TABLE IF EXISTS a;
 DROP TABLE IF EXISTS b; 
 DROP TABLE IF EXISTS c;
 
--- Create Fact Table A (The largest table)
--- barn values range 0-99, court values range 0-9
+-- Create Fact Table A
 CREATE TABLE a AS 
 SELECT 
     range AS id, 
@@ -12,12 +11,10 @@ SELECT
     range % 5 AS court 
 FROM range(10);
 
--- Create Dimension Table B (Smallest, high selectivity)
--- Only 5% of A (where barn < 5) will match this table
+-- Merges first
 CREATE TABLE b AS SELECT range AS barn FROM range(4);
 
--- Create Dimension Table C (Larger than B, low selectivity)
--- 100% of A will match this table
+-- Merges second
 CREATE TABLE c AS SELECT range AS court FROM range(8);
 
 -- Update statistics for the cost-based optimizer
