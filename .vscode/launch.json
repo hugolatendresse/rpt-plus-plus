@@ -19,9 +19,9 @@
         "program": "${workspaceFolder}/build/debug/duckdb",
         "args": [
           "-f",
-          "${workspaceFolder}/scripts/debug/minimal_three_way_join.sql"
+          "${workspaceFolder}/scripts/debug/left_deep_three_way.sql"
         ],
-        "preLaunchTask": "Build Debug",
+        // "preLaunchTask": "Build Debug",
         "cwd": "${workspaceFolder}"
       }
     ]

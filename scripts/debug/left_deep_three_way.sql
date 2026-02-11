@@ -11,10 +11,10 @@ SELECT
     range % 5 AS court 
 FROM range(10);
 
--- Merges first
+-- Table B merges first
 CREATE TABLE b AS SELECT range AS barn FROM range(4);
 
--- Merges second
+-- Table C merges second
 CREATE TABLE c AS SELECT range AS court FROM range(8);
 
 -- Update statistics for the cost-based optimizer
@@ -22,8 +22,8 @@ ANALYZE a;
 ANALYZE b;
 ANALYZE c;
 
--- Inspect the plan
-EXPLAIN ANALYZE SELECT count(*) 
+-- EXPLAIN ANALYZE SELECT count(*) 
+SELECT count(*) 
 FROM a 
 JOIN b ON a.barn = b.barn 
 JOIN c ON a.court = c.court;
