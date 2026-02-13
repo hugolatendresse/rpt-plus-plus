@@ -1,5 +1,7 @@
 #include "duckdb/execution/join_hashtable.hpp"
 
+#include <cstdio>
+
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/radix_partitioning.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -365,8 +367,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 
 void JoinHashTable::Hash(DataChunk &keys, const SelectionVector &sel, idx_t count, Vector &hashes) {
 	if (count == keys.size()) {
-		// no null values are filtered: use regular hash functions
-		VectorOperations::Hash(keys.data[0], hashes, keys.size());
+		// no null values are filtered: use regular hash functions // USING THIS since we dont have nulls
+		VectorOperations::Hash(keys.data[0], hashes, keys.size()); 
 		for (idx_t i = 1; i < equality_types.size(); i++) {
 			VectorOperations::CombineHash(hashes, keys.data[i], keys.size());
 		}
@@ -767,7 +769,7 @@ void JoinHashTable::Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool para
 	// Pointer table should be allocated
 	D_ASSERT(hash_map.get());
 
-	Vector hashes(LogicalType::HASH);
+	Vector hashes(LogicalType::HASH); // TODO we are in join_hashtable.cpp now???
 	auto hash_data = FlatVector::GetData<hash_t>(hashes);
 
 	TupleDataChunkIterator iterator(*data_collection, TupleDataPinProperties::KEEP_EVERYTHING_PINNED, chunk_idx_from,
@@ -784,6 +786,11 @@ void JoinHashTable::Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool para
 
 		InsertHashes(hashes, count, chunk_state, insert_state, parallel);
 	} while (iterator.Next());
+
+	const idx_t entries_bytes = hash_map.GetSize();
+	const idx_t row_data_bytes = data_collection->SizeInBytes();
+	fprintf(stderr, "[JoinHashTable::Finalize] total=%zu bytes (entries=%zu, row_data=%zu)\n",
+	        (size_t)(entries_bytes + row_data_bytes), (size_t)entries_bytes, (size_t)row_data_bytes);
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,
@@ -1506,7 +1513,7 @@ idx_t JoinHashTable::GetRemainingSize() const {
 }
 
 void JoinHashTable::Unpartition() {
-	data_collection = sink_collection->GetUnpartitioned();
+	data_collection = sink_collection->GetUnpartitioned(); // Key move from sink_collection to data_collection
 }
 
 void JoinHashTable::SetRepartitionRadixBits(const idx_t max_ht_size, const idx_t max_partition_size,
