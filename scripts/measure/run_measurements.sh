@@ -9,15 +9,18 @@ SQL_FILES=(
   0_cold
   1_cold_interleaved
   1_cold_segmented
+  5_cold_interleaved
+  5_cold_segmented
   10_cold_interleaved
   10_cold_segmented
   100_cold_interleaved
   100_cold_segmented
 )
 
-# for base in "${SQL_FILES[@]}"; do
-#   build/release/duckdb -f "$SCRIPT_DIR/${base}.sql"
-# done
+for base in "${SQL_FILES[@]}"; do
+  echo "running ${base}"
+  build/release/duckdb -f "$SCRIPT_DIR/${base}.sql"
+done
 
 for base in "${SQL_FILES[@]}"; do
   json="$SCRIPT_DIR/${base}.json"

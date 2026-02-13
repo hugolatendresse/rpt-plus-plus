@@ -6,13 +6,14 @@
 -- https://duckdb.org/docs/stable/dev/profiling
 PRAGMA enable_profiling = 'json';
 PRAGMA profiling_output = 'scripts/measure/1_cold_segmented.json';
+PRAGMA profiling_coverage = 'SELECT';
 -- PRAGMA profiling_mode = 'detailed';
 
 
--- Forces no disk spill, I think?
 -- https://duckdb.org/docs/stable/configuration/overview#:~:text=max_temp_directory_size
-SET max_temp_directory_size='0KiB';
+SET max_temp_directory_size='0KiB'; -- Forces no disk spill, I think?
 SET threads = 4; 
+SET disabled_optimizers = 'compressed_materialization';
 
 -- Clean up
 DROP TABLE IF EXISTS a; 
@@ -27,7 +28,6 @@ SELECT
 FROM range(0, 400_000_000)
 UNION ALL
 SELECT 999_999_999 AS id, 999_999_999 as keyB1; -- Have large min/max filter and disable perfect hashing
-
 
 -- Create Dimension Table B
 -- 400k entries in hashtable, all hot 

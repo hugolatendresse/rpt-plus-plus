@@ -1,42 +1,54 @@
 0_cold
 CPU Time
-8.761623753000046
+8.204396563000154
 Probe Time
-8266.142 ms
+5232.610 ms
 
 1_cold_interleaved
 CPU Time
-10.226846350999997
+10.970409115000054
 Probe Time
-9653.218 ms
+7315.549 ms
 
 1_cold_segmented
 CPU Time
-8.51566189699999
+8.521906670999988
 Probe Time
-7992.956 ms
+5453.888 ms
+
+5_cold_interleaved
+CPU Time
+16.889467408999998
+Probe Time
+12097.129 ms
+
+5_cold_segmented
+CPU Time
+8.412776429999964
+Probe Time
+5313.309 ms
 
 10_cold_interleaved
 CPU Time
-23.74106690200009
+22.973610572
 Probe Time
-22498.773 ms
+16532.455 ms
 
 10_cold_segmented
 CPU Time
-8.58745064100007
+8.94541945300002
 Probe Time
-6493.392 ms
+5486.637 ms
 
 100_cold_interleaved
 CPU Time
-48.829422162000206
+47.246446314999616
 Probe Time
-43249.909 ms
+31364.280 ms
 
 100_cold_segmented
 CPU Time
-12.895506121999974
+15.242043161000055
 Probe Time
-6906.973 ms
+6971.279 ms
 

@@ -41,6 +41,13 @@ Interleaved: all hot have a hash ending in 0, all cold have a hash ending in 1.
 HT capacity for 0-to-1: 1,048,576
 HT capacity for 100-to-1: 134,217,728
 
+TODO need to fix how I measure time: try to get wall time for probing, not sum of threads time?
+Also, this runs a million time, understand why? I removed the printf "A thread is starting the timer in PhysicalHashJoin::ExecuteInteral"
+Also, should I be counting probe_executor.Execute() or not?
+Also, should I be counting ReferenceColumns() or not?
+Also, should I be counting .Next() or not?
+
+
 TODO need to measure perfect joins too, Martin said 
 
 TODO if JP says that we don't want perfect join, maybe deactivate it manually to not have to duplicate my keys in the dimension table?

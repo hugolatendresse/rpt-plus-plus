@@ -28,6 +28,7 @@
 #include "duckdb/storage/temporary_memory_manager.hpp"
 
 #include <chrono>
+#include <iostream>
 
 namespace duckdb {
 
@@ -188,8 +189,7 @@ public:
 	}
 	~HashJoinGlobalSinkState() override {
 		auto probe_ns = probe_time_ns.load(std::memory_order_relaxed);
-		fprintf(stderr, "[HashJoinTiming] probe_ms=%.3f\n", 
-		        static_cast<double>(probe_ns) / 1000000.0);
+		fprintf(stderr, "[HashJoinTiming] probe_ms=%.3f\n", static_cast<double>(probe_ns) / 1000000.0);
 	}
 
 	void ScheduleFinalize(Pipeline &pipeline, Event &event);
@@ -1055,24 +1055,27 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 		state.spill_state = sink.probe_spill->RegisterThread();
 		state.initialized = true;
 	}
+	{
+		ScopedHashJoinTimer probe_timer(sink.probe_time_ns);
+		if (state.scan_structure.is_null) {
+			// probe the HT, start by resolving the join keys for the left chunk
+			state.lhs_join_keys.Reset();
+			state.probe_executor.Execute(input, state.lhs_join_keys);
 
-	ScopedHashJoinTimer probe_timer(sink.probe_time_ns);
-	if (state.scan_structure.is_null) {
-		// probe the HT, start by resolving the join keys for the left chunk
-		state.lhs_join_keys.Reset();
-		state.probe_executor.Execute(input, state.lhs_join_keys);
-
-		// perform the actual probe
-		if (sink.external) {
-			sink.hash_table->ProbeAndSpill(state.scan_structure, state.lhs_join_keys, state.join_key_state,
-			                               state.probe_state, input, *sink.probe_spill, state.spill_state,
-			                               state.spill_chunk);
-		} else {
-			sink.hash_table->Probe(state.scan_structure, state.lhs_join_keys, state.join_key_state, state.probe_state);
+			// perform the actual probe
+			if (sink.external) {
+				sink.hash_table->ProbeAndSpill(state.scan_structure, state.lhs_join_keys, state.join_key_state,
+				                               state.probe_state, input, *sink.probe_spill, state.spill_state,
+				                               state.spill_chunk);
+			} else {
+				sink.hash_table->Probe(state.scan_structure, state.lhs_join_keys, state.join_key_state,
+				                       state.probe_state);
+			}
 		}
-	}
 
-	state.lhs_output.ReferenceColumns(input, lhs_output_columns.col_idxs);
+		state.lhs_output.ReferenceColumns(input, lhs_output_columns.col_idxs);
+	} // End timer scope to not capture materialization
+
 	state.scan_structure.Next(state.lhs_join_keys, state.lhs_output, chunk);
 
 	if (state.scan_structure.PointersExhausted() && chunk.size() == 0) {
@@ -1430,43 +1433,48 @@ void HashJoinLocalSourceState::ExternalBuild(HashJoinGlobalSinkState &sink, Hash
 void HashJoinLocalSourceState::ExternalProbe(HashJoinGlobalSinkState &sink, HashJoinGlobalSourceState &gstate,
                                              DataChunk &chunk) {
 	D_ASSERT(local_stage == HashJoinSourceStage::PROBE && sink.hash_table->finalized);
-	ScopedHashJoinTimer probe_timer(sink.probe_time_ns);
+	{
+		std::cerr << "A thread is starting the timer in HashJoinLocalSourceState::ExternalProbe" << std::endl;
+		ScopedHashJoinTimer probe_timer(sink.probe_time_ns);
 
-	if (!scan_structure.is_null) {
-		// Still have elements remaining (i.e. we got >STANDARD_VECTOR_SIZE elements in the previous probe)
-		scan_structure.Next(lhs_join_keys, lhs_output, chunk);
-		if (chunk.size() != 0 || !scan_structure.PointersExhausted()) {
+		if (!scan_structure.is_null) {
+			// Still have elements remaining (i.e. we got >STANDARD_VECTOR_SIZE elements in the previous probe)
+			scan_structure.Next(lhs_join_keys, lhs_output, chunk);
+			if (chunk.size() != 0 || !scan_structure.PointersExhausted()) {
+				return;
+			}
+		}
+
+		if (!scan_structure.is_null || empty_ht_probe_in_progress) {
+			// Previous probe is done
+			scan_structure.is_null = true;
+			empty_ht_probe_in_progress = false;
+			sink.probe_spill->consumer->FinishChunk(probe_local_scan);
+			auto guard = gstate.Lock();
+			gstate.probe_chunk_done++;
 			return;
 		}
-	}
 
-	if (!scan_structure.is_null || empty_ht_probe_in_progress) {
-		// Previous probe is done
-		scan_structure.is_null = true;
-		empty_ht_probe_in_progress = false;
-		sink.probe_spill->consumer->FinishChunk(probe_local_scan);
-		auto guard = gstate.Lock();
-		gstate.probe_chunk_done++;
-		return;
-	}
+		// Scan input chunk for next probe
+		sink.probe_spill->consumer->ScanChunk(probe_local_scan, lhs_probe_chunk);
 
-	// Scan input chunk for next probe
-	sink.probe_spill->consumer->ScanChunk(probe_local_scan, lhs_probe_chunk);
+		// Get the probe chunk columns/hashes
+		lhs_join_keys.Reset();
+		lhs_join_key_executor.Execute(lhs_probe_chunk, lhs_join_keys);
+		lhs_output.ReferenceColumns(lhs_probe_chunk, sink.op.lhs_output_columns.col_idxs);
 
-	// Get the probe chunk columns/hashes
-	lhs_join_keys.Reset();
-	lhs_join_key_executor.Execute(lhs_probe_chunk, lhs_join_keys);
-	lhs_output.ReferenceColumns(lhs_probe_chunk, sink.op.lhs_output_columns.col_idxs);
+		if (sink.hash_table->Count() == 0 && !gstate.op.EmptyResultIfRHSIsEmpty()) {
+			gstate.op.ConstructEmptyJoinResult(sink.hash_table->join_type, sink.hash_table->has_null, lhs_output,
+			                                   chunk);
+			empty_ht_probe_in_progress = true;
+			return;
+		}
 
-	if (sink.hash_table->Count() == 0 && !gstate.op.EmptyResultIfRHSIsEmpty()) {
-		gstate.op.ConstructEmptyJoinResult(sink.hash_table->join_type, sink.hash_table->has_null, lhs_output, chunk);
-		empty_ht_probe_in_progress = true;
-		return;
-	}
+		// Perform the probe
+		auto precomputed_hashes = &lhs_probe_chunk.data.back();
+		sink.hash_table->Probe(scan_structure, lhs_join_keys, join_key_state, probe_state, precomputed_hashes);
+	} // end timer scope to avoid counting materialization
 
-	// Perform the probe
-	auto precomputed_hashes = &lhs_probe_chunk.data.back();
-	sink.hash_table->Probe(scan_structure, lhs_join_keys, join_key_state, probe_state, precomputed_hashes);
 	scan_structure.Next(lhs_join_keys, lhs_output, chunk);
 }
 

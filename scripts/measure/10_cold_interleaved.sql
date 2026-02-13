@@ -10,10 +10,12 @@ PRAGMA profiling_coverage = 'SELECT';
 -- PRAGMA profiling_mode = 'detailed';
 
 
--- Forces no disk spill, I think?
 -- https://duckdb.org/docs/stable/configuration/overview#:~:text=max_temp_directory_size
-SET max_temp_directory_size='0KiB';
+SET max_temp_directory_size='0KiB'; -- Forces no disk spill, I think?
 SET threads = 4; 
+SET disabled_optimizers = 'compressed_materialization';
+
+
 
 -- Clean up
 DROP TABLE IF EXISTS a; 
