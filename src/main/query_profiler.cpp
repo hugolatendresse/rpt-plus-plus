@@ -480,6 +480,30 @@ OperatorInformation &OperatorProfiler::GetOperatorInfo(const PhysicalOperator &p
 	return operator_infos[phys_op];
 }
 
+void OperatorProfiler::AddExtraInfo(InsertionOrderPreservingMap<string> extra_info) {
+	if (!enabled) {
+		return;
+	}
+	if (!active_operator) {
+		return;
+	}
+	if (!ProfilingInfo::Enabled(settings, MetricsType::EXTRA_INFO)) {
+		return;
+	}
+
+	auto &info = GetOperatorInfo(*active_operator);
+	for (auto &new_info : extra_info) {
+		auto entry = info.extra_info.find(new_info.first);
+		if (entry != info.extra_info.end()) {
+			// entry exists - override
+			entry->second = std::move(new_info.second);
+		} else {
+			// entry does not exist yet - insert
+			info.extra_info.insert(std::move(new_info));
+		}
+	}
+}
+
 void OperatorProfiler::Flush(const PhysicalOperator &phys_op) {
 	auto entry = operator_infos.find(phys_op);
 	if (entry == operator_infos.end()) {

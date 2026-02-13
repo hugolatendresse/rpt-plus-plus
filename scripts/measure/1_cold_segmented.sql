@@ -19,7 +19,7 @@ DROP TABLE IF EXISTS a;
 DROP TABLE IF EXISTS b; 
 
 -- Create Fact Table A
--- Hits every key 1000 times
+-- Hits every hot key 1000 times
 CREATE TABLE a AS 
 SELECT 
     range AS id, 
@@ -38,8 +38,8 @@ WITH base_data AS (
     UNION ALL
     SELECT 999_999_999 as keyB1 -- Have large min/max filter and disable perfect hashing
 )
-SELECT * FROM base_data
-ORDER BY random();
+SELECT keyB1, (keyB1 < 400_000) as hot FROM base_data
+ORDER BY hot, random();
 
 -- Update statistics for the cost-based optimizer
 ANALYZE a;

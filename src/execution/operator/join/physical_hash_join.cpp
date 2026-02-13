@@ -27,7 +27,32 @@
 #include "duckdb/storage/storage_manager.hpp"
 #include "duckdb/storage/temporary_memory_manager.hpp"
 
+#include <chrono>
+
 namespace duckdb {
+
+class ScopedHashJoinTimer {
+public:
+	explicit ScopedHashJoinTimer(atomic<uint64_t> &target_p)
+	    : target(target_p), start(std::chrono::steady_clock::now()) {
+	}
+
+	~ScopedHashJoinTimer() {
+		auto end = std::chrono::steady_clock::now();
+		auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+		target.fetch_add(NumericCast<uint64_t>(elapsed_ns), std::memory_order_relaxed);
+	}
+
+private:
+	atomic<uint64_t> &target;
+	std::chrono::steady_clock::time_point start;
+};
+
+static InsertionOrderPreservingMap<string> GetHashJoinTimingInfo(const uint64_t probe_ns) {
+	InsertionOrderPreservingMap<string> result;
+	result["Probe Time"] = StringUtil::Format("%.3f ms", static_cast<double>(probe_ns) / 1000000.0);
+	return result;
+}
 
 PhysicalHashJoin::PhysicalHashJoin(LogicalOperator &op, PhysicalOperator &left, PhysicalOperator &right,
                                    vector<JoinCondition> cond, JoinType join_type,
@@ -161,6 +186,11 @@ public:
 			global_filter_state = op.filter_pushdown->GetGlobalState(context, op);
 		}
 	}
+	~HashJoinGlobalSinkState() override {
+		auto probe_ns = probe_time_ns.load(std::memory_order_relaxed);
+		fprintf(stderr, "[HashJoinTiming] probe_ms=%.3f\n", 
+		        static_cast<double>(probe_ns) / 1000000.0);
+	}
 
 	void ScheduleFinalize(Pipeline &pipeline, Event &event);
 	void InitializeProbeSpill();
@@ -198,6 +228,8 @@ public:
 
 	//! Whether or not we have started scanning data using GetData
 	atomic<bool> scanned_data;
+	//! Total time spent in hash join probe logic
+	atomic<uint64_t> probe_time_ns {0};
 
 	bool skip_filter_pushdown = false;
 	unique_ptr<JoinFilterGlobalState> global_filter_state;
@@ -381,9 +413,8 @@ static void PrintJoinHashTableFinalizeStats(JoinHashTable &ht) {
 	const idx_t row_data_bytes = ht.GetDataCollection().SizeInBytes();
 	const size_t mib = static_cast<size_t>(1024 * 1024);
 	fprintf(stderr,
-	        "[HashJoinFinalizeEvent::FinishEvent] total=%zu bytes (entries=%zu, row_data=%zu)\n total=%zu MiB (entries=%zu MiB, "
+	        "[HashJoinFinalizeEvent::FinishEvent] total=%zu MiB (entries=%zu MiB, "
 	        "row_data=%zu MiB)\n",
-	        (size_t)(entries_bytes + row_data_bytes), (size_t)entries_bytes, (size_t)row_data_bytes,
 	        (size_t)(entries_bytes + row_data_bytes) / mib, (size_t)entries_bytes / mib, (size_t)row_data_bytes / mib);
 }
 
@@ -989,23 +1020,31 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
                                                      GlobalOperatorState &gstate, OperatorState &state_p) const {
 	auto &state = state_p.Cast<HashJoinOperatorState>();
 	auto &sink = sink_state->Cast<HashJoinGlobalSinkState>();
+	auto emit_probe_timing = [&]() {
+		auto probe_ns = sink.probe_time_ns.load(std::memory_order_relaxed);
+		context.thread.profiler.AddExtraInfo(GetHashJoinTimingInfo(probe_ns));
+	};
 	D_ASSERT(sink.finalized);
 	D_ASSERT(!sink.scanned_data);
 
 	if (sink.hash_table->Count() == 0) {
 		if (EmptyResultIfRHSIsEmpty()) {
+			emit_probe_timing();
 			return OperatorResultType::FINISHED;
 		}
 		state.lhs_output.ReferenceColumns(input, lhs_output_columns.col_idxs);
 		ConstructEmptyJoinResult(sink.hash_table->join_type, sink.hash_table->has_null, state.lhs_output, chunk);
+		emit_probe_timing();
 		return OperatorResultType::NEED_MORE_INPUT;
 	}
 
 	if (sink.perfect_join_executor) {
 		D_ASSERT(!sink.external);
 		state.lhs_output.ReferenceColumns(input, lhs_output_columns.col_idxs);
-		return sink.perfect_join_executor->ProbePerfectHashTable(context, input, state.lhs_output, chunk,
-		                                                         *state.perfect_hash_join_state);
+		auto result = sink.perfect_join_executor->ProbePerfectHashTable(context, input, state.lhs_output, chunk,
+		                                                                *state.perfect_hash_join_state);
+		emit_probe_timing();
+		return result;
 	}
 
 	if (sink.external && !state.initialized) {
@@ -1017,6 +1056,7 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 		state.initialized = true;
 	}
 
+	ScopedHashJoinTimer probe_timer(sink.probe_time_ns);
 	if (state.scan_structure.is_null) {
 		// probe the HT, start by resolving the join keys for the left chunk
 		state.lhs_join_keys.Reset();
@@ -1037,8 +1077,10 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 
 	if (state.scan_structure.PointersExhausted() && chunk.size() == 0) {
 		state.scan_structure.is_null = true;
+		emit_probe_timing();
 		return OperatorResultType::NEED_MORE_INPUT;
 	}
+	emit_probe_timing();
 	return OperatorResultType::HAVE_MORE_OUTPUT;
 }
 
@@ -1388,6 +1430,7 @@ void HashJoinLocalSourceState::ExternalBuild(HashJoinGlobalSinkState &sink, Hash
 void HashJoinLocalSourceState::ExternalProbe(HashJoinGlobalSinkState &sink, HashJoinGlobalSourceState &gstate,
                                              DataChunk &chunk) {
 	D_ASSERT(local_stage == HashJoinSourceStage::PROBE && sink.hash_table->finalized);
+	ScopedHashJoinTimer probe_timer(sink.probe_time_ns);
 
 	if (!scan_structure.is_null) {
 		// Still have elements remaining (i.e. we got >STANDARD_VECTOR_SIZE elements in the previous probe)
@@ -1449,6 +1492,10 @@ SourceResultType PhysicalHashJoin::GetData(ExecutionContext &context, DataChunk 
 	auto &sink = sink_state->Cast<HashJoinGlobalSinkState>();
 	auto &gstate = input.global_state.Cast<HashJoinGlobalSourceState>();
 	auto &lstate = input.local_state.Cast<HashJoinLocalSourceState>();
+	auto emit_probe_timing = [&]() {
+		auto probe_ns = sink.probe_time_ns.load(std::memory_order_relaxed);
+		context.thread.profiler.AddExtraInfo(GetHashJoinTimingInfo(probe_ns));
+	};
 	sink.scanned_data = true;
 
 	if (!sink.external && !PropagatesBuildSide(join_type)) {
@@ -1458,6 +1505,7 @@ SourceResultType PhysicalHashJoin::GetData(ExecutionContext &context, DataChunk 
 			sink.hash_table->Reset();
 			sink.temporary_memory_state->SetZero();
 		}
+		emit_probe_timing();
 		return SourceResultType::FINISHED;
 	}
 
@@ -1475,11 +1523,13 @@ SourceResultType PhysicalHashJoin::GetData(ExecutionContext &context, DataChunk 
 			if (gstate.TryPrepareNextStage(sink) || gstate.global_stage == HashJoinSourceStage::DONE) {
 				gstate.UnblockTasks(guard);
 			} else {
+				emit_probe_timing();
 				return gstate.BlockSource(guard, input.interrupt_state);
 			}
 		}
 	}
 
+	emit_probe_timing();
 	return chunk.size() == 0 ? SourceResultType::FINISHED : SourceResultType::HAVE_MORE_OUTPUT;
 }
 

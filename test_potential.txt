@@ -30,7 +30,20 @@ to the hash table will cost time. Two options:
 - Interlace vs don't interlace the cold section!!!!!
 
 
+How to do segmented and interlaced considering that we are hashes and hash salts and so on?
+Segmented: could preserve the MSB of the bitmask and force hot and cold this way. 
+            Would need to change SQL logic to set that bit????
+
+Interleaved: all hot have a hash ending in 0, all cold have a hash ending in 1.
+
+
+
+
+
+
 TODO if JP says that we don't want perfect join, maybe deactivate it manually to not have to duplicate my keys in the dimension table?
+
+todo run with latest duckdb main
 
 Then, we can make the cold portion of the hash table much bigger. 
 
@@ -59,6 +72,8 @@ TODO create an assertion that we have zero collisions initially (to make sure my
 TODO ... then write tests that actually have assertions?
 
 TODO do I have a way of checking if the probe side table goes to disk? It gets very slow if I go from 100M to 1B rows
+
+TODO understand if my processor compiled hash table accesses to SIMD
 
 In terms of how the space that's 
 

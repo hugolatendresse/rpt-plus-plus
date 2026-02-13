@@ -1,6 +1,7 @@
 #include "duckdb/execution/join_hashtable.hpp"
 
 #include <cstdio>
+#include <iostream>
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/radix_partitioning.hpp"
@@ -738,6 +739,7 @@ void JoinHashTable::InsertHashes(Vector &hashes_v, const idx_t count, TupleDataC
 void JoinHashTable::AllocatePointerTable() {
 	capacity = PointerTableCapacity(Count());
 	D_ASSERT(IsPowerOfTwo(capacity));
+	std::cerr << "[JoinHashTable::AllocatePointerTable] Pointer table capacity is " << capacity << std::endl;
 
 	if (hash_map.get()) {
 		// There is already a hash map
