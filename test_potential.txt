@@ -35,11 +35,13 @@ Segmented: could preserve the MSB of the bitmask and force hot and cold this way
             Would need to change SQL logic to set that bit????
 
 Interleaved: all hot have a hash ending in 0, all cold have a hash ending in 1.
+            That doesn't work!!! Since linear probing
 
 
+HT capacity for 0-to-1: 1,048,576
+HT capacity for 100-to-1: 134,217,728
 
-
-
+TODO need to measure perfect joins too, Martin said 
 
 TODO if JP says that we don't want perfect join, maybe deactivate it manually to not have to duplicate my keys in the dimension table?
 

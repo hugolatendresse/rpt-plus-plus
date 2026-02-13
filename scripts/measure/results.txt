@@ -1,0 +1,42 @@
+0_cold
+CPU Time
+8.761623753000046
+Probe Time
+8266.142 ms
+
+1_cold_interleaved
+CPU Time
+10.226846350999997
+Probe Time
+9653.218 ms
+
+1_cold_segmented
+CPU Time
+8.51566189699999
+Probe Time
+7992.956 ms
+
+10_cold_interleaved
+CPU Time
+23.74106690200009
+Probe Time
+22498.773 ms
+
+10_cold_segmented
+CPU Time
+8.58745064100007
+Probe Time
+6493.392 ms
+
+100_cold_interleaved
+CPU Time
+48.829422162000206
+Probe Time
+43249.909 ms
+
+100_cold_segmented
+CPU Time
+12.895506121999974
+Probe Time
+6906.973 ms
+
