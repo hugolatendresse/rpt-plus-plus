@@ -22,4 +22,4 @@ ANALYZE b;
 -- EXPLAIN ANALYZE SELECT count(*) 
 SELECT count(*) 
 FROM a 
-JOIN b ON a.barn = b.barn 
+JOIN b ON a.barn = b.barn;

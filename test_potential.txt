@@ -14,6 +14,12 @@ That should be a tunable parameter, but suppose we hit each entry 100 times.
 
 That's 150,000,000 rows in the fact table (LHS/probe side). That's a 28-bit identifier.
 
+Creating a dimension table like this:
+CREATE TABLE b AS SELECT range % 200_000 AS keyB1 FROM range(400_000);
+Creates a hashtable of 14MiB. That means that 200k entries with a chain of size 2 in each entry works well.
+
+
+TODO if JP says that we don't want perfect join, maybe deactivate it manually to not have to duplicate my keys in the dimension table?
 
 Then, we can make the cold portion of the hash table much bigger. 
 
@@ -31,6 +37,8 @@ TODO need to understand which path in TightLoopHash is taken for the hashing.
 
 TODO decide what I do with MurmurHash64 - do we do regular hash, parity conserving hash, or 32-bit key conserving hash?
 
+TODO understand why the size of the hashtable is much bigger than what my simple math would imply.
+
 TODO NEED TO MAKE SURE THAT THE COLD ENTRIES HASH TO SOMETHING DIFFERENT THAN THE HOT ENTRIES!!!!!!!!!!!!!!!!!!!!!!
 One approach to do that is to hack the hash function to have, for example, last digit be 0 when we want cold and last digit be 1 when we want hot.
 That itself can be based on the last digit of the column. Odd keys will be hot, and even keys will never be used. 
@@ -38,6 +46,8 @@ Hence the LHS contains only odd keys.
 
 TODO create an assertion that we have zero collisions initially (to make sure my hashing works).
 TODO ... then write tests that actually have assertions?
+
+TODO do I have a way of checking if the probe side table goes to disk? It gets very slow if I go from 100M to 1B rows
 
 In terms of how the space that's 
 
