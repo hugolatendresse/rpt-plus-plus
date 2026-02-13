@@ -1,11 +1,11 @@
--- 0 cold entries - all 400k entries are hot
--- Hash table size: 14MiB
+-- 1 cold entry for each hot entry - interlaced
+-- Hash table size: 140MiB, of which 14MiB is hot
 -- Does not use perfect hashing
 
 
 -- https://duckdb.org/docs/stable/dev/profiling
 PRAGMA enable_profiling = 'json';
-PRAGMA profiling_output = 'scripts/measure/0_cold.json';
+PRAGMA profiling_output = 'scripts/measure/1_cold_interleaved.json';
 -- PRAGMA profiling_mode = 'detailed';
 
 
@@ -23,19 +23,18 @@ DROP TABLE IF EXISTS b;
 CREATE TABLE a AS 
 SELECT 
     range AS id, 
-    range % 400_000 AS keyB1
-FROM range(0, 400_000_000)
+    range % 800_000 AS keyB1
+FROM range(0, 800_000_000, 2)
 UNION ALL
 SELECT 999_999_999 AS id, 999_999_999 as keyB1; -- Have large min/max filter and disable perfect hashing
 
 
 -- Create Dimension Table B
--- 400k entries in hashtable, all hot 
+-- 400k hot entries in hashtable interlaced with 400k cold entries 
 -- Since the range is > 1M wide, perfect hashing is disabled
-CREATE TABLE b AS SELECT range AS keyB1 FROM range(0, 400_000)
+CREATE TABLE b AS SELECT range AS keyB1 FROM range(0, 800_000)
 UNION ALL
 SELECT 999_999_999 as keyB1; -- Have large min/max filter and disable perfect hashing
-
 
 -- Update statistics for the cost-based optimizer
 ANALYZE a;

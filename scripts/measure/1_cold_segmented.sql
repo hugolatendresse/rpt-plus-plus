@@ -1,11 +1,11 @@
--- 0 cold entries - all 400k entries are hot
--- Hash table size: 14MiB
+-- 1 cold entry for each hot entry - segmented
+-- Hash table size: 28MiB, of which 14MiB is hot
 -- Does not use perfect hashing
 
 
 -- https://duckdb.org/docs/stable/dev/profiling
 PRAGMA enable_profiling = 'json';
-PRAGMA profiling_output = 'scripts/measure/0_cold.json';
+PRAGMA profiling_output = 'scripts/measure/1_cold_segmented.json';
 -- PRAGMA profiling_mode = 'detailed';
 
 
@@ -32,7 +32,7 @@ SELECT 999_999_999 AS id, 999_999_999 as keyB1; -- Have large min/max filter and
 -- Create Dimension Table B
 -- 400k entries in hashtable, all hot 
 -- Since the range is > 1M wide, perfect hashing is disabled
-CREATE TABLE b AS SELECT range AS keyB1 FROM range(0, 400_000)
+CREATE TABLE b AS SELECT range AS keyB1 FROM range(0, 800_000)
 UNION ALL
 SELECT 999_999_999 as keyB1; -- Have large min/max filter and disable perfect hashing
 

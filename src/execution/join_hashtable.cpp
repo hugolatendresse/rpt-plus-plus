@@ -786,14 +786,6 @@ void JoinHashTable::Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool para
 
 		InsertHashes(hashes, count, chunk_state, insert_state, parallel);
 	} while (iterator.Next());
-
-	const idx_t entries_bytes = hash_map.GetSize();
-	const idx_t row_data_bytes = data_collection->SizeInBytes();
-	const size_t MiB = static_cast<size_t>(1024 * 1024);
-	fprintf(stderr, "[JoinHashTable::Finalize] total=%zu bytes (entries=%zu, row_data=%zu)\n total=%zu MiB (entries=%zu MiB, row_data=%zu MiB)\n",
-	        (size_t)(entries_bytes + row_data_bytes), (size_t)entries_bytes, (size_t)row_data_bytes,
-	        (size_t)(entries_bytes + row_data_bytes) / MiB, (size_t)entries_bytes / MiB, (size_t)row_data_bytes / MiB
-		);
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,

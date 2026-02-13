@@ -376,6 +376,17 @@ SinkCombineResultType PhysicalHashJoin::Combine(ExecutionContext &context, Opera
 static constexpr idx_t PARALLEL_CONSTRUCT_THRESHOLD = 1048576;
 static constexpr double SKEW_SINGLE_THREADED_THRESHOLD = 0.33;
 
+static void PrintJoinHashTableFinalizeStats(JoinHashTable &ht) {
+	const idx_t entries_bytes = ht.capacity * sizeof(ht_entry_t);
+	const idx_t row_data_bytes = ht.GetDataCollection().SizeInBytes();
+	const size_t mib = static_cast<size_t>(1024 * 1024);
+	fprintf(stderr,
+	        "[HashJoinFinalizeEvent::FinishEvent] total=%zu bytes (entries=%zu, row_data=%zu)\n total=%zu MiB (entries=%zu MiB, "
+	        "row_data=%zu MiB)\n",
+	        (size_t)(entries_bytes + row_data_bytes), (size_t)entries_bytes, (size_t)row_data_bytes,
+	        (size_t)(entries_bytes + row_data_bytes) / mib, (size_t)entries_bytes / mib, (size_t)row_data_bytes / mib);
+}
+
 //! If the data is very skewed (many of the exact same key), our finalize will become slow,
 //! due to completely slamming the same atomic using compare-and-swaps.
 //! We can detect this because we partition the data, and go for a single-threaded finalize instead.
@@ -573,6 +584,8 @@ public:
 	}
 
 	void FinishEvent() override {
+		auto &ht = *sink.hash_table;
+		PrintJoinHashTableFinalizeStats(ht);
 		sink.hash_table->GetDataCollection().VerifyEverythingPinned();
 		sink.hash_table->finalized = true;
 	}

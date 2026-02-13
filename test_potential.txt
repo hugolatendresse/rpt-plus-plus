@@ -19,6 +19,17 @@ CREATE TABLE b AS SELECT range % 200_000 AS keyB1 FROM range(400_000);
 Creates a hashtable of 14MiB. That means that 200k entries with a chain of size 2 in each entry works well.
 
 
+
+                    LHS                     RHS 
+0_cold              400M records            400k records                all match
+
+
+The issue is that if we want to add cold entries in the RHS but keep everything else the same, adding those additional RHS entries
+to the hash table will cost time. Two options:
+- Profile the Probe time only
+- Interlace vs don't interlace the cold section!!!!!
+
+
 TODO if JP says that we don't want perfect join, maybe deactivate it manually to not have to duplicate my keys in the dimension table?
 
 Then, we can make the cold portion of the hash table much bigger. 
