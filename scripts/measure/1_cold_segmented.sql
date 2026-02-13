@@ -32,10 +32,14 @@ SELECT 999_999_999 AS id, 999_999_999 as keyB1; -- Have large min/max filter and
 -- Create Dimension Table B
 -- 400k entries in hashtable, all hot 
 -- Since the range is > 1M wide, perfect hashing is disabled
-CREATE TABLE b AS SELECT range AS keyB1 FROM range(0, 800_000)
-UNION ALL
-SELECT 999_999_999 as keyB1; -- Have large min/max filter and disable perfect hashing
-
+CREATE TABLE b AS
+WITH base_data AS (
+    SELECT range AS keyB1 FROM range(0, 800_000)
+    UNION ALL
+    SELECT 999_999_999 as keyB1 -- Have large min/max filter and disable perfect hashing
+)
+SELECT * FROM base_data
+ORDER BY random();
 
 -- Update statistics for the cost-based optimizer
 ANALYZE a;
