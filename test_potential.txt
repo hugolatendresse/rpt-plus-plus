@@ -48,6 +48,12 @@ Also, should I be counting ReferenceColumns() or not?
 Also, should I be counting .Next() or not?
 
 
+QUESTIONS: 
+- ok with wall time and sum of theads time? JP: yes (maybe divide probe time by thread count? And maybe measure build time?)
+- Where do we draw the line for probe time? JP is ok with how I did it
+- slack versus dropping by? Outstanding question
+
+
 TODO need to measure perfect joins too, Martin said 
 
 TODO if JP says that we don't want perfect join, maybe deactivate it manually to not have to duplicate my keys in the dimension table?
