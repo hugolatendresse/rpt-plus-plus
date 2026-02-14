@@ -41,6 +41,7 @@ public:
 	~ScopedHashJoinTimer() {
 		auto end = std::chrono::steady_clock::now();
 		auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+		// This doesn't interaact with anything else so memory_order_relaxed is ok.
 		target.fetch_add(NumericCast<uint64_t>(elapsed_ns), std::memory_order_relaxed);
 	}
 
