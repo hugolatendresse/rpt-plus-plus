@@ -1,0 +1,125 @@
+
+Size of hugo's L3 cache: 24Mib (25.1 million bytes)
+In general, we want half of the L3 cache to be hot.
+
+
+******* PLAIN DUCKDB TEST *******
+
+Each hash table entry is 8 bytes.
+
+That means the hot portion is 25,100,000 / 2 / 8 = 1,500,000 entries
+
+We want the probe to be very long, and hit each entry multiple times!!! 
+That should be a tunable parameter, but suppose we hit each entry 100 times. 
+
+That's 150,000,000 rows in the fact table (LHS/probe side). That's a 28-bit identifier.
+
+Creating a dimension table like this:
+CREATE TABLE b AS SELECT range % 200_000 AS keyB1 FROM range(400_000);
+Creates a hashtable of 14MiB. That means that 200k entries with a chain of size 2 in each entry works well.
+
+
+
+                    LHS                     RHS 
+0_cold              400M records            400k records                all match
+
+
+The issue is that if we want to add cold entries in the RHS but keep everything else the same, adding those additional RHS entries
+to the hash table will cost time. Two options:
+- Profile the Probe time only
+- Interlace vs don't interlace the cold section!!!!!
+
+
+How to do segmented and interlaced considering that we are hashes and hash salts and so on?
+Segmented: could preserve the MSB of the bitmask and force hot and cold this way. 
+            Would need to change SQL logic to set that bit????
+
+Interleaved: all hot have a hash ending in 0, all cold have a hash ending in 1.
+            That doesn't work!!! Since linear probing
+
+
+HT capacity for 0-to-1: 1,048,576
+HT capacity for 100-to-1: 134,217,728
+
+TODO need to fix how I measure time: try to get wall time for probing, not sum of threads time?
+Also, this runs a million time, understand why? I removed the printf "A thread is starting the timer in PhysicalHashJoin::ExecuteInteral"
+Also, should I be counting probe_executor.Execute() or not?
+Also, should I be counting ReferenceColumns() or not?
+Also, should I be counting .Next() or not?
+
+
+QUESTIONS: 
+- ok with wall time and sum of theads time? JP: yes (maybe divide probe time by thread count? And maybe measure build time?)
+- Where do we draw the line for probe time? JP is ok with how I did it
+- slack versus dropping by? Outstanding question
+
+
+TODO need to measure perfect joins too, Martin said 
+
+TODO if JP says that we don't want perfect join, maybe deactivate it manually to not have to duplicate my keys in the dimension table?
+
+todo run with latest duckdb main
+
+Then, we can make the cold portion of the hash table much bigger. 
+
+TODO right now I changed the hash function for everything... try to change only the hash function for hash join stuff I guess?
+TODO salts could mess-up by forcing of the hashing scheme!!! Should I disable them? Or do salts only mean a fingerprint?
+
+TODOfigure out how to run on 4 threads
+
+TODO: more apples to apples comparison might be to always have a big build-side table, BUT have the cold and hot portions to be contiguous, this way we effectively do not bring the cold portion in memory. 
+Because otherwise, it's hard to do an apples-to-apples comparison where we have the build side creation be faster or slower.
+
+TODO need to understand how chains work. How can each hash table entry be only 8 bytes if they can also contain the chain pointer?
+
+TODO need to understand which path in TightLoopHash is taken for the hashing.
+
+TODO decide what I do with MurmurHash64 - do we do regular hash, parity conserving hash, or 32-bit key conserving hash?
+
+TODO understand why the size of the hashtable is much bigger than what my simple math would imply.
+
+TODO NEED TO MAKE SURE THAT THE COLD ENTRIES HASH TO SOMETHING DIFFERENT THAN THE HOT ENTRIES!!!!!!!!!!!!!!!!!!!!!!
+One approach to do that is to hack the hash function to have, for example, last digit be 0 when we want cold and last digit be 1 when we want hot.
+That itself can be based on the last digit of the column. Odd keys will be hot, and even keys will never be used. 
+Hence the LHS contains only odd keys.
+
+TODO create an assertion that we have zero collisions initially (to make sure my hashing works).
+TODO ... then write tests that actually have assertions?
+
+TODO do I have a way of checking if the probe side table goes to disk? It gets very slow if I go from 100M to 1B rows
+
+TODO understand if my processor compiled hash table accesses to SIMD
+
+In terms of how the space that's 
+
+TODO As we probe, where does the new data go? Won't that take up L3 space as well? 
+SOLUTION: we probably want to just use the hash table and do experiments on it at first?
+What we can also do is profile the probing part. That's probably the most reasonable idea. We do have multiple threads, but they should be all synced.
+
+TODO is the size of the hashtable the same for all threads?
+
+TODO How big is one entry in the Duck DB hashtable?
+
+TODO how can we control the number of threads used? 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+******* SIMPLY HASH TABLE IN C++ TEST *******
+
+TODO
