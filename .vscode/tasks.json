@@ -6,7 +6,8 @@
       "type": "shell",
       "command": "GEN=ninja BUILD_BENCHMARK=1 make debug -j 7",
       "group": { "kind": "build", "isDefault": true },
-      "problemMatcher": ["$gcc"]
+      "problemMatcher": ["$gcc"],
+      "hide": false
     },
     {
       "label": "Build Debug (incremental)",
@@ -14,7 +15,8 @@
       "command": "cmake --build build/debug --config Debug -- -j 7",
       "group": "build",
       "problemMatcher": ["$gcc"],
-      "presentation": { "reveal": "silent", "panel": "shared" }
+      "presentation": { "reveal": "silent", "panel": "shared" },
+      "hide": false
     }
   ]
 }
