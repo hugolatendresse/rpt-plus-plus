@@ -41,6 +41,10 @@ Interleaved: all hot have a hash ending in 0, all cold have a hash ending in 1.
 HT capacity for 0-to-1: 1,048,576
 HT capacity for 100-to-1: 134,217,728
 
+
+TODO are we literally just running AddExtraInfo every single time we emit a new timing? Is there a better way?
+
+
 TODO need to fix how I measure time: try to get wall time for probing, not sum of threads time?
 Also, this runs a million time, understand why? I removed the printf "A thread is starting the timer in PhysicalHashJoin::ExecuteInteral"
 Also, should I be counting probe_executor.Execute() or not?
