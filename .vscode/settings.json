@@ -1,0 +1,6 @@
+{
+  "window.zoomLevel": 0.0,
+
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/clangd/compile_commands.json",
+  "C_Cpp.default.configurationProvider": ""
+}

@@ -265,9 +265,9 @@ venv/
 .csettings
 
 # Visual Studio
-.vs
-settings.json
-.vscode
+# .vs
+# settings.json
+# .vscode
 
 # QtCreator files
 *.user
