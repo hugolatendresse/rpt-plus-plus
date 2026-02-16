@@ -147,6 +147,12 @@ public:
 		SelectionVector keys_no_match_sel;
 	};
 
+	enum class FastCachePhase : uint8_t { WARMUP, READY };
+
+	//! Number of probe-side rows each thread processes before switching to cache.
+	//! Must be >= the row group size (122,880) to ensure full coverage of unique keys.
+	static constexpr idx_t FAST_CACHE_WARMUP_ROWS = 200000;
+
 	struct ProbeState : SharedState {
 		ProbeState();
 
@@ -162,6 +168,10 @@ public:
 		Vector cache_result_pointers;
 		SelectionVector cache_candidates_sel;
 		SelectionVector cache_miss_sel;
+
+		//! Fast cache warmup state (per-thread)
+		FastCachePhase fast_cache_phase = FastCachePhase::WARMUP;
+		idx_t warmup_rows_probed = 0;
 	};
 
 	struct InsertState : SharedState {
@@ -225,7 +235,6 @@ public:
 	bool NullValuesAreEqual(idx_t col_idx) const {
 		return null_values_are_equal[col_idx];
 	}
-
 	ClientContext &context;
 	//! BufferManager
 	BufferManager &buffer_manager;
@@ -340,7 +349,12 @@ private:
 
 	//! Shared fast hash cache for accelerating repeated probe lookups.
 	//! Created during Finalize when the hash table is large enough.
+	//! During warmup, entries are inserted via idempotent Insert() calls.
+	//! After warmup, the cache is read-only (no more writes).
 	unique_ptr<FastHashCache> fast_cache;
+	//! Key offset within the cache mini-row (0 for compact single-column layout,
+	//! validity_size for general layout with validity bytes).
+	idx_t fast_cache_key_offset = 0;
 
 	//! Copying not allowed
 	JoinHashTable(const JoinHashTable &) = delete;

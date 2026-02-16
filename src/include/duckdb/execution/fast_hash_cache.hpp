@@ -19,55 +19,58 @@ namespace duckdb {
 //! FastHashCache is a compact open-addressing hash table that caches recently
 //! matched probe entries to accelerate repeated hash join lookups.
 //!
-//! It sits logically in front of the main JoinHashTable. On a cache hit the
-//! caller can skip both ProbeForPointers (pointer-table access) and Match
-//! (data_collection key comparison), because the cache stores a copy of the
-//! serialized key data alongside the data_collection row pointer.
+//! Each entry stores: [hash (8B)] [full_row (tuple_size B)]
+//! The full_row is a copy of the entire data_collection row, so cache hits
+//! completely bypass data_collection access for both key matching AND payload
+//! gathering (GatherResult / ScanStructure::Next).
 //!
-//! The cache is shared across all probe threads. Thread safety relies on write
-//! idempotency: the same key always produces the exact same cache entry, so
-//! concurrent inserts are harmless. A torn read during warmup simply fails the
-//! hash/key comparison and falls through to the regular (correct) path.
+//! Thread safety during warmup uses CAS on the hash field to claim slots.
+//! After warmup the cache is read-only.
 class FastHashCache {
 public:
-	//! Memory budget for the cache (fits comfortably in L3)
+	//! Memory budget for the cache (sized for L3)
 	static constexpr idx_t DEFAULT_L3_BUDGET = 16ULL * 1024 * 1024;
 
 	//! Minimum hash-table capacity before the cache is worth creating
 	static constexpr idx_t ACTIVATION_THRESHOLD = 10ULL * 1024 * 1024 / sizeof(uint64_t);
 
-	//! Create a cache with the given capacity (must be power of 2 to allow fast slot calculation) and the
-	//! size of the mini-row (validity bytes + equality key columns).
-	FastHashCache(idx_t capacity_p, idx_t mini_row_size_p)
-	    : capacity(capacity_p), bitmask(capacity_p - 1), mini_row_size(mini_row_size_p),
-	      entry_stride(ComputeEntryStride(mini_row_size_p)) {
+	//! @param capacity_p        Number of slots (must be power of 2).
+	//! @param row_size_p         Size of the full data_collection row to store per entry.
+	//! @param row_copy_offset_p  Offset into the source row from which to start copying
+	//!                           (normally 0 to copy the entire row).
+	FastHashCache(idx_t capacity_p, idx_t row_size_p, idx_t row_copy_offset_p = 0)
+	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p),
+	      row_copy_offset(row_copy_offset_p), entry_stride(ComputeEntryStride(row_size_p)) {
 		D_ASSERT(IsPowerOfTwo(capacity));
 		auto total_bytes = capacity * entry_stride;
 		data = make_unsafe_uniq_array_uninitialized<data_t>(total_bytes);
-		memset(data.get(), 0, total_bytes); // TODO this looks expensive, can we avoid?
+		memset(data.get(), 0, total_bytes);
 	}
 
-	//! Probe the cache for hash matches. For each of the `count` probe hashes
-	//! (selected by `row_sel` if `has_row_sel` is true), find the first cache
-	//! entry whose stored hash equals the probe hash.
-	//!
-	//! On return:
-	//!   - cache_candidates_sel / cache_candidates_count: indices that found a
-	//!     hash match in the cache (need key comparison via RowMatcher).
-	//!   - cache_result_ptrs: for each candidate, the data_collection row ptr
-	//!     stored in the cache entry.
-	//!   - cache_rhs_row_locations: for each candidate, pointer to the mini-row
-	//!     inside the cache (for RowMatcher to compare keys against).
-	//!   - cache_miss_sel / cache_miss_count: indices with no cache entry.
+	// -----------------------------------------------------------------------
+	// ProbeByHash: hash-only lookup (general multi-column path)
+	// -----------------------------------------------------------------------
+	//! For each probe hash, find the cache entry whose stored hash matches.
+	//! Returns pointers to the cached row data (usable by RowMatcher and GatherResult).
 	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, bool has_row_sel,
 	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
 	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations,
 	                 SelectionVector &cache_miss_sel, idx_t &cache_miss_count) const {
 
+		static constexpr idx_t SLOT_PREFETCH_DIST = 16;
+
 		cache_candidates_count = 0;
 		cache_miss_count = 0;
 
+		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
+			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
+		}
+
 		for (idx_t i = 0; i < count; i++) {
+			if (i + SLOT_PREFETCH_DIST < count) {
+				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
+			}
+
 			const auto row_index = has_row_sel ? row_sel->get_index(i) : i;
 			const auto probe_hash = hashes_dense[i];
 			auto slot = probe_hash & bitmask;
@@ -80,8 +83,9 @@ public:
 					break;
 				}
 				if (stored_hash == probe_hash) {
-					cache_result_ptrs[row_index] = LoadPointer(entry_ptr);
-					cache_rhs_locations[row_index] = GetMiniRowPtr(entry_ptr);
+					auto row_ptr = GetRowPtr(entry_ptr);
+					cache_result_ptrs[row_index] = row_ptr;
+					cache_rhs_locations[row_index] = row_ptr;
 					cache_candidates_sel.set_index(cache_candidates_count++, row_index);
 					found = true;
 					break;
@@ -94,31 +98,31 @@ public:
 		}
 	}
 
-	//! Single-pass probe: combines hash lookup and key comparison.
-	//! For single-column fixed-size keys, this avoids a separate RowMatcher pass
-	//! and keeps the cache entry in L1 while comparing the key.
-	//!
-	//! Prefetches for data_collection rows (for ScanStructure::Next) are issued
-	//! in groups of PREFETCH_GROUP entries to avoid polluting the tight probe
-	//! loop while still giving prefetches time to complete.
-	//!
-	//! On return:
-	//!   - match_sel / match_count: confirmed matches (hash + key match).
-	//!   - result_ptrs[row_index]: data_collection pointer for each match.
-	//!   - miss_sel / miss_count: no cache entry or key mismatch.
+	// -----------------------------------------------------------------------
+	// ProbeAndMatch: single-pass hash+key lookup (single fixed-size key path)
+	// -----------------------------------------------------------------------
+	//! Combines hash lookup and inline key comparison in one pass.
+	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	template <class T>
 	void ProbeAndMatch(const hash_t *hashes_dense, const T *probe_keys, idx_t key_offset, idx_t count,
 	                   const SelectionVector *row_sel, bool has_row_sel, data_ptr_t *result_ptrs,
 	                   SelectionVector &match_sel, idx_t &match_count, SelectionVector &miss_sel,
 	                   idx_t &miss_count) const {
 
-		static constexpr idx_t PREFETCH_GROUP = 64;
+		static constexpr idx_t SLOT_PREFETCH_DIST = 16;
 
 		match_count = 0;
 		miss_count = 0;
-		idx_t prefetch_cursor = 0;
+
+		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
+			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
+		}
 
 		for (idx_t i = 0; i < count; i++) {
+			if (i + SLOT_PREFETCH_DIST < count) {
+				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
+			}
+
 			const auto row_index = has_row_sel ? row_sel->get_index(i) : i;
 			const auto probe_hash = hashes_dense[i];
 			const auto probe_key = probe_keys[row_index];
@@ -132,9 +136,10 @@ public:
 					break;
 				}
 				if (stored_hash == probe_hash) {
-					auto cache_key = Load<T>(GetMiniRowPtr(entry_ptr) + key_offset);
+					auto row_ptr = GetRowPtr(entry_ptr);
+					auto cache_key = Load<T>(row_ptr + key_offset);
 					if (cache_key == probe_key) {
-						result_ptrs[row_index] = LoadPointer(entry_ptr);
+						result_ptrs[row_index] = row_ptr;
 						match_sel.set_index(match_count++, row_index);
 						found = true;
 						break;
@@ -145,77 +150,77 @@ public:
 			if (!found) {
 				miss_sel.set_index(miss_count++, row_index);
 			}
-
-			// Issue grouped prefetches for data_collection rows
-			if (((i + 1) & (PREFETCH_GROUP - 1)) == 0) {
-				for (idx_t p = prefetch_cursor; p < match_count; p++) {
-					__builtin_prefetch(result_ptrs[match_sel.get_index(p)], 0, 3);
-				}
-				prefetch_cursor = match_count;
-			}
-		}
-		// Prefetch remaining matches
-		for (idx_t p = prefetch_cursor; p < match_count; p++) {
-			__builtin_prefetch(result_ptrs[match_sel.get_index(p)], 0, 3);
 		}
 	}
 
-	//! Insert an entry into the cache. Copies the first `mini_row_size` bytes
-	//! from `row_data_ptr` (the start of the data_collection row) as key data.
-	//! The validity bit tells whether the Key is populated or not (the hash being 
-	//! zero or not tells whether the pointer is populated or not)
-	//! We keep the hash in the table to allow for linear probing (for collisions)
-	void Insert(hash_t hash, data_ptr_t data_collection_ptr, const_data_ptr_t row_data_ptr) {
-		// TODO can we pack better? Maybe use one fewer bit for the hash?
-		if (hash == 0) {
-			return; // hash 0 is the empty-slot sentinel; cannot cache
-		}
-		auto slot = hash & bitmask;
+	// -----------------------------------------------------------------------
+	// Insert (thread-safe via CAS on hash field)
+	// -----------------------------------------------------------------------
+	std::atomic<idx_t> insert_new{0};
+	std::atomic<idx_t> insert_dup{0};
 
+	//! Insert an entry. Copies row_size bytes from row_data_ptr + row_copy_offset.
+	//! Thread-safe: uses CAS to claim empty slots. Same-hash duplicates are no-ops.
+	void Insert(hash_t hash, const_data_ptr_t row_data_ptr) {
+		auto slot = hash & bitmask;
 		while (true) {
 			auto entry_ptr = GetEntryPtr(slot);
-			const auto stored_hash = LoadHash(entry_ptr);
+			auto hash_ptr = reinterpret_cast<std::atomic<hash_t> *>(entry_ptr);
 
-			if (stored_hash == 0) {
-				// Empty slot -- write the entry
-				StoreHash(entry_ptr, hash);
-				StorePointer(entry_ptr, data_collection_ptr);
-				memcpy(GetMiniRowPtr(entry_ptr), row_data_ptr, mini_row_size);
+			hash_t expected = 0;
+			if (hash_ptr->compare_exchange_strong(expected, hash, std::memory_order_acq_rel)) {
+				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
+				insert_new.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
-			if (stored_hash == hash) {
-				// Already present (idempotent write from another thread or
-				// same thread on a previous batch). Nothing to do.
+			if (expected == hash) {
+				insert_dup.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
 			slot = (slot + 1) & bitmask;
 		}
 	}
 
+	// -----------------------------------------------------------------------
+	// Accessors
+	// -----------------------------------------------------------------------
 	idx_t GetCapacity() const {
 		return capacity;
 	}
-	idx_t GetMiniRowSize() const {
-		return mini_row_size;
+
+	idx_t CountEntries() const {
+		idx_t count = 0;
+		for (idx_t s = 0; s < capacity; s++) {
+			if (LoadHash(GetEntryPtr(s)) != 0) {
+				count++;
+			}
+		}
+		return count;
 	}
 
-	//! Compute an appropriate cache capacity given a memory budget and per-
-	//! entry mini-row size.
-	static idx_t ComputeCapacity(idx_t mini_row_size, idx_t l3_budget = DEFAULT_L3_BUDGET) {
-		auto stride = ComputeEntryStride(mini_row_size);
+	idx_t GetRowSize() const {
+		return row_size;
+	}
+
+	//! Largest power-of-2 capacity that fits within the budget.
+	static idx_t ComputeCapacity(idx_t row_size, idx_t l3_budget = DEFAULT_L3_BUDGET) {
+		auto stride = ComputeEntryStride(row_size);
 		auto raw = l3_budget / stride;
 		if (raw < 64) {
 			return 64;
 		}
-		return NextPowerOfTwo(raw);
+		auto pot = NextPowerOfTwo(raw);
+		if (pot > raw) {
+			pot >>= 1;
+		}
+		return pot;
 	}
 
 private:
-	static constexpr idx_t HEADER_SIZE = sizeof(hash_t) + sizeof(data_ptr_t); // 16 bytes
+	static constexpr idx_t HEADER_SIZE = sizeof(hash_t); // 8 bytes (hash only, no stored pointer)
 
-	static idx_t ComputeEntryStride(idx_t mini_row_size) {
-		// Round up to next multiple of 8 for alignment
-		return (HEADER_SIZE + mini_row_size + 7) & ~idx_t(7);
+	static idx_t ComputeEntryStride(idx_t row_size) {
+		return (HEADER_SIZE + row_size + 7) & ~idx_t(7);
 	}
 
 	inline data_ptr_t GetEntryPtr(idx_t slot) const {
@@ -228,27 +233,15 @@ private:
 		return h;
 	}
 
-	static inline void StoreHash(data_ptr_t entry_ptr, hash_t h) {
-		memcpy(entry_ptr, &h, sizeof(hash_t));
-	}
-
-	static inline data_ptr_t LoadPointer(const data_ptr_t entry_ptr) {
-		data_ptr_t p;
-		memcpy(&p, entry_ptr + sizeof(hash_t), sizeof(data_ptr_t));
-		return p;
-	}
-
-	static inline void StorePointer(data_ptr_t entry_ptr, data_ptr_t p) {
-		memcpy(entry_ptr + sizeof(hash_t), &p, sizeof(data_ptr_t));
-	}
-
-	static inline data_ptr_t GetMiniRowPtr(data_ptr_t entry_ptr) {
+	//! Pointer to the cached row data within an entry (starts right after hash).
+	static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
 		return entry_ptr + HEADER_SIZE;
 	}
 
 	idx_t capacity;
 	idx_t bitmask;
-	idx_t mini_row_size;
+	idx_t row_size;
+	idx_t row_copy_offset;
 	idx_t entry_stride;
 	unsafe_unique_array<data_t> data;
 };
