@@ -34,19 +34,18 @@ namespace duckdb {
 
 class ScopedHashJoinTimer {
 public:
-	explicit ScopedHashJoinTimer(atomic<uint64_t> &target_p)
+	explicit ScopedHashJoinTimer(uint64_t &target_p)
 	    : target(target_p), start(std::chrono::steady_clock::now()) {
 	}
 
 	~ScopedHashJoinTimer() {
 		auto end = std::chrono::steady_clock::now();
 		auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
-		// This doesn't interaact with anything else so memory_order_relaxed is ok.
-		target.fetch_add(NumericCast<uint64_t>(elapsed_ns), std::memory_order_relaxed);
+		target += NumericCast<uint64_t>(elapsed_ns);
 	}
 
 private:
-	atomic<uint64_t> &target;
+	uint64_t &target;
 	std::chrono::steady_clock::time_point start;
 };
 
@@ -304,6 +303,7 @@ public:
 
 	//! Thread-local HT
 	unique_ptr<JoinHashTable> hash_table;
+	uint64_t build_time_ns = 0;
 
 	unique_ptr<JoinFilterLocalState> local_filter_state;
 };
@@ -399,7 +399,7 @@ SinkResultType PhysicalHashJoin::Sink(ExecutionContext &context, DataChunk &chun
 
 	// build the HT
 	{
-		ScopedHashJoinTimer build_timer(gstate.build_time_ns);
+		ScopedHashJoinTimer build_timer(lstate.build_time_ns);
 		lstate.hash_table->Build(lstate.append_state, lstate.join_keys, lstate.payload_chunk);
 	}
 
@@ -417,6 +417,7 @@ SinkCombineResultType PhysicalHashJoin::Combine(ExecutionContext &context, Opera
 	lstate.hash_table->GetSinkCollection().FlushAppendState(lstate.append_state);
 	auto guard = gstate.Lock();
 	gstate.local_hash_tables.push_back(std::move(lstate.hash_table));
+	gstate.build_time_ns.fetch_add(lstate.build_time_ns, std::memory_order_relaxed);
 	if (gstate.local_hash_tables.size() == gstate.active_local_states) {
 		// Set to 0 until PrepareFinalize
 		gstate.temporary_memory_state->SetZero();
@@ -1012,10 +1013,21 @@ SinkFinalizeType PhysicalHashJoin::Finalize(Pipeline &pipeline, Event &event, Cl
 //===--------------------------------------------------------------------===//
 class HashJoinOperatorState : public CachingOperatorState {
 public:
-	explicit HashJoinOperatorState(ClientContext &context, HashJoinGlobalSinkState &sink)
-	    : probe_executor(context), scan_structure(*sink.hash_table, join_key_state) {
+	explicit HashJoinOperatorState(ClientContext &context, HashJoinGlobalSinkState &sink_p)
+	    : sink(sink_p), probe_executor(context), scan_structure(*sink.hash_table, join_key_state) {
+		probe_state.probe_for_pointers_time_ns = &probe_for_pointers_time_ns;
+		probe_state.match_time_ns = &match_time_ns;
 	}
 
+	~HashJoinOperatorState() override {
+		FlushLocalTimings();
+	}
+
+private:
+	HashJoinGlobalSinkState &sink;
+	bool timings_flushed = false;
+
+public:
 	DataChunk lhs_join_keys;
 	TupleDataChunkState join_key_state;
 	DataChunk lhs_output;
@@ -1028,9 +1040,25 @@ public:
 	JoinHashTable::ProbeState probe_state;
 	//! Chunk to sink data into for external join
 	DataChunk spill_chunk;
+	uint64_t execute_probe_time_ns = 0;
+	uint64_t execute_scan_next_time_ns = 0;
+	uint64_t probe_for_pointers_time_ns = 0;
+	uint64_t match_time_ns = 0;
 
 public:
+	void FlushLocalTimings() {
+		if (timings_flushed) {
+			return;
+		}
+		sink.execute_probe_time_ns.fetch_add(execute_probe_time_ns, std::memory_order_relaxed);
+		sink.execute_scan_next_time_ns.fetch_add(execute_scan_next_time_ns, std::memory_order_relaxed);
+		sink.probe_for_pointers_time_ns.fetch_add(probe_for_pointers_time_ns, std::memory_order_relaxed);
+		sink.match_time_ns.fetch_add(match_time_ns, std::memory_order_relaxed);
+		timings_flushed = true;
+	}
+
 	void Finalize(const PhysicalOperator &op, ExecutionContext &context) override {
+		FlushLocalTimings();
 		context.thread.profiler.Flush(op);
 	}
 };
@@ -1095,13 +1123,11 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 		state.initialized = true;
 	}
 	{
-		ScopedHashJoinTimer probe_timer(sink.execute_probe_time_ns);
+		ScopedHashJoinTimer probe_timer(state.execute_probe_time_ns);
 		if (state.scan_structure.is_null) {
 			// probe the HT, start by resolving the join keys for the left chunk
 			state.lhs_join_keys.Reset();
 			state.probe_executor.Execute(input, state.lhs_join_keys);
-			state.probe_state.probe_for_pointers_time_ns = &sink.probe_for_pointers_time_ns;
-			state.probe_state.match_time_ns = &sink.match_time_ns;
 
 			// perform the actual probe
 			if (sink.external) {
@@ -1118,7 +1144,7 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 	} // End timer scope to not capture materialization
 
 	{
-		ScopedHashJoinTimer scan_next_timer(sink.execute_scan_next_time_ns);
+		ScopedHashJoinTimer scan_next_timer(state.execute_scan_next_time_ns);
 		state.scan_structure.Next(state.lhs_join_keys, state.lhs_output, chunk);
 	}
 
@@ -1203,7 +1229,8 @@ public:
 
 class HashJoinLocalSourceState : public LocalSourceState {
 public:
-	HashJoinLocalSourceState(const PhysicalHashJoin &op, const HashJoinGlobalSinkState &sink, Allocator &allocator);
+	HashJoinLocalSourceState(const PhysicalHashJoin &op, HashJoinGlobalSinkState &sink, Allocator &allocator);
+	~HashJoinLocalSourceState() override;
 
 	//! Do the work this thread has been assigned
 	void ExecuteTask(HashJoinGlobalSinkState &sink, HashJoinGlobalSourceState &gstate, DataChunk &chunk);
@@ -1242,6 +1269,14 @@ public:
 	idx_t full_outer_chunk_idx_from = DConstants::INVALID_INDEX;
 	idx_t full_outer_chunk_idx_to = DConstants::INVALID_INDEX;
 	unique_ptr<JoinHTScanState> full_outer_scan_state;
+	uint64_t external_probe_time_ns = 0;
+	uint64_t probe_for_pointers_time_ns = 0;
+	uint64_t match_time_ns = 0;
+
+private:
+	void FlushLocalTimings();
+	HashJoinGlobalSinkState &sink;
+	bool timings_flushed = false;
 };
 
 unique_ptr<GlobalSourceState> PhysicalHashJoin::GetGlobalSourceState(ClientContext &context) const {
@@ -1420,21 +1455,37 @@ bool HashJoinGlobalSourceState::AssignTask(HashJoinGlobalSinkState &sink, HashJo
 	return false;
 }
 
-HashJoinLocalSourceState::HashJoinLocalSourceState(const PhysicalHashJoin &op, const HashJoinGlobalSinkState &sink,
+HashJoinLocalSourceState::HashJoinLocalSourceState(const PhysicalHashJoin &op, HashJoinGlobalSinkState &sink_p,
                                                    Allocator &allocator)
-    : local_stage(HashJoinSourceStage::INIT), addresses(LogicalType::POINTER), lhs_join_key_executor(sink.context),
-      scan_structure(*sink.hash_table, join_key_state) {
+    : local_stage(HashJoinSourceStage::INIT), addresses(LogicalType::POINTER), lhs_join_key_executor(sink_p.context),
+      scan_structure(*sink_p.hash_table, join_key_state), sink(sink_p) {
 	auto &chunk_state = probe_local_scan.current_chunk_state;
 	chunk_state.properties = ColumnDataScanProperties::ALLOW_ZERO_COPY;
 
-	lhs_probe_chunk.Initialize(allocator, sink.probe_types);
+	lhs_probe_chunk.Initialize(allocator, sink_p.probe_types);
 	lhs_join_keys.Initialize(allocator, op.condition_types);
 	lhs_output.Initialize(allocator, op.lhs_output_columns.col_types);
 	TupleDataCollection::InitializeChunkState(join_key_state, op.condition_types);
+	probe_state.probe_for_pointers_time_ns = &probe_for_pointers_time_ns;
+	probe_state.match_time_ns = &match_time_ns;
 
 	for (auto &cond : op.conditions) {
 		lhs_join_key_executor.AddExpression(*cond.left);
 	}
+}
+
+HashJoinLocalSourceState::~HashJoinLocalSourceState() {
+	FlushLocalTimings();
+}
+
+void HashJoinLocalSourceState::FlushLocalTimings() {
+	if (timings_flushed) {
+		return;
+	}
+	sink.external_probe_time_ns.fetch_add(external_probe_time_ns, std::memory_order_relaxed);
+	sink.probe_for_pointers_time_ns.fetch_add(probe_for_pointers_time_ns, std::memory_order_relaxed);
+	sink.match_time_ns.fetch_add(match_time_ns, std::memory_order_relaxed);
+	timings_flushed = true;
 }
 
 void HashJoinLocalSourceState::ExecuteTask(HashJoinGlobalSinkState &sink, HashJoinGlobalSourceState &gstate,
@@ -1487,7 +1538,8 @@ void HashJoinLocalSourceState::ExternalProbe(HashJoinGlobalSinkState &sink, Hash
 		std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << std::endl;
 		std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << std::endl;
 		std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << std::endl;
-		ScopedHashJoinTimer probe_timer(sink.external_probe_time_ns);
+		uint64_t &external_probe_local_ns = this->external_probe_time_ns;
+		ScopedHashJoinTimer probe_timer(external_probe_local_ns);
 
 		if (!scan_structure.is_null) {
 			// Still have elements remaining (i.e. we got >STANDARD_VECTOR_SIZE elements in the previous probe)
@@ -1524,8 +1576,6 @@ void HashJoinLocalSourceState::ExternalProbe(HashJoinGlobalSinkState &sink, Hash
 
 		// Perform the probe
 		auto precomputed_hashes = &lhs_probe_chunk.data.back();
-		probe_state.probe_for_pointers_time_ns = &sink.probe_for_pointers_time_ns;
-		probe_state.match_time_ns = &sink.match_time_ns;
 		sink.hash_table->Probe(scan_structure, lhs_join_keys, join_key_state, probe_state, precomputed_hashes);
 	} // end timer scope to avoid counting materialization
 

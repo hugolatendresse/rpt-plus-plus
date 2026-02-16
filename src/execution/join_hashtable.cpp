@@ -20,7 +20,7 @@ using ProbeSpillLocalState = JoinHashTable::ProbeSpillLocalAppendState;
 
 class ScopedHashJoinTimer {
 public:
-	explicit ScopedHashJoinTimer(std::atomic<uint64_t> *target_p)
+	explicit ScopedHashJoinTimer(uint64_t *target_p)
 	    : target(target_p), start(std::chrono::steady_clock::now()) {
 	}
 
@@ -30,11 +30,11 @@ public:
 		}
 		auto end = std::chrono::steady_clock::now();
 		auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
-		target->fetch_add(static_cast<uint64_t>(elapsed_ns), std::memory_order_relaxed);
+		*target += static_cast<uint64_t>(elapsed_ns);
 	}
 
 private:
-	std::atomic<uint64_t> *target;
+	uint64_t *target;
 	std::chrono::steady_clock::time_point start;
 };
 
