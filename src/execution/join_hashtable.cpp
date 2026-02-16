@@ -10,11 +10,33 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 
+#include <chrono>
+
 namespace duckdb {
 using ValidityBytes = JoinHashTable::ValidityBytes;
 using ScanStructure = JoinHashTable::ScanStructure;
 using ProbeSpill = JoinHashTable::ProbeSpill;
 using ProbeSpillLocalState = JoinHashTable::ProbeSpillLocalAppendState;
+
+class ScopedHashJoinTimer {
+public:
+	explicit ScopedHashJoinTimer(std::atomic<uint64_t> *target_p)
+	    : target(target_p), start(std::chrono::steady_clock::now()) {
+	}
+
+	~ScopedHashJoinTimer() {
+		if (!target) {
+			return;
+		}
+		auto end = std::chrono::steady_clock::now();
+		auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+		target->fetch_add(static_cast<uint64_t>(elapsed_ns), std::memory_order_relaxed);
+	}
+
+private:
+	std::atomic<uint64_t> *target;
+	std::chrono::steady_clock::time_point start;
+};
 
 JoinHashTable::SharedState::SharedState()
     : salt_v(LogicalType::UBIGINT), keys_to_compare_sel(STANDARD_VECTOR_SIZE), keys_no_match_sel(STANDARD_VECTOR_SIZE) {
@@ -286,8 +308,12 @@ static void GetRowPointersInternal(DataChunk &keys, TupleDataChunkState &key_sta
 
 	do {
 
-		const idx_t keys_to_compare_count = ProbeForPointers<USE_SALTS>(state, ht, entries, hashes_v, pointers_result_v,
-		                                                                row_sel, elements_to_probe_count, has_row_sel);
+		idx_t keys_to_compare_count = 0;
+		{
+			ScopedHashJoinTimer probe_for_pointers_timer(state.probe_for_pointers_time_ns);
+			keys_to_compare_count = ProbeForPointers<USE_SALTS>(state, ht, entries, hashes_v, pointers_result_v, row_sel,
+			                                                    elements_to_probe_count, has_row_sel);
+		}
 
 		// if there are no keys to compare, we are done
 		if (keys_to_compare_count == 0) {
@@ -296,9 +322,13 @@ static void GetRowPointersInternal(DataChunk &keys, TupleDataChunkState &key_sta
 
 		// Perform row comparisons, after Match function call salt_match_sel will point to the keys that match
 		keys_no_match_count = 0;
-		const idx_t keys_match_count = ht.row_matcher_build.Match(
-		    keys, key_state.vector_data, state.keys_to_compare_sel, keys_to_compare_count, *ht.layout_ptr,
-		    pointers_result_v, &state.keys_no_match_sel, keys_no_match_count);
+		idx_t keys_match_count = 0;
+		{
+			ScopedHashJoinTimer match_timer(state.match_time_ns);
+			keys_match_count = ht.row_matcher_build.Match(keys, key_state.vector_data, state.keys_to_compare_sel,
+			                                              keys_to_compare_count, *ht.layout_ptr, pointers_result_v,
+			                                              &state.keys_no_match_sel, keys_no_match_count);
+		}
 
 		D_ASSERT(keys_match_count + keys_no_match_count == keys_to_compare_count);
 

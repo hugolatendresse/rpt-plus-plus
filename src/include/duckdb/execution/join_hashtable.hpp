@@ -19,6 +19,8 @@
 #include "duckdb/execution/aggregate_hashtable.hpp"
 #include "duckdb/execution/ht_entry.hpp"
 
+#include <atomic>
+
 namespace duckdb {
 
 class BufferManager;
@@ -152,6 +154,8 @@ public:
 		Vector ht_offsets_v;
 		Vector hashes_dense_v;
 		SelectionVector non_empty_sel;
+		std::atomic<uint64_t> *probe_for_pointers_time_ns = nullptr;
+		std::atomic<uint64_t> *match_time_ns = nullptr;
 	};
 
 	struct InsertState : SharedState {

@@ -356,7 +356,7 @@ ClientContext::CreatePreparedStatementInternal(ClientContextLock &lock, const st
                                                optional_ptr<case_insensitive_map_t<BoundParameterData>> values) {
 	StatementType statement_type = statement->type;
 	if (statement_type == StatementType::SELECT_STATEMENT) {
-		printf("ClientContext::CreatePreparedStatementInternal entering a SELECT statement");
+		printf("ClientContext::CreatePreparedStatementInternal entering a SELECT statement\n");
 	}
 	auto result = make_shared_ptr<PreparedStatementData>(statement_type);
 
