@@ -1504,7 +1504,7 @@ void HashJoinLocalSourceState::ExternalScanHT(HashJoinGlobalSinkState &sink, Has
 
 SourceResultType PhysicalHashJoin::GetData(ExecutionContext &context, DataChunk &chunk,
                                            OperatorSourceInput &input) const {
-	auto &sink = sink_state->Cast<HashJoinGlobalSinkState>();
+	auto &sink = sink_state->Cast<HashJoinGlobalSinkState>(); // TODO who includes this in pipeline?
 	auto &gstate = input.global_state.Cast<HashJoinGlobalSourceState>();
 	auto &lstate = input.local_state.Cast<HashJoinLocalSourceState>();
 	sink.scanned_data = true;

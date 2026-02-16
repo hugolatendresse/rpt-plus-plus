@@ -66,7 +66,7 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
 	// at least one equality is necessary
 	D_ASSERT(!equality_types.empty());
 
-	// Types for the layout
+	// Types for the layoutPhysicalHashJoin::InitializeHashTable
 	auto layout = make_shared_ptr<TupleDataLayout>();
 	vector<LogicalType> layout_types(condition_types);
 	layout_types.insert(layout_types.end(), build_types.begin(), build_types.end());
@@ -771,7 +771,7 @@ void JoinHashTable::Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool para
 	// Pointer table should be allocated
 	D_ASSERT(hash_map.get());
 
-	Vector hashes(LogicalType::HASH); // TODO we are in join_hashtable.cpp now???
+	Vector hashes(LogicalType::HASH);
 	auto hash_data = FlatVector::GetData<hash_t>(hashes);
 
 	TupleDataChunkIterator iterator(*data_collection, TupleDataPinProperties::KEEP_EVERYTHING_PINNED, chunk_idx_from,

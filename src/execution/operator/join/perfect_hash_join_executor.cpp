@@ -64,6 +64,8 @@ bool ExtractNumericValue(Value val, hugeint_t &result) {
 }
 
 bool PerfectHashJoinExecutor::CanDoPerfectHashJoin(const PhysicalHashJoin &op, const Value &min, const Value &max) {
+	return false; // TODO REMOVE!!!!!!!!!!!!!!!!!!!!!! (or put behind a flag)
+	
 	if (perfect_join_statistics.is_build_small) {
 		return true; // Already true based on static statistics
 	}
