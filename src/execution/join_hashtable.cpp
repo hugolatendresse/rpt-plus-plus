@@ -44,7 +44,9 @@ JoinHashTable::SharedState::SharedState()
 
 JoinHashTable::ProbeState::ProbeState()
     : SharedState(), ht_offsets_v(LogicalType::UBIGINT), hashes_dense_v(LogicalType::HASH),
-      non_empty_sel(STANDARD_VECTOR_SIZE) {
+      non_empty_sel(STANDARD_VECTOR_SIZE), cache_rhs_row_locations(LogicalType::POINTER),
+      cache_result_pointers(LogicalType::POINTER), cache_candidates_sel(STANDARD_VECTOR_SIZE),
+      cache_miss_sel(STANDARD_VECTOR_SIZE) {
 }
 
 JoinHashTable::InsertState::InsertState(const JoinHashTable &ht)
@@ -387,13 +389,213 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
                                    const SelectionVector *sel, idx_t &count, Vector &pointers_result_v,
                                    SelectionVector &match_sel, const bool has_sel) {
 
-	if (UseSalt()) {
-		GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries, pointers_result_v,
-		                             match_sel, has_sel);
-	} else {
-		GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries, pointers_result_v,
-		                              match_sel, has_sel);
+	if (!fast_cache) {
+		if (UseSalt()) {
+			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
+			                             pointers_result_v, match_sel, has_sel);
+		} else {
+			GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries,
+			                              pointers_result_v, match_sel, has_sel);
+		}
+		return;
 	}
+
+	// =========== Fast cache path ===========
+
+	// Step 1: Densify hashes for cache probe
+	auto hashes_dense = FlatVector::GetData<hash_t>(state.hashes_dense_v);
+	if (!has_sel) {
+		hashes_v.Flatten(count);
+		auto hashes_flat = FlatVector::GetData<hash_t>(hashes_v);
+		memcpy(hashes_dense, hashes_flat, count * sizeof(hash_t));
+	} else {
+		UnifiedVectorFormat hashes_unified;
+		hashes_v.ToUnifiedFormat(count, hashes_unified);
+		auto hashes_src = UnifiedVectorFormat::GetData<hash_t>(hashes_unified);
+		for (idx_t i = 0; i < count; i++) {
+			const auto row_index = sel->get_index(i);
+			const auto uvf_index = hashes_unified.sel->get_index(row_index);
+			hashes_dense[i] = hashes_src[uvf_index];
+		}
+	}
+
+	// Step 2+3: Cache probe + key match (single pass for single fixed-size keys,
+	//           two-pass with RowMatcher for complex keys)
+	idx_t match_count = 0;
+	idx_t cache_miss_count = 0;
+	auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
+
+	bool used_single_pass = false;
+	if (equality_types.size() == 1 && equality_types[0].IsIntegral()) {
+		// Single-pass: combine hash probe + key comparison + prefetch
+		const auto key_offset = layout_ptr->GetOffsets()[0];
+
+		ScopedHashJoinTimer fast_cache_timer(state.fast_cache_time_ns);
+
+		// Flatten the key vector for direct access
+		keys.data[0].Flatten(keys.size());
+
+		switch (equality_types[0].InternalType()) {
+		case PhysicalType::INT8: {
+			auto probe_keys = FlatVector::GetData<int8_t>(keys.data[0]);
+			fast_cache->ProbeAndMatch<int8_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
+			                                  pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                  cache_miss_count);
+			used_single_pass = true;
+			break;
+		}
+		case PhysicalType::INT16: {
+			auto probe_keys = FlatVector::GetData<int16_t>(keys.data[0]);
+			fast_cache->ProbeAndMatch<int16_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
+			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                   cache_miss_count);
+			used_single_pass = true;
+			break;
+		}
+		case PhysicalType::INT32: {
+			auto probe_keys = FlatVector::GetData<int32_t>(keys.data[0]);
+			fast_cache->ProbeAndMatch<int32_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
+			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                   cache_miss_count);
+			used_single_pass = true;
+			break;
+		}
+		case PhysicalType::INT64: {
+			auto probe_keys = FlatVector::GetData<int64_t>(keys.data[0]);
+			fast_cache->ProbeAndMatch<int64_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
+			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                   cache_miss_count);
+			used_single_pass = true;
+			break;
+		}
+		case PhysicalType::UINT8: {
+			auto probe_keys = FlatVector::GetData<uint8_t>(keys.data[0]);
+			fast_cache->ProbeAndMatch<uint8_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
+			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                   cache_miss_count);
+			used_single_pass = true;
+			break;
+		}
+		case PhysicalType::UINT16: {
+			auto probe_keys = FlatVector::GetData<uint16_t>(keys.data[0]);
+			fast_cache->ProbeAndMatch<uint16_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
+			                                    pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                    cache_miss_count);
+			used_single_pass = true;
+			break;
+		}
+		case PhysicalType::UINT32: {
+			auto probe_keys = FlatVector::GetData<uint32_t>(keys.data[0]);
+			fast_cache->ProbeAndMatch<uint32_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
+			                                    pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                    cache_miss_count);
+			used_single_pass = true;
+			break;
+		}
+		case PhysicalType::UINT64: {
+			auto probe_keys = FlatVector::GetData<uint64_t>(keys.data[0]);
+			fast_cache->ProbeAndMatch<uint64_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
+			                                    pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                    cache_miss_count);
+			used_single_pass = true;
+			break;
+		}
+		default:
+			break;
+		}
+	}
+
+	if (!used_single_pass) {
+		// General two-pass: hash probe, then RowMatcher key comparison
+		auto cache_result_ptrs = FlatVector::GetData<data_ptr_t>(state.cache_result_pointers);
+		auto cache_rhs_locations = FlatVector::GetData<data_ptr_t>(state.cache_rhs_row_locations);
+		idx_t cache_candidates_count = 0;
+
+		{
+			ScopedHashJoinTimer fast_cache_timer(state.fast_cache_time_ns);
+			fast_cache->ProbeByHash(hashes_dense, count, sel, has_sel, state.cache_candidates_sel,
+			                        cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
+			                        state.cache_miss_sel, cache_miss_count);
+		}
+
+		if (cache_candidates_count > 0) {
+			idx_t cache_no_match_count = 0;
+			idx_t cache_match_count;
+			{
+				ScopedHashJoinTimer fast_cache_timer(state.fast_cache_time_ns);
+				cache_match_count =
+				    row_matcher_build.Match(keys, key_state.vector_data, state.cache_candidates_sel,
+				                           cache_candidates_count, *layout_ptr, state.cache_rhs_row_locations,
+				                           &state.keys_no_match_sel, cache_no_match_count);
+			}
+
+			for (idx_t i = 0; i < cache_match_count; i++) {
+				const auto row_index = state.cache_candidates_sel.get_index(i);
+				pointers_result[row_index] = cache_result_ptrs[row_index];
+				match_sel.set_index(match_count++, row_index);
+			}
+
+			for (idx_t i = 0; i < cache_no_match_count; i++) {
+				const auto row_index = state.keys_no_match_sel.get_index(i);
+				state.cache_miss_sel.set_index(cache_miss_count++, row_index);
+			}
+
+			// Batch prefetch for two-pass hits
+			for (idx_t i = 0; i < match_count; i++) {
+				const auto row_index = match_sel.get_index(i);
+				__builtin_prefetch(pointers_result[row_index], 0, 3);
+			}
+		}
+	}
+
+	// Step 4: Regular probe for cache misses
+	if (cache_miss_count > 0) {
+		SelectionVector regular_match_sel(STANDARD_VECTOR_SIZE);
+		idx_t regular_count = cache_miss_count;
+
+		if (UseSalt()) {
+			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, &state.cache_miss_sel, regular_count,
+			                             *this, entries, pointers_result_v, regular_match_sel, true);
+		} else {
+			GetRowPointersInternal<false>(keys, key_state, state, hashes_v, &state.cache_miss_sel, regular_count,
+			                              *this, entries, pointers_result_v, regular_match_sel, true);
+		}
+
+		// Combine regular matches into match_sel and insert into cache
+		auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
+
+		// Get hash access for cache insertion
+		UnifiedVectorFormat hashes_for_insert;
+		hash_t *hashes_flat_for_insert = nullptr;
+		const hash_t *hashes_unified_data = nullptr;
+		const SelectionVector *hashes_unified_sel = nullptr;
+		if (!has_sel) {
+			hashes_flat_for_insert = FlatVector::GetData<hash_t>(hashes_v);
+		} else {
+			hashes_v.ToUnifiedFormat(count, hashes_for_insert);
+			hashes_unified_data = UnifiedVectorFormat::GetData<hash_t>(hashes_for_insert);
+			hashes_unified_sel = hashes_for_insert.sel;
+		}
+
+		for (idx_t i = 0; i < regular_count; i++) {
+			const auto row_index = regular_match_sel.get_index(i);
+			match_sel.set_index(match_count++, row_index);
+
+			// Get hash for this row and insert into fast cache
+			hash_t hash;
+			if (!has_sel) {
+				hash = hashes_flat_for_insert[row_index];
+			} else {
+				const auto uvf_index = hashes_unified_sel->get_index(row_index);
+				hash = hashes_unified_data[uvf_index];
+			}
+			if (hash != 0) {
+				fast_cache->Insert(hash, pointers_result[row_index], pointers_result[row_index]);
+			}
+		}
+	}
+
+	count = match_count;
 }
 
 void JoinHashTable::Hash(DataChunk &keys, const SelectionVector &sel, idx_t count, Vector &hashes) {
@@ -818,6 +1020,26 @@ void JoinHashTable::Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool para
 
 		InsertHashes(hashes, count, chunk_state, insert_state, parallel);
 	} while (iterator.Next());
+}
+
+void JoinHashTable::InitializeFastCache() {
+	if (capacity <= FastHashCache::ACTIVATION_THRESHOLD) {
+		return;
+	}
+
+	// Only activate for all-constant (fixed-size) equality key types
+	for (const auto &type : equality_types) {
+		if (type.InternalType() == PhysicalType::VARCHAR || type.InternalType() == PhysicalType::STRUCT ||
+		    type.InternalType() == PhysicalType::LIST) {
+			return;
+		}
+	}
+
+	const auto &offsets = layout_ptr->GetOffsets();
+	const idx_t mini_row_size = offsets[equality_types.size()];
+
+	const idx_t cache_capacity = FastHashCache::ComputeCapacity(mini_row_size);
+	fast_cache = make_uniq<FastHashCache>(cache_capacity, mini_row_size);
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,

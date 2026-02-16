@@ -17,6 +17,7 @@
 #include "duckdb/common/types/row/tuple_data_layout.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/execution/aggregate_hashtable.hpp"
+#include "duckdb/execution/fast_hash_cache.hpp"
 #include "duckdb/execution/ht_entry.hpp"
 
 namespace duckdb {
@@ -154,6 +155,13 @@ public:
 		SelectionVector non_empty_sel;
 		uint64_t *probe_for_pointers_time_ns = nullptr;
 		uint64_t *match_time_ns = nullptr;
+		uint64_t *fast_cache_time_ns = nullptr;
+
+		//! Per-thread vectors for fast cache probing
+		Vector cache_rhs_row_locations;
+		Vector cache_result_pointers;
+		SelectionVector cache_candidates_sel;
+		SelectionVector cache_miss_sel;
 	};
 
 	struct InsertState : SharedState {
@@ -188,6 +196,9 @@ public:
 	//! Finalize must be called before any call to Probe, and after Finalize is called Build should no longer be
 	//! ever called.
 	void Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool parallel);
+	//! Create the shared fast hash cache if the table is large enough.
+	//! Must be called after all Finalize tasks have completed.
+	void InitializeFastCache();
 	//! Probe the HT with the given input chunk, resulting in the given result
 	void Probe(ScanStructure &scan_structure, DataChunk &keys, TupleDataChunkState &key_state, ProbeState &probe_state,
 	           optional_ptr<Vector> precomputed_hashes = nullptr);
@@ -326,6 +337,10 @@ private:
 	vector<bool> null_values_are_equal;
 	//! An empty tuple that's a "dead end", can be used to stop chains early
 	unsafe_unique_array<data_t> dead_end;
+
+	//! Shared fast hash cache for accelerating repeated probe lookups.
+	//! Created during Finalize when the hash table is large enough.
+	unique_ptr<FastHashCache> fast_cache;
 
 	//! Copying not allowed
 	JoinHashTable(const JoinHashTable &) = delete;
