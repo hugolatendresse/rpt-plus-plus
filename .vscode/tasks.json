@@ -10,6 +10,14 @@
       "hide": false
     },
     {
+      "label": "Build Release",
+      "type": "shell",
+      "command": "GEN=ninja BUILD_BENCHMARK=1 make release -j 7",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$gcc"],
+      "hide": false
+    },
+    {
       "label": "Build Debug (incremental)",
       "type": "shell",
       "command": "cmake --build build/debug --config Debug -- -j 7",
