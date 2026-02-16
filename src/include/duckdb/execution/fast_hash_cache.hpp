@@ -34,9 +34,9 @@ public:
 	static constexpr idx_t DEFAULT_L3_BUDGET = 16ULL * 1024 * 1024;
 
 	//! Minimum hash-table capacity before the cache is worth creating
-	static constexpr idx_t ACTIVATION_THRESHOLD = 1ULL * 1024 * 1024 / sizeof(uint64_t);
+	static constexpr idx_t ACTIVATION_THRESHOLD = 10ULL * 1024 * 1024 / sizeof(uint64_t);
 
-	//! Create a cache with the given capacity (must be power of 2) and the
+	//! Create a cache with the given capacity (must be power of 2 to allow fast slot calculation) and the
 	//! size of the mini-row (validity bytes + equality key columns).
 	FastHashCache(idx_t capacity_p, idx_t mini_row_size_p)
 	    : capacity(capacity_p), bitmask(capacity_p - 1), mini_row_size(mini_row_size_p),
@@ -44,7 +44,7 @@ public:
 		D_ASSERT(IsPowerOfTwo(capacity));
 		auto total_bytes = capacity * entry_stride;
 		data = make_unsafe_uniq_array_uninitialized<data_t>(total_bytes);
-		memset(data.get(), 0, total_bytes);
+		memset(data.get(), 0, total_bytes); // TODO this looks expensive, can we avoid?
 	}
 
 	//! Probe the cache for hash matches. For each of the `count` probe hashes
@@ -162,7 +162,11 @@ public:
 
 	//! Insert an entry into the cache. Copies the first `mini_row_size` bytes
 	//! from `row_data_ptr` (the start of the data_collection row) as key data.
+	//! The validity bit tells whether the Key is populated or not (the hash being 
+	//! zero or not tells whether the pointer is populated or not)
+	//! We keep the hash in the table to allow for linear probing (for collisions)
 	void Insert(hash_t hash, data_ptr_t data_collection_ptr, const_data_ptr_t row_data_ptr) {
+		// TODO can we pack better? Maybe use one fewer bit for the hash?
 		if (hash == 0) {
 			return; // hash 0 is the empty-slot sentinel; cannot cache
 		}
