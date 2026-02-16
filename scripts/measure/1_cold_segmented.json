@@ -1,12 +1,12 @@
 {
     "rows_returned": 1,
-    "latency": 2.098902837,
+    "latency": 2.87442482,
     "result_set_size": 8,
     "query_name": "SELECT count(*) \nFROM a \nJOIN b ON a.keyB1 = b.keyB1;",
     "blocked_thread_time": 0.0,
-    "system_peak_buffer_memory": 8611223552,
+    "system_peak_buffer_memory": 8611219456,
     "system_peak_temp_dir_size": 0,
-    "cpu_time": 8.054196092000018,
+    "cpu_time": 11.08711834499993,
     "extra_info": {},
     "cumulative_cardinality": 800800004,
     "cumulative_rows_scanned": 1603200008,
@@ -14,7 +14,7 @@
         {
             "result_set_size": 8,
             "operator_name": "UNGROUPED_AGGREGATE",
-            "cpu_time": 8.054196092000018,
+            "cpu_time": 11.08711834499993,
             "extra_info": {
                 "Aggregates": "count_star()"
             },
@@ -23,29 +23,35 @@
             "operator_cardinality": 1,
             "cumulative_rows_scanned": 1603200008,
             "operator_rows_scanned": 0,
-            "operator_timing": 0.0530369349999967,
+            "operator_timing": 0.060800269000000164,
             "children": [
                 {
                     "result_set_size": 6400000016,
                     "operator_name": "HASH_JOIN",
-                    "cpu_time": 8.001159157000021,
+                    "cpu_time": 11.02631807599993,
                     "extra_info": {
                         "Join Type": "INNER",
                         "Conditions": "keyB1 = keyB1",
                         "Estimated Cardinality": "800001",
-                        "Probe Time": "5132.600 ms"
+                        "Build Time": "25.876 ms",
+                        "Probe Time": "5476.087 ms",
+                        "Probe Time (ExecuteInternal)": "5476.087 ms",
+                        "Probe Time (ExternalProbe)": "0.000 ms",
+                        "Scan Structure Next Time (ExecuteInternal)": "2011.402 ms",
+                        "ProbeForPointers Time": "1490.871 ms",
+                        "Match Time": "2062.091 ms"
                     },
                     "cumulative_cardinality": 800800003,
                     "operator_type": "HASH_JOIN",
                     "operator_cardinality": 400000001,
                     "cumulative_rows_scanned": 1603200008,
                     "operator_rows_scanned": 0,
-                    "operator_timing": 7.752037049000026,
+                    "operator_timing": 10.75747086499993,
                     "children": [
                         {
                             "result_set_size": 3200000008,
                             "operator_name": "SEQ_SCAN ",
-                            "cpu_time": 0.24848064499999672,
+                            "cpu_time": 0.26821533699999944,
                             "extra_info": {
                                 "Table": "a",
                                 "Type": "Sequential Scan",
@@ -57,13 +63,13 @@
                             "operator_cardinality": 400000001,
                             "cumulative_rows_scanned": 1600000004,
                             "operator_rows_scanned": 1600000004,
-                            "operator_timing": 0.24848064499999672,
+                            "operator_timing": 0.26821533699999944,
                             "children": []
                         },
                         {
                             "result_set_size": 6400008,
                             "operator_name": "SEQ_SCAN ",
-                            "cpu_time": 0.000641463,
+                            "cpu_time": 0.0006318740000000002,
                             "extra_info": {
                                 "Table": "b",
                                 "Type": "Sequential Scan",
@@ -75,7 +81,7 @@
                             "operator_cardinality": 800001,
                             "cumulative_rows_scanned": 3200004,
                             "operator_rows_scanned": 3200004,
-                            "operator_timing": 0.000641463,
+                            "operator_timing": 0.0006318740000000002,
                             "children": []
                         }
                     ]
