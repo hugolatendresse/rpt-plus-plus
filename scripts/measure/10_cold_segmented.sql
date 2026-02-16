@@ -45,6 +45,6 @@ ANALYZE a;
 ANALYZE b;
 
 -- EXPLAIN ANALYZE SELECT count(*) 
-SELECT count(*) 
+SELECT min(b.keyB1) 
 FROM a 
 JOIN b ON a.keyB1 = b.keyB1;

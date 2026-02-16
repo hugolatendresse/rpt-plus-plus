@@ -19,20 +19,33 @@ SQL_FILES=(
 
 for base in "${SQL_FILES[@]}"; do
   echo "running ${base}"
-  build/release/duckdb -f "$SCRIPT_DIR/${base}.sql"
+  build/release/duckdb -f "$SCRIPT_DIR/${base}.sql"   # TODO uncomment
 done
+
+# Keys to extract from HASH_JOIN extra_info (first occurrence in tree)
+EXTRA_KEYS=(
+  "Build Time"
+  "Probe Time"
+  "Probe Time (ExecuteInternal)"
+  "Probe Time (ExternalProbe)"
+  "ProbeForPointers Time"
+  "Match Time"
+  "Scan Structure Next Time (ExecuteInternal)"
+)
 
 for base in "${SQL_FILES[@]}"; do
   json="$SCRIPT_DIR/${base}.json"
   [ -f "$json" ] || continue
   cpu_time=$(jq -r '.cpu_time' "$json")
-  probe_time=$(jq -r '[.. | objects | .extra_info["Probe Time"]? // empty] | first // "N/A"' "$json")
   {
     echo "$base"
     echo "CPU Time"
     echo "$cpu_time"
-    echo "Probe Time"
-    echo "$probe_time"
+    for key in "${EXTRA_KEYS[@]}"; do
+      val=$(jq -r --arg k "$key" '[.. | objects | .extra_info[$k]? // empty] | first // "N/A"' "$json")
+      echo "$key"
+      echo "$val"
+    done
     echo
   } >> "$RESULTS"
 done
