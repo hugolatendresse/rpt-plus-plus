@@ -1,12 +1,12 @@
 {
     "rows_returned": 1,
-    "latency": 3.116715625,
+    "latency": 3.323655542,
     "result_set_size": 8,
     "query_name": "SELECT count(*) \nFROM a \nJOIN b ON a.keyB1 = b.keyB1;",
     "blocked_thread_time": 0.0,
     "system_peak_buffer_memory": 8918423552,
     "system_peak_temp_dir_size": 0,
-    "cpu_time": 12.110429951999974,
+    "cpu_time": 12.867487657000032,
     "extra_info": {},
     "cumulative_cardinality": 804000004,
     "cumulative_rows_scanned": 1616000008,
@@ -14,7 +14,7 @@
         {
             "result_set_size": 8,
             "operator_name": "UNGROUPED_AGGREGATE",
-            "cpu_time": 12.110429951999974,
+            "cpu_time": 12.867487657000032,
             "extra_info": {
                 "Aggregates": "count_star()"
             },
@@ -23,35 +23,36 @@
             "operator_cardinality": 1,
             "cumulative_rows_scanned": 1616000008,
             "operator_rows_scanned": 0,
-            "operator_timing": 0.049400746000000974,
+            "operator_timing": 0.06091386699999936,
             "children": [
                 {
                     "result_set_size": 6400000016,
                     "operator_name": "HASH_JOIN",
-                    "cpu_time": 12.061029205999972,
+                    "cpu_time": 12.806573790000032,
                     "extra_info": {
                         "Join Type": "INNER",
                         "Conditions": "keyB1 = keyB1",
                         "Estimated Cardinality": "4000001",
-                        "Build Time": "134.700 ms",
-                        "Probe Time": "5862.415 ms",
-                        "Probe Time (ExecuteInternal)": "5862.415 ms",
+                        "Build Time": "158.954 ms",
+                        "Probe Time": "6038.125 ms",
+                        "Probe Time (ExecuteInternal)": "6038.125 ms",
                         "Probe Time (ExternalProbe)": "0.000 ms",
-                        "Scan Structure Next Time (ExecuteInternal)": "2112.246 ms",
-                        "ProbeForPointers Time": "1577.156 ms",
-                        "Match Time": "2242.301 ms"
+                        "Scan Structure Next Time (ExecuteInternal)": "2255.690 ms",
+                        "Fast Cache Time": "4002.231 ms",
+                        "ProbeForPointers Time": "4.331 ms",
+                        "Match Time": "6.672 ms"
                     },
                     "cumulative_cardinality": 804000003,
                     "operator_type": "HASH_JOIN",
                     "operator_cardinality": 400000001,
                     "cumulative_rows_scanned": 1616000008,
                     "operator_rows_scanned": 0,
-                    "operator_timing": 11.769854107999974,
+                    "operator_timing": 12.494168919000032,
                     "children": [
                         {
                             "result_set_size": 3200000008,
                             "operator_name": "SEQ_SCAN ",
-                            "cpu_time": 0.2881077109999992,
+                            "cpu_time": 0.309292625999999,
                             "extra_info": {
                                 "Table": "a",
                                 "Type": "Sequential Scan",
@@ -63,13 +64,13 @@
                             "operator_cardinality": 400000001,
                             "cumulative_rows_scanned": 1600000004,
                             "operator_rows_scanned": 1600000004,
-                            "operator_timing": 0.2881077109999992,
+                            "operator_timing": 0.309292625999999,
                             "children": []
                         },
                         {
                             "result_set_size": 32000008,
                             "operator_name": "SEQ_SCAN ",
-                            "cpu_time": 0.003067387000000001,
+                            "cpu_time": 0.0031122449999999996,
                             "extra_info": {
                                 "Table": "b",
                                 "Type": "Sequential Scan",
@@ -81,7 +82,7 @@
                             "operator_cardinality": 4000001,
                             "cumulative_rows_scanned": 16000004,
                             "operator_rows_scanned": 16000004,
-                            "operator_timing": 0.003067387000000001,
+                            "operator_timing": 0.0031122449999999996,
                             "children": []
                         }
                     ]
