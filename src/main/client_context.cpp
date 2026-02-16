@@ -356,7 +356,7 @@ ClientContext::CreatePreparedStatementInternal(ClientContextLock &lock, const st
                                                optional_ptr<case_insensitive_map_t<BoundParameterData>> values) {
 	StatementType statement_type = statement->type;
 	if (statement_type == StatementType::SELECT_STATEMENT) {
-		printf("this is a select statement\n"); // Conditional breakpoint doesn't work!
+		printf("ClientContext::CreatePreparedStatementInternal entering a SELECT statement");
 	}
 	auto result = make_shared_ptr<PreparedStatementData>(statement_type);
 
