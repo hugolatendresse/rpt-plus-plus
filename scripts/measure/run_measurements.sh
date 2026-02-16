@@ -28,9 +28,9 @@ EXTRA_KEYS=(
   "Probe Time"
   "Probe Time (ExecuteInternal)"
   "Probe Time (ExternalProbe)"
-  "Scan Structure Next Time (ExecuteInternal)"
   "ProbeForPointers Time"
   "Match Time"
+  "Scan Structure Next Time (ExecuteInternal)"
 )
 
 for base in "${SQL_FILES[@]}"; do
