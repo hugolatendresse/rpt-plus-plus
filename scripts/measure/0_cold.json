@@ -1,12 +1,12 @@
 {
     "rows_returned": 1,
-    "latency": 2.192889835,
+    "latency": 3.062184498,
     "result_set_size": 8,
     "query_name": "SELECT count(*) \nFROM a \nJOIN b ON a.keyB1 = b.keyB1;",
     "blocked_thread_time": 0.0,
     "system_peak_buffer_memory": 8572807168,
     "system_peak_temp_dir_size": 0,
-    "cpu_time": 8.414465668000014,
+    "cpu_time": 11.869491875000021,
     "extra_info": {},
     "cumulative_cardinality": 800400004,
     "cumulative_rows_scanned": 1601600008,
@@ -14,7 +14,7 @@
         {
             "result_set_size": 8,
             "operator_name": "UNGROUPED_AGGREGATE",
-            "cpu_time": 8.414465668000014,
+            "cpu_time": 11.869491875000021,
             "extra_info": {
                 "Aggregates": "count_star()"
             },
@@ -23,29 +23,35 @@
             "operator_cardinality": 1,
             "cumulative_rows_scanned": 1601600008,
             "operator_rows_scanned": 0,
-            "operator_timing": 0.05802522799999975,
+            "operator_timing": 0.05276754200000025,
             "children": [
                 {
                     "result_set_size": 6400000016,
                     "operator_name": "HASH_JOIN",
-                    "cpu_time": 8.356440440000014,
+                    "cpu_time": 11.816724333000021,
                     "extra_info": {
                         "Join Type": "INNER",
                         "Conditions": "keyB1 = keyB1",
                         "Estimated Cardinality": "400001",
-                        "Probe Time": "5286.368 ms"
+                        "Build Time": "13.437 ms",
+                        "Probe Time": "5902.056 ms",
+                        "Probe Time (ExecuteInternal)": "5902.056 ms",
+                        "Probe Time (ExternalProbe)": "0.000 ms",
+                        "Scan Structure Next Time (ExecuteInternal)": "2148.087 ms",
+                        "ProbeForPointers Time": "1585.823 ms",
+                        "Match Time": "2258.957 ms"
                     },
                     "cumulative_cardinality": 800400003,
                     "operator_type": "HASH_JOIN",
                     "operator_cardinality": 400000001,
                     "cumulative_rows_scanned": 1601600008,
                     "operator_rows_scanned": 0,
-                    "operator_timing": 8.065162627000014,
+                    "operator_timing": 11.528190150000022,
                     "children": [
                         {
                             "result_set_size": 3200000008,
                             "operator_name": "SEQ_SCAN ",
-                            "cpu_time": 0.2908941850000009,
+                            "cpu_time": 0.28818502599999873,
                             "extra_info": {
                                 "Table": "a",
                                 "Type": "Sequential Scan",
@@ -57,13 +63,13 @@
                             "operator_cardinality": 400000001,
                             "cumulative_rows_scanned": 1600000004,
                             "operator_rows_scanned": 1600000004,
-                            "operator_timing": 0.2908941850000009,
+                            "operator_timing": 0.28818502599999873,
                             "children": []
                         },
                         {
                             "result_set_size": 3200008,
                             "operator_name": "SEQ_SCAN ",
-                            "cpu_time": 0.0003836280000000001,
+                            "cpu_time": 0.0003491569999999999,
                             "extra_info": {
                                 "Table": "b",
                                 "Type": "Sequential Scan",
@@ -75,7 +81,7 @@
                             "operator_cardinality": 400001,
                             "cumulative_rows_scanned": 1600004,
                             "operator_rows_scanned": 1600004,
-                            "operator_timing": 0.0003836280000000001,
+                            "operator_timing": 0.0003491569999999999,
                             "children": []
                         }
                     ]
