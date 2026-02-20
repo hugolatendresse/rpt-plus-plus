@@ -28,7 +28,8 @@ public:
 	//! row_size_p is the number of bytes in each row of data_collection.
 	//!            This is smaller than the entry size of each row of our
 	//!            fast cache since the latter also includes a hash
-	//! row_copy_offset_p is the offset from the source row to start copying from
+	//! row_copy_offset_p how many bytes to skip over in each data_collection row before starting copying into the fast
+	//! cache
 	FastHashCache(idx_t capacity_p, idx_t row_size_p, idx_t row_copy_offset_p = 0)
 	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), row_copy_offset(row_copy_offset_p),
 	      entry_stride(ComputeEntryStride(row_size_p)) {
@@ -97,12 +98,13 @@ public:
 	                   const SelectionVector *row_sel, bool has_row_sel, data_ptr_t *result_ptrs,
 	                   SelectionVector &match_sel, idx_t &match_count, SelectionVector &miss_sel,
 	                   idx_t &miss_count) const {
-
 		static constexpr idx_t SLOT_PREFETCH_DIST = 16;
 
 		match_count = 0;
 		miss_count = 0;
 
+		// Constantly prefetch 16 probes ahead
+		// TODO measure if that actually helps
 		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
 			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
 		}
@@ -134,7 +136,7 @@ public:
 						break;
 					}
 				}
-				slot = (slot + 1) & bitmask;
+				slot = (slot + 1) & bitmask; // linear probe if didn't find
 			}
 			if (!found) {
 				miss_sel.set_index(miss_count++, row_index);
@@ -142,31 +144,33 @@ public:
 		}
 	}
 
-	// -----------------------------------------------------------------------
-	// Insert (thread-safe via CAS on hash field)
-	// -----------------------------------------------------------------------
+	//! Counts how many times an Insert calls actually inserts a new cache entry
 	std::atomic<idx_t> insert_new {0};
+
+	//! Counts how many times Insert does NOT insert an entry because its hash is already in the table
 	std::atomic<idx_t> insert_dup {0};
 
-	//! Insert an entry. Copies row_size bytes from row_data_ptr + row_copy_offset.
-	//! Thread-safe: uses CAS to claim empty slots. Same-hash duplicates are no-ops.
+	//! Inserts an entry, including the row
 	void Insert(hash_t hash, const_data_ptr_t row_data_ptr) {
 		auto slot = hash & bitmask;
 		while (true) {
 			auto entry_ptr = GetEntryPtr(slot);
 			auto hash_ptr = reinterpret_cast<std::atomic<hash_t> *>(entry_ptr);
 
-			hash_t expected = 0;
+			hash_t expected = 0; // We only insert if the current hash is null
+			// TODO double check the choice of CAS function and third argument below
 			if (hash_ptr->compare_exchange_strong(expected, hash, std::memory_order_acq_rel)) {
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
 				insert_new.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
 			if (expected == hash) {
+				// Don't try linear probing if the hashes perfect match. TODO could try linear probing here too
 				insert_dup.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
-			slot = (slot + 1) & bitmask;
+
+			slot = (slot + 1) & bitmask; // linear probe is the hashes don't fully match
 		}
 	}
 
@@ -215,13 +219,16 @@ private:
 		return (HEADER_SIZE + row_size + 7) & ~idx_t(7);
 	}
 
+	// Get a pointer to the `slot`th entry in the fast cache
 	inline data_ptr_t GetEntryPtr(idx_t slot) const {
 		return data.get() + slot * entry_stride;
 	}
 
+	// Get the hash stored in an entry
 	static inline hash_t LoadHash(const data_ptr_t entry_ptr) {
 		hash_t h;
-		memcpy(&h, entry_ptr, sizeof(hash_t));
+		memcpy(&h, entry_ptr, sizeof(hash_t)); // TODO can probably do this without memcpy... just derefence the value?
+		                                       // or mem-compare? or something?
 		return h;
 	}
 

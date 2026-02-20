@@ -384,6 +384,16 @@ inline bool JoinHashTable::UseSalt() const {
 	return this->capacity > USE_SALT_THRESHOLD;
 }
 
+//! @param keys chunk of keys to match
+//! @param key_state TODO
+//! @param state the per-thread state (contains ht_offsets_v, etc)
+//! @param hashes_v the hashes of the keys to match (rows indicated by `sel` and `count)
+//! @param sel array of indices of the keys to probe
+//! @param count On input: the number of rows to probe. On output: number of matches
+//! @param pointers_result_v On output: contains the pointers to payloads
+//! @param match_sel On output: arrays of indices of the keys that found a match
+//! @param has_sel if true, use `sel`, if false, use first `count` rows of the arrays
+//!
 void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_state, ProbeState &state, Vector &hashes_v,
                                    const SelectionVector *sel, idx_t &count, Vector &pointers_result_v,
                                    SelectionVector &match_sel, const bool has_sel) {
@@ -399,15 +409,18 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		return;
 	}
 
-	// =========== Phase 1: Warmup -- regular probe + Insert into cache ===========
+	// TODO decompose this function
+
+	// WARMUP PHASE ------------------------------------------------
+
 	if (state.fast_cache_phase == FastCachePhase::WARMUP) {
 		const idx_t input_count = count; // save before GetRowPointersInternal modifies it
 
-		// Save original hashes BEFORE GetRowPointersInternal (which corrupts hashes_v
-		// via linear probing writes to hashes_dense → hashes_v aliasing).
+		// Save original hashes before GetRowPointersInternal modifies it
 		hash_t saved_hashes[STANDARD_VECTOR_SIZE];
 		if (!has_sel) {
 			hashes_v.Flatten(input_count);
+			// TODO can this be avoided?
 			memcpy(saved_hashes, FlatVector::GetData<hash_t>(hashes_v), input_count * sizeof(hash_t));
 		} else {
 			UnifiedVectorFormat hashes_unified;
@@ -417,7 +430,6 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				const auto row_index = sel->get_index(i);
 				const auto uvf_index = hashes_unified.sel->get_index(row_index);
 				saved_hashes[row_index] = hashes_src[uvf_index];
-			}
 		}
 
 		if (UseSalt()) {
@@ -428,41 +440,49 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			                              pointers_result_v, match_sel, has_sel);
 		}
 
-		// Insert matched entries into the fast cache (idempotent, thread-safe).
-		// Use saved_hashes (not hashes_v, which was corrupted by linear probing).
+		// Add all the warm entries to warmup_entries
 		auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
 		idx_t insert_count = 0;
 		for (idx_t i = 0; i < count; i++) {
+			// TODO is this loop being vectorized?
 			const auto row_index = match_sel.get_index(i);
 			const auto hash = saved_hashes[row_index];
 			if (hash != 0) {
-				fast_cache->Insert(hash, pointers_result[row_index]);
+				state.warmup_entries.push_back({hash, pointers_result[row_index]});
 				insert_count++;
 			}
 		}
-		static std::atomic<idx_t> total_inserts{0};
-		total_inserts.fetch_add(insert_count, std::memory_order_relaxed);
-		if (state.warmup_rows_probed + input_count >= FAST_CACHE_WARMUP_ROWS && state.warmup_rows_probed < FAST_CACHE_WARMUP_ROWS) {
-			fprintf(stderr, "[Warmup] thread finished: matched=%lu, insert_calls=%lu, total_inserts_so_far=%lu\n",
-			        (unsigned long)count, (unsigned long)insert_count, (unsigned long)total_inserts.load());
-		}
 
 		state.warmup_rows_probed += input_count;
+
+		static std::atomic<idx_t> total_inserts{0};
+		total_inserts.fetch_add(insert_count, std::memory_order_relaxed);
+		// End warmup phase if we have seen enough entries
 		if (state.warmup_rows_probed >= FAST_CACHE_WARMUP_ROWS) {
-			fprintf(stderr, "[Warmup→Ready] warmup_rows=%lu, cache entries=%lu (cap=%lu), insert_new=%lu, insert_dup=%lu\n",
-			        (unsigned long)state.warmup_rows_probed, (unsigned long)fast_cache->CountEntries(),
-			        (unsigned long)fast_cache->GetCapacity(),
+			for (auto &entry : state.warmup_entries) {
+				// TODO is this getting vectorized?
+				fast_cache->Insert(entry.hash, entry.row_ptr);
+			}
+			fprintf(stderr,
+			        "[Warmup→Ready] warmup_rows=%lu, buffered=%lu, cache entries=%lu (cap=%lu), insert_new=%lu, "
+			        "insert_dup=%lu\n",
+			        (unsigned long)state.warmup_rows_probed, (unsigned long)state.warmup_entries.size(),
+			        (unsigned long)fast_cache->CountEntries(), (unsigned long)fast_cache->GetCapacity(),
 			        (unsigned long)fast_cache->insert_new.load(), (unsigned long)fast_cache->insert_dup.load());
+			state.warmup_entries.clear();
+			state.warmup_entries.shrink_to_fit();
 			state.fast_cache_phase = FastCachePhase::READY;
 		}
+
 		return;
 	}
 
-	// =========== Phase 3: Read-only cache probe ===========
+	// READ ONLY PROBE -----------------------------------
 
-	// Step 1: Densify hashes for cache probe
+	// Densify vector in case sel is used
 	auto hashes_dense = FlatVector::GetData<hash_t>(state.hashes_dense_v);
 	if (!has_sel) {
+		// Already dense
 		hashes_v.Flatten(count);
 		auto hashes_flat = FlatVector::GetData<hash_t>(hashes_v);
 		memcpy(hashes_dense, hashes_flat, count * sizeof(hash_t));
@@ -477,18 +497,21 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		}
 	}
 
-	// Step 2+3: Cache probe + key match (single pass for single fixed-size keys,
-	//           two-pass with RowMatcher for complex keys)
+	// Probe the fast cache
+
+	// For a single, integral key, we use ProbeAndMatch (exact probe)
+	// TODO For a complex key or multiple keys, the plan is to use ProbeByHash
+
 	idx_t match_count = 0;
 	idx_t cache_miss_count = 0;
 	auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
 
-	bool used_single_pass = false;
+	bool used_probe_and_match = false;
 	if (equality_types.size() == 1 && equality_types[0].IsIntegral()) {
 		const auto key_offset = fast_cache_key_offset;
 
 		ScopedHashJoinTimer fast_cache_timer(state.fast_cache_time_ns);
-		keys.data[0].Flatten(keys.size());
+		keys.data[0].Flatten(keys.size()); // TODO is there a way to not flatten everything?
 
 		switch (equality_types[0].InternalType()) {
 		case PhysicalType::INT8: {
@@ -496,7 +519,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<int8_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                  pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                  cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::INT16: {
@@ -504,7 +527,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<int16_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                   cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::INT32: {
@@ -512,7 +535,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<int32_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                   cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::INT64: {
@@ -520,7 +543,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<int64_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                   cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT8: {
@@ -528,7 +551,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<uint8_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                   cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT16: {
@@ -536,7 +559,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<uint16_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                    pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                    cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT32: {
@@ -544,7 +567,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<uint32_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                    pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                    cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT64: {
@@ -552,7 +575,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<uint64_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                    pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                    cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		default:
@@ -560,7 +583,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		}
 	}
 
-	if (!used_single_pass) {
+	if (!used_probe_and_match) {
 		auto cache_result_ptrs = FlatVector::GetData<data_ptr_t>(state.cache_result_pointers);
 		auto cache_rhs_locations = FlatVector::GetData<data_ptr_t>(state.cache_rhs_row_locations);
 		idx_t cache_candidates_count = 0;
@@ -598,10 +621,10 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		}
 	}
 
-	// Step 4: Regular probe for cache misses (read-only, no cache inserts)
+	// Regular probe for cache misses (read-only, no cache inserts)
 	if (cache_miss_count > 0) {
 		SelectionVector regular_match_sel(STANDARD_VECTOR_SIZE);
-		idx_t regular_count = cache_miss_count;
+		idx_t regular_count = cache_miss_count; // The number of keys we're inquiring about
 
 		if (UseSalt()) {
 			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, &state.cache_miss_sel, regular_count,
@@ -611,6 +634,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			                              *this, entries, pointers_result_v, regular_match_sel, true);
 		}
 
+		// Update the selection vector `match_sel` with the indices of new matches
+		// `regular_count` is now the number of new matches we got on data_collection
 		for (idx_t i = 0; i < regular_count; i++) {
 			const auto row_index = regular_match_sel.get_index(i);
 			match_sel.set_index(match_count++, row_index);
@@ -1070,8 +1095,7 @@ void JoinHashTable::InitializeFastCache() {
 
 	fprintf(stderr, "[InitFastCache] row_size=%lu (tuple_size=%lu, pointer_offset=%lu), entry_stride=%lu, capacity=%lu, total=%.1f MiB\n",
 	        (unsigned long)row_size, (unsigned long)tuple_size, (unsigned long)pointer_offset,
-	        (unsigned long)((sizeof(hash_t) + row_size + 7) & ~idx_t(7)),
-	        (unsigned long)cache_capacity,
+	        (unsigned long)((sizeof(hash_t) + row_size + 7) & ~idx_t(7)), (unsigned long)cache_capacity,
 	        (double)(cache_capacity * ((sizeof(hash_t) + row_size + 7) & ~idx_t(7))) / (1024.0 * 1024.0));
 }
 
