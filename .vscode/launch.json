@@ -14,6 +14,7 @@
           // "${workspaceFolder}/scripts/debug/left_deep_three_way.sql"
           // "${workspaceFolder}/scripts/measure/100_cold_interleaved.sql"
           "${workspaceFolder}/scripts/measure/1_cold_interleaved_DEBUG.sql"
+          // "${workspaceFolder}/scripts/measure/1_cold_interleaved.sql"
         ],
         // "preLaunchTask": "Build Debug",
         "cwd": "${workspaceFolder}"

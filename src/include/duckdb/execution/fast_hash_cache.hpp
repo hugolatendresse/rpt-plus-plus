@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/constants.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/types/selection_vector.hpp"
 
@@ -40,10 +41,10 @@ public:
 		memset(data.get(), 0, total_bytes);
 	}
 
-	//! Find the cache entry whose stored hash matches. 
-	//! Only compared hashes! Can have false positives!
+	//! TODO Find the cache entry whose stored hash matches.
+	//! TODO Only compares hashes! Can have false positives!
 	//! Returns pointers to the cached row data (usable by RowMatcher and GatherResult).
-	//! On miss, doesn't go to data_collection but records row in cache_miss_sel (and cache_miss_count)
+	//! On miss, doesn't go to data_collection, but records the row in cache_miss_sel (and cache_miss_count)
 	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, bool has_row_sel,
 	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
 	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations, SelectionVector &cache_miss_sel,
