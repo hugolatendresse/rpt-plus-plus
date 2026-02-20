@@ -153,11 +153,6 @@ public:
 	//! Must be >= the row group size (122,880) to ensure full coverage of unique keys.
 	static constexpr idx_t FAST_CACHE_WARMUP_ROWS = 200000;
 
-	struct WarmupEntry {
-		hash_t hash;
-		const_data_ptr_t row_ptr;
-	};
-
 	struct ProbeState : SharedState {
 		ProbeState();
 
@@ -178,9 +173,15 @@ public:
 		FastCachePhase fast_cache_phase = FastCachePhase::WARMUP;
 		idx_t warmup_rows_probed = 0;
 
-		//! Buffer of (hash, row_ptr) pairs collected during warmup.
-		//! Batch-flushed into the FastHashCache when warmup completes.
-		vector<WarmupEntry> warmup_entries;
+		//! Bitvector marking accessed HT slots during warmup (one bit per slot).
+		//! Provides O(1) dedup so each build-side entry is cached at most once.
+		unsafe_unique_array<uint8_t> warmup_bitvector;
+		//! Deduped (hash, slot) pairs — only entries whose bit was freshly set.
+		struct WarmupHit {
+			hash_t hash;
+			idx_t ht_slot;
+		};
+		vector<WarmupHit> warmup_hits;
 	};
 
 	struct InsertState : SharedState {
