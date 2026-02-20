@@ -979,8 +979,9 @@ void JoinHashTable::InitializeFastCache() {
 	// TODO should we skip fast cache for certain key types? VARCHAR/LIST/STRUCT/etc
 	// TODO consts below are hacks - generalize!!!
 	const idx_t data_collection_row_size =
-	    pointer_offset + sizeof(data_ptr_t); // TODO might be duplicative of logic in FashHashCache
-	const idx_t row_copy_offset = 0;         // TODO hack?
+	    pointer_offset + sizeof(data_ptr_t);             // TODO might be duplicative of logic in FashHashCache
+	const idx_t row_copy_offset = 0;                     // TODO hack?
+	fast_cache_key_offset = layout_ptr->GetOffsets()[0]; // key after validity bytes // TODO this is a hack!!!
 	const idx_t cache_capacity = FastHashCache::ComputeCapacity(data_collection_row_size);
 	fast_cache = make_uniq<FastHashCache>(cache_capacity, data_collection_row_size, row_copy_offset);
 
