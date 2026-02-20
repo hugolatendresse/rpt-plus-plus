@@ -4,6 +4,18 @@
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/types/selection_vector.hpp"
 
+#include <cstring>
+
+namespace duckdb {
+
+//! FastHashCache is a hash table that caches recently
+//! matched probe entries to accelerate repeated hash join lookups.
+//!
+//! Each entry stores: [hash (8 bytes)] [full_row from data_selection]
+//! The full_row is a copy of the entire data_collection row, so cache hits
+//! completely bypass data_collection access for both key and payload
+//! 
+//! Thread safety during warmup uses CAS 
 class FastHashCache {
 public:
 //! Only create the fast hash cache if the global hash table has at least that capacity	
@@ -38,4 +50,6 @@ private:
   idx_t bitmask;
   idx_t row_size;
   idx_t entry_stride;
+}
+
 }
