@@ -150,9 +150,9 @@ public:
 	enum class FastCachePhase : uint8_t {WARMUP, READY};
 
 	//! Number of probe-side rows each thread processed before populating the fast hash cache.
-	//! TODO for testing this new data structure, using 100k rows since we know the specific testing query
+	//! TODO 200k rows seem to work better than 100k? Understand what's going on 
 	//!  In the future, we might want to at least cover 1 DuckDB row group (2048 * 60 = 122,880 rows)
-	static constexpr idx_t FAST_CACHE_WARMUP_ROWS = 100000;
+	static constexpr idx_t FAST_CACHE_WARMUP_ROWS = 200000;
 
 	//! There is one instance of this per thread at runtime
 	struct ProbeState : SharedState {
