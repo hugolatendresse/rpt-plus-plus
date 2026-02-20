@@ -154,12 +154,6 @@ public:
 	//!  In the future, we might want to at least cover 1 DuckDB row group (2048 * 60 = 122,880 rows)
 	static constexpr idx_t FAST_CACHE_WARMUP_ROWS = 200000;
 
-	struct WarmupEntry {
-		hash_t hash;
-		const_data_ptr_t row_ptr;
-	};
-
-	//! There is one instance of this per thread at runtime
 	struct ProbeState : SharedState {
 		ProbeState();
 
@@ -180,7 +174,15 @@ public:
 		FastCachePhase fast_cache_phase = FastCachePhase::WARMUP;
 		idx_t warmup_rows_probed = 0;
 
-		vector<WarmupEntry> warmup_entries;
+		//! Bitvector marking accessed HT slots during warmup (one bit per slot).
+		//! Provides O(1) dedup so each build-side entry is cached at most once.
+		unsafe_unique_array<uint8_t> warmup_bitvector;
+		//! Deduped (hash, slot) pairs — only entries whose bit was freshly set.
+		struct WarmupHit {
+			hash_t hash;
+			idx_t ht_slot;
+		};
+		vector<WarmupHit> warmup_hits;
 	};
 
 	struct InsertState : SharedState {

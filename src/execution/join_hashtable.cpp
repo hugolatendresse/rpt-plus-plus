@@ -417,6 +417,13 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	if (state.fast_cache_phase == FastCachePhase::WARMUP) {
 		const idx_t input_count = count; // save before GetRowPointersInternal modifies it
 
+		// Lazily allocate the per-thread bitvector on first warmup call.
+		if (!state.warmup_bitvector) {
+			const auto bv_bytes = (capacity + 7) / 8;
+			state.warmup_bitvector = make_unsafe_uniq_array_uninitialized<uint8_t>(bv_bytes);
+			memset(state.warmup_bitvector.get(), 0, bv_bytes);
+		}
+
 		// Save original hashes before GetRowPointersInternal modifies it
 		hash_t saved_hashes[STANDARD_VECTOR_SIZE];
 		if (!has_sel) {
@@ -441,32 +448,39 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			                              pointers_result_v, match_sel, has_sel);
 		}
 
-		// Add all the warm entries to warmup_entries
-		auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
+		// Mark accessed HT slots in the bitvector; record deduped (hash, slot) pairs.
+		// ht_offsets retains the correct slot index for matched rows after GetRowPointersInternal.
+		auto ht_offsets = FlatVector::GetData<idx_t>(state.ht_offsets_v);
 		for (idx_t i = 0; i < count; i++) {
 			// TODO is this loop being vectorized?
 			const auto row_index = match_sel.get_index(i);
 			const auto hash = saved_hashes[row_index];
 			if (hash != 0) {
-				state.warmup_entries.push_back({hash, pointers_result[row_index]});
+				const auto slot = ht_offsets[row_index];
+				const auto byte_idx = slot >> 3;
+				const auto bit = static_cast<uint8_t>(1) << (slot & 7);
+				if (!(state.warmup_bitvector[byte_idx] & bit)) {
+					state.warmup_bitvector[byte_idx] |= bit;
+					state.warmup_hits.push_back({hash, slot});
+				}
 			}
 		}
 
 		// End warmup phase if we have seen enough entries => populate fast cache
 		state.warmup_rows_probed += input_count;
 		if (state.warmup_rows_probed >= FAST_CACHE_WARMUP_ROWS) {
-			for (auto &entry : state.warmup_entries) {
-				// TODO is this getting vectorized?
-				fast_cache->Insert(entry.hash, entry.row_ptr);
+			// Batch-flush all unique entries into the cache.
+			for (auto &hit : state.warmup_hits) {
+				auto row_ptr = entries[hit.ht_slot].GetPointer();
+				fast_cache->Insert(hit.hash, row_ptr);
 			}
-			fprintf(stderr,
-			        "[Warmup→Ready] warmup_rows=%lu, buffered=%lu, cache entries=%lu (cap=%lu), insert_new=%lu, "
-			        "insert_dup=%lu\n",
-			        (unsigned long)state.warmup_rows_probed, (unsigned long)state.warmup_entries.size(),
+			fprintf(stderr, "[Warmup→Ready] warmup_rows=%lu, unique_hits=%lu, cache entries=%lu (cap=%lu), insert_new=%lu, insert_dup=%lu\n",
+			        (unsigned long)state.warmup_rows_probed, (unsigned long)state.warmup_hits.size(),
 			        (unsigned long)fast_cache->CountOccupiedEntries(), (unsigned long)fast_cache->GetCapacity(),
 			        (unsigned long)fast_cache->insert_new.load(), (unsigned long)fast_cache->insert_dup.load());
-			state.warmup_entries.clear();
-			state.warmup_entries.shrink_to_fit();
+			state.warmup_hits.clear();
+			state.warmup_hits.shrink_to_fit();
+			state.warmup_bitvector.reset();
 			state.fast_cache_phase = FastCachePhase::READY;
 		}
 		return;
