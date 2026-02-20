@@ -46,6 +46,7 @@ public:
 	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
 	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations, SelectionVector &cache_miss_sel,
 	                 idx_t &cache_miss_count) const {
+		// TODO
 	}
 
 	//! Looks up based on hash and key.
@@ -56,7 +57,13 @@ public:
 	                   const SelectionVector *row_sel, bool has_row_sel, data_ptr_t *result_ptrs,
 	                   SelectionVector &match_sel, idx_t &match_count, SelectionVector &miss_sel,
 	                   idx_t &miss_count) const {
-	}
+	static constexpr idx_t SLOT_PREFETCH_DIST = 16;
+
+	match_count = 0;
+	miss_count = 0;
+
+	for (idx_t p = 0; p < MinValue<idx_t>)
+					}
 
 private:
 	// We store the hashes but not pointers

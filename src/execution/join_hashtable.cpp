@@ -43,7 +43,10 @@ JoinHashTable::SharedState::SharedState()
 
 JoinHashTable::ProbeState::ProbeState()
     : SharedState(), ht_offsets_v(LogicalType::UBIGINT), hashes_dense_v(LogicalType::HASH),
-      non_empty_sel(STANDARD_VECTOR_SIZE) {
+      non_empty_sel(STANDARD_VECTOR_SIZE), cache_rhs_row_locations(LogicalType::POINTER),
+      cache_result_pointers(LogicalType::POINTER), cache_candidates_sel(STANDARD_VECTOR_SIZE)
+
+{
 }
 
 JoinHashTable::InsertState::InsertState(const JoinHashTable &ht)
@@ -396,8 +399,6 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		}
 		return;
 	}
-
-     
 }
 
 void JoinHashTable::Hash(DataChunk &keys, const SelectionVector &sel, idx_t count, Vector &hashes) {
@@ -831,15 +832,14 @@ void JoinHashTable::InitializeFastCache() {
 
 	// TODO should we skip fast cache for certain key types? VARCHAR/LIST/STRUCT/etc
 
-    fast_cache = make_uniq<FastHashCache>(cache_capacity, row_size, row_copy_offset);
+	fast_cache = make_uniq<FastHashCache>(cache_capacity, row_size, row_copy_offset);
 
-
-	fprintf(stderr, "[InitFastCache] row_size=%lu (tuple_size=%lu, pointer_offset=%lu), entry_stride=%lu, capacity=%lu, total=%.1f MiB\n",
+	fprintf(stderr,
+	        "[InitFastCache] row_size=%lu (tuple_size=%lu, pointer_offset=%lu), entry_stride=%lu, capacity=%lu, "
+	        "total=%.1f MiB\n",
 	        (unsigned long)row_size, (unsigned long)tuple_size, (unsigned long)pointer_offset,
-	        (unsigned long)((sizeof(hash_t) + row_size + 7) & ~idx_t(7)),
-	        (unsigned long)cache_capacity,
+	        (unsigned long)((sizeof(hash_t) + row_size + 7) & ~idx_t(7)), (unsigned long)cache_capacity,
 	        (double)(cache_capacity * ((sizeof(hash_t) + row_size + 7) & ~idx_t(7))) / (1024.0 * 1024.0));
-
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,
