@@ -1,14 +1,7 @@
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// duckdb/execution/fast_hash_cache.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
 #pragma once
 
 #include "duckdb/common/constants.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/types/selection_vector.hpp"
 
@@ -16,46 +9,46 @@
 
 namespace duckdb {
 
-//! FastHashCache is a compact open-addressing hash table that caches recently
+//! FastHashCache is a hash table that caches recently
 //! matched probe entries to accelerate repeated hash join lookups.
 //!
-//! Each entry stores: [hash (8B)] [full_row (tuple_size B)]
+//! Each entry stores: [hash (8 bytes)] [full_row from data_selection]
 //! The full_row is a copy of the entire data_collection row, so cache hits
-//! completely bypass data_collection access for both key matching AND payload
-//! gathering (GatherResult / ScanStructure::Next).
+//! completely bypass data_collection access for both key and payload
 //!
-//! Thread safety during warmup uses CAS on the hash field to claim slots.
-//! After warmup the cache is read-only.
+//! Thread safety is simply based on compare-and-swap (check if entry is empty)
 class FastHashCache {
 public:
 	//! Memory budget for the cache (sized for L3)
 	static constexpr idx_t DEFAULT_L3_BUDGET = 16ULL * 1024 * 1024;
 
-	//! Minimum hash-table capacity before the cache is worth creating
+	//! Only create the fast hash cache if the global hash table has at least that capacity
 	static constexpr idx_t ACTIVATION_THRESHOLD = 10ULL * 1024 * 1024 / sizeof(uint64_t);
 
-	//! @param capacity_p        Number of slots (must be power of 2).
-	//! @param row_size_p         Size of the full data_collection row to store per entry.
-	//! @param row_copy_offset_p  Offset into the source row from which to start copying
-	//!                           (normally 0 to copy the entire row).
+	//! capacity_p is the number of slots to create
+	//! row_size_p is the number of bytes in each row of data_collection.
+	//!            This is smaller than the entry size of each row of our
+	//!            fast cache since the latter also includes a hash
+	//! row_copy_offset_p how many bytes to skip over in each data_collection row before starting copying into the fast
+	//! cache
 	FastHashCache(idx_t capacity_p, idx_t row_size_p, idx_t row_copy_offset_p = 0)
-	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p),
-	      row_copy_offset(row_copy_offset_p), entry_stride(ComputeEntryStride(row_size_p)) {
-		D_ASSERT(IsPowerOfTwo(capacity));
+	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), row_copy_offset(row_copy_offset_p),
+	      entry_stride(ComputeEntryStride(row_size_p)) {
+		D_ASSERT(IsPowerOfTwo(capacity)); // Needed for bitmask logic
 		auto total_bytes = capacity * entry_stride;
+		// TODO should we use BPM? Or Arena?
 		data = make_unsafe_uniq_array_uninitialized<data_t>(total_bytes);
 		memset(data.get(), 0, total_bytes);
 	}
 
-	// -----------------------------------------------------------------------
-	// ProbeByHash: hash-only lookup (general multi-column path)
-	// -----------------------------------------------------------------------
-	//! For each probe hash, find the cache entry whose stored hash matches.
+	//! TODO Find the cache entry whose stored hash matches.
+	//! TODO Only compares hashes! Can have false positives!
 	//! Returns pointers to the cached row data (usable by RowMatcher and GatherResult).
+	//! On miss, doesn't go to data_collection, but records the row in cache_miss_sel (and cache_miss_count)
 	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, bool has_row_sel,
 	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
-	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations,
-	                 SelectionVector &cache_miss_sel, idx_t &cache_miss_count) const {
+	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations, SelectionVector &cache_miss_sel,
+	                 idx_t &cache_miss_count) const {
 
 		static constexpr idx_t SLOT_PREFETCH_DIST = 16;
 
@@ -98,22 +91,21 @@ public:
 		}
 	}
 
-	// -----------------------------------------------------------------------
-	// ProbeAndMatch: single-pass hash+key lookup (single fixed-size key path)
-	// -----------------------------------------------------------------------
-	//! Combines hash lookup and inline key comparison in one pass.
+    //! Looks up based on hash and key.
+	//! Returns true matches only (no false positives like ProbeByHash).
 	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	template <class T>
 	void ProbeAndMatch(const hash_t *hashes_dense, const T *probe_keys, idx_t key_offset, idx_t count,
 	                   const SelectionVector *row_sel, bool has_row_sel, data_ptr_t *result_ptrs,
 	                   SelectionVector &match_sel, idx_t &match_count, SelectionVector &miss_sel,
 	                   idx_t &miss_count) const {
-
 		static constexpr idx_t SLOT_PREFETCH_DIST = 16;
 
 		match_count = 0;
 		miss_count = 0;
 
+		// Constantly prefetch 16 probes ahead
+		// TODO measure if that actually helps
 		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
 			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
 		}
@@ -145,7 +137,7 @@ public:
 						break;
 					}
 				}
-				slot = (slot + 1) & bitmask;
+				slot = (slot + 1) & bitmask; // linear probe if didn't find
 			}
 			if (!found) {
 				miss_sel.set_index(miss_count++, row_index);
@@ -153,42 +145,41 @@ public:
 		}
 	}
 
-	// -----------------------------------------------------------------------
-	// Insert (thread-safe via CAS on hash field)
-	// -----------------------------------------------------------------------
-	std::atomic<idx_t> insert_new{0};
-	std::atomic<idx_t> insert_dup{0};
+	//! Counts how many times an Insert calls actually inserts a new cache entry
+	std::atomic<idx_t> insert_new {0};
 
-	//! Insert an entry. Copies row_size bytes from row_data_ptr + row_copy_offset.
-	//! Thread-safe: uses CAS to claim empty slots. Same-hash duplicates are no-ops.
+	//! Counts how many times Insert does NOT insert an entry because its hash is already in the table
+	std::atomic<idx_t> insert_dup {0};
+
+	//! Inserts an entry, including the row
 	void Insert(hash_t hash, const_data_ptr_t row_data_ptr) {
 		auto slot = hash & bitmask;
 		while (true) {
 			auto entry_ptr = GetEntryPtr(slot);
 			auto hash_ptr = reinterpret_cast<std::atomic<hash_t> *>(entry_ptr);
 
-			hash_t expected = 0;
+			hash_t expected = 0; // We only insert if the current hash is null
+			// TODO double check the choice of CAS function and third argument below
 			if (hash_ptr->compare_exchange_strong(expected, hash, std::memory_order_acq_rel)) {
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
 				insert_new.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
 			if (expected == hash) {
+				// Don't try linear probing if the hashes perfect match. TODO could try linear probing here too
 				insert_dup.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
-			slot = (slot + 1) & bitmask;
+
+			slot = (slot + 1) & bitmask; // linear probe is the hashes don't fully match
 		}
 	}
 
-	// -----------------------------------------------------------------------
-	// Accessors
-	// -----------------------------------------------------------------------
 	idx_t GetCapacity() const {
 		return capacity;
 	}
 
-	idx_t CountEntries() const {
+	idx_t CountOccupiedEntries() const {
 		idx_t count = 0;
 		for (idx_t s = 0; s < capacity; s++) {
 			if (LoadHash(GetEntryPtr(s)) != 0) {
@@ -217,23 +208,29 @@ public:
 	}
 
 private:
-	static constexpr idx_t HEADER_SIZE = sizeof(hash_t); // 8 bytes (hash only, no stored pointer)
+	// We store the hashes but not pointers
+	// Hashes allow faster linear probing
+	// Pointers are not needed since are copying the whole payload (TODO for now?)
+	static constexpr idx_t HEADER_SIZE = sizeof(hash_t);
 
 	static idx_t ComputeEntryStride(idx_t row_size) {
 		return (HEADER_SIZE + row_size + 7) & ~idx_t(7);
 	}
 
+	// Get a pointer to the `slot`th entry in the fast cache
 	inline data_ptr_t GetEntryPtr(idx_t slot) const {
 		return data.get() + slot * entry_stride;
 	}
 
+	// Get the hash stored in an entry
 	static inline hash_t LoadHash(const data_ptr_t entry_ptr) {
 		hash_t h;
-		memcpy(&h, entry_ptr, sizeof(hash_t));
+		memcpy(&h, entry_ptr, sizeof(hash_t)); // TODO can probably do this without memcpy... just derefence the value?
+		                                       // or mem-compare? or something?
 		return h;
 	}
 
-	//! Pointer to the cached row data within an entry (starts right after hash).
+	//! Pointer to the cached row data within an entry (the first byte after the hash)
 	static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
 		return entry_ptr + HEADER_SIZE;
 	}

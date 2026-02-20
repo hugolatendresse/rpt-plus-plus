@@ -149,8 +149,9 @@ public:
 
 	enum class FastCachePhase : uint8_t { WARMUP, READY };
 
-	//! Number of probe-side rows each thread processes before switching to cache.
-	//! Must be >= the row group size (122,880) to ensure full coverage of unique keys.
+	//! Number of probe-side rows each thread processed before populating the fast hash cache.
+	//! TODO 200k rows seem to work better than 100k? Understand what's going on
+	//!  In the future, we might want to at least cover 1 DuckDB row group (2048 * 60 = 122,880 rows)
 	static constexpr idx_t FAST_CACHE_WARMUP_ROWS = 200000;
 
 	struct ProbeState : SharedState {
@@ -169,7 +170,7 @@ public:
 		SelectionVector cache_candidates_sel;
 		SelectionVector cache_miss_sel;
 
-		//! Fast cache warmup state (per-thread)
+		// Fast cache warmup state (per thread)
 		FastCachePhase fast_cache_phase = FastCachePhase::WARMUP;
 		idx_t warmup_rows_probed = 0;
 
@@ -216,8 +217,8 @@ public:
 	//! Finalize must be called before any call to Probe, and after Finalize is called Build should no longer be
 	//! ever called.
 	void Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool parallel);
-	//! Create the shared fast hash cache if the table is large enough.
-	//! Must be called after all Finalize tasks have completed.
+	//! Create the (shared) fast hash cache if the table is large enough.
+	//! Must be called after the Finalize tasks that create the global HT
 	void InitializeFastCache();
 	//! Probe the HT with the given input chunk, resulting in the given result
 	void Probe(ScanStructure &scan_structure, DataChunk &keys, TupleDataChunkState &key_state, ProbeState &probe_state,
@@ -357,13 +358,15 @@ private:
 	//! An empty tuple that's a "dead end", can be used to stop chains early
 	unsafe_unique_array<data_t> dead_end;
 
-	//! Shared fast hash cache for accelerating repeated probe lookups.
+
+    //! Shared fast hash cache for accelerating repeated probe lookups.
 	//! Created during Finalize when the hash table is large enough.
 	//! During warmup, entries are inserted via idempotent Insert() calls.
 	//! After warmup, the cache is read-only (no more writes).
 	unique_ptr<FastHashCache> fast_cache;
-	//! Key offset within the cache mini-row (0 for compact single-column layout,
-	//! validity_size for general layout with validity bytes).
+
+	//! The byte offset of the join key in each cached row
+	//! Before that key, there is the validity byte coming from data_collection
 	idx_t fast_cache_key_offset = 0;
 
 	//! Copying not allowed
