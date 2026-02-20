@@ -251,7 +251,9 @@ public:
 	atomic<uint64_t> external_probe_time_ns {0};
 	//! Total time spent in PhysicalHashJoin::ExecuteInternal scan_structure.Next
 	atomic<uint64_t> execute_scan_next_time_ns {0};
-	//! Total time spent in fast hash cache probe + match // TODO are we including misses?
+	//! This is the time spend probing the fast cache
+	//! Does NOT include the warmup/population of fast cache, NOR fast cache misses
+	//! It is a subset of execute_probe_time
 	atomic<uint64_t> fast_cache_time_ns {0};
 	//! Total time spent in JoinHashTable::ProbeForPointers
 	atomic<uint64_t> probe_for_pointers_time_ns {0};
