@@ -146,13 +146,15 @@ public:
 		SelectionVector keys_to_compare_sel;
 		SelectionVector keys_no_match_sel;
 	};
+	
+	enum class FastCachePhase : uint8_t {WARMUP, READY};
 
-	enum class FastCachePhase : uint8_t { WARMUP, READY };
+	//! Number of probe-side rows each thread processed before populating the fast hash cache.
+	//! TODO for testing this new data structure, using 100k rows since we know the specific testing query
+	//!  In the future, we might want to at least cover 1 DuckDB row group (2048 * 60 = 122,880 rows)
+	static constexpr idx_t FAST_CACHE_WARMUP_ROWS = 100000;
 
-	//! Number of probe-side rows each thread processes before switching to cache.
-	//! Must be >= the row group size (122,880) to ensure full coverage of unique keys.
-	static constexpr idx_t FAST_CACHE_WARMUP_ROWS = 200000;
-
+	//! There is one instance of this per thread at runtime
 	struct ProbeState : SharedState {
 		ProbeState();
 
@@ -162,16 +164,17 @@ public:
 		uint64_t *probe_for_pointers_time_ns = nullptr;
 		uint64_t *match_time_ns = nullptr;
 		uint64_t *fast_cache_time_ns = nullptr;
-
+		
 		//! Per-thread vectors for fast cache probing
 		Vector cache_rhs_row_locations;
 		Vector cache_result_pointers;
 		SelectionVector cache_candidates_sel;
 		SelectionVector cache_miss_sel;
 
-		//! Fast cache warmup state (per-thread)
+		// Fast cache warmup state (per thread)
 		FastCachePhase fast_cache_phase = FastCachePhase::WARMUP;
 		idx_t warmup_rows_probed = 0;
+
 	};
 
 	struct InsertState : SharedState {
@@ -206,8 +209,8 @@ public:
 	//! Finalize must be called before any call to Probe, and after Finalize is called Build should no longer be
 	//! ever called.
 	void Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool parallel);
-	//! Create the shared fast hash cache if the table is large enough.
-	//! Must be called after all Finalize tasks have completed.
+	//! Create the (shared) fast hash cache if the table is large enough.
+	//! Must be called after the Finalize tasks that create the global HT
 	void InitializeFastCache();
 	//! Probe the HT with the given input chunk, resulting in the given result
 	void Probe(ScanStructure &scan_structure, DataChunk &keys, TupleDataChunkState &key_state, ProbeState &probe_state,
@@ -347,15 +350,17 @@ private:
 	//! An empty tuple that's a "dead end", can be used to stop chains early
 	unsafe_unique_array<data_t> dead_end;
 
-	//! Shared fast hash cache for accelerating repeated probe lookups.
+
+    //! Shared fast hash cache for accelerating repeated probe lookups.
 	//! Created during Finalize when the hash table is large enough.
 	//! During warmup, entries are inserted via idempotent Insert() calls.
 	//! After warmup, the cache is read-only (no more writes).
 	unique_ptr<FastHashCache> fast_cache;
-	//! Key offset within the cache mini-row (0 for compact single-column layout,
-	//! validity_size for general layout with validity bytes).
+	
+	//! The byte offset of the join key in each cached row
+	//! Before that key, there is the validity byte coming from data_collection
 	idx_t fast_cache_key_offset = 0;
-
+	
 	//! Copying not allowed
 	JoinHashTable(const JoinHashTable &) = delete;
 

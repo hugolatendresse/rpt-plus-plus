@@ -651,6 +651,8 @@ public:
 		SetTasks(std::move(finalize_tasks));
 	}
 
+	// This is called by HashJoinFinalizeTask::ExecuteTask at the end
+	// of the build phase (after populating the global hash table).
 	void FinishEvent() override {
 		auto &ht = *sink.hash_table;
 		PrintJoinHashTableFinalizeStats(ht);
