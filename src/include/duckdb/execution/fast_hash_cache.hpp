@@ -18,8 +18,8 @@ namespace duckdb {
 //! Thread safety is simply based on compare-and-swap (check if entry is empty)
 class FastHashCache {
 public:
-  //! Memory budget for the cache (sized for L3)
-  static constexpr idx_t DEFAULT_L3_BUDGET = 16ULL * 1024 * 1024;
+	//! Memory budget for the cache (sized for L3)
+	static constexpr idx_t DEFAULT_L3_BUDGET = 16ULL * 1024 * 1024;
 
 	//! Only create the fast hash cache if the global hash table has at least that capacity
 	static constexpr idx_t ACTIVATION_THRESHOLD = 10ULL * 1024 * 1024 / sizeof(uint64_t);
@@ -38,7 +38,25 @@ public:
 		memset(data.get(), 0, total_bytes);
 	}
 
-  
+	//! Find the cache entry whose stored hash matches.
+	//! Only compared hashes! Can have false positives!
+	//! Returns pointers to the cached row data (usable by RowMatcher and GatherResult).
+	//! On miss, doesn't go to data_collection but records row in cache_miss_sel (and cache_miss_count)
+	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, bool has_row_sel,
+	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
+	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations, SelectionVector &cache_miss_sel,
+	                 idx_t &cache_miss_count) const {
+	}
+
+	//! Looks up based on hash and key.
+	//! Returns true matches only (no false positives like ProbeByHash).
+	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
+	template <class T>
+	void ProbeAndMatch(const hash_t *hashes_dense, const T *probe_keys, idx_t key_offset, idx_t count,
+	                   const SelectionVector *row_sel, bool has_row_sel, data_ptr_t *result_ptrs,
+	                   SelectionVector &match_sel, idx_t &match_count, SelectionVector &miss_sel,
+	                   idx_t &miss_count) const {
+	}
 
 private:
 	// We store the hashes but not pointers
@@ -51,25 +69,25 @@ private:
 	}
 
 	inline data_ptr_t GetEntryPtr(idx_t slot) const {
-    return data.get() + slot * entry_stride;
-  }
+		return data.get() + slot * entry_stride;
+	}
 
-  static inline hash_t LoadHash(const data_ptr_t entry_ptr) {
-    hash_t h;
-    memcpy(&h, entry_ptr, sizeof(hash_t));
-    return h;
-  }
-  
-  //! Pointer to the cached row data within an entry (the first byte after the hash)
-  static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
-    return entry_ptr + HEADER_SIZE;
-  }
+	static inline hash_t LoadHash(const data_ptr_t entry_ptr) {
+		hash_t h;
+		memcpy(&h, entry_ptr, sizeof(hash_t));
+		return h;
+	}
 
-  idx_t capacity;
+	//! Pointer to the cached row data within an entry (the first byte after the hash)
+	static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
+		return entry_ptr + HEADER_SIZE;
+	}
+
+	idx_t capacity;
 	idx_t bitmask;
 	idx_t row_size;
 	idx_t entry_stride;
-  unsafe_unique_array<data_t> data;
+	unsafe_unique_array<data_t> data;
 };
 
 } // namespace duckdb
