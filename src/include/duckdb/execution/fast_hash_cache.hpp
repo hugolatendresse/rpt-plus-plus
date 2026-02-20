@@ -41,7 +41,18 @@ public:
 		memset(data.get(), 0, total_bytes);
 	}
 
-	//! Looks up based on hash and key.
+	//! TODO Find the cache entry whose stored hash matches.
+	//! TODO Only compares hashes! Can have false positives!
+	//! Returns pointers to the cached row data (usable by RowMatcher and GatherResult).
+	//! On miss, doesn't go to data_collection, but records the row in cache_miss_sel (and cache_miss_count)
+	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, bool has_row_sel,
+	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
+	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations, SelectionVector &cache_miss_sel,
+	                 idx_t &cache_miss_count) const {
+		throw InternalException("TODO!");
+	}
+
+    //! Looks up based on hash and key.
 	//! Returns true matches only (no false positives like ProbeByHash).
 	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	template <class T>
