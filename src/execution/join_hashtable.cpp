@@ -429,31 +429,28 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			                              pointers_result_v, match_sel, has_sel);
 		}
 
-		// Insert matched entries into the fast cache (idempotent, thread-safe).
+		// Buffer matched entries for batch insertion after warmup completes.
 		// Use saved_hashes (not hashes_v, which was corrupted by linear probing).
 		auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
-		idx_t insert_count = 0;
 		for (idx_t i = 0; i < count; i++) {
 			const auto row_index = match_sel.get_index(i);
 			const auto hash = saved_hashes[row_index];
 			if (hash != 0) {
-				fast_cache->Insert(hash, pointers_result[row_index]);
-				insert_count++;
+				state.warmup_entries.push_back({hash, pointers_result[row_index]});
 			}
-		}
-		static std::atomic<idx_t> total_inserts{0};
-		total_inserts.fetch_add(insert_count, std::memory_order_relaxed);
-		if (state.warmup_rows_probed + input_count >= FAST_CACHE_WARMUP_ROWS && state.warmup_rows_probed < FAST_CACHE_WARMUP_ROWS) {
-			fprintf(stderr, "[Warmup] thread finished: matched=%lu, insert_calls=%lu, total_inserts_so_far=%lu\n",
-			        (unsigned long)count, (unsigned long)insert_count, (unsigned long)total_inserts.load());
 		}
 
 		state.warmup_rows_probed += input_count;
 		if (state.warmup_rows_probed >= FAST_CACHE_WARMUP_ROWS) {
-			fprintf(stderr, "[Warmup→Ready] warmup_rows=%lu, cache entries=%lu (cap=%lu), insert_new=%lu, insert_dup=%lu\n",
-			        (unsigned long)state.warmup_rows_probed, (unsigned long)fast_cache->CountEntries(),
-			        (unsigned long)fast_cache->GetCapacity(),
+			for (auto &entry : state.warmup_entries) {
+				fast_cache->Insert(entry.hash, entry.row_ptr);
+			}
+			fprintf(stderr, "[Warmup→Ready] warmup_rows=%lu, buffered=%lu, cache entries=%lu (cap=%lu), insert_new=%lu, insert_dup=%lu\n",
+			        (unsigned long)state.warmup_rows_probed, (unsigned long)state.warmup_entries.size(),
+			        (unsigned long)fast_cache->CountEntries(), (unsigned long)fast_cache->GetCapacity(),
 			        (unsigned long)fast_cache->insert_new.load(), (unsigned long)fast_cache->insert_dup.load());
+			state.warmup_entries.clear();
+			state.warmup_entries.shrink_to_fit();
 			state.fast_cache_phase = FastCachePhase::READY;
 		}
 		return;
