@@ -17,6 +17,7 @@
 #include "duckdb/common/types/row/tuple_data_layout.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/execution/aggregate_hashtable.hpp"
+#include "duckdb/execution/fast_hash_cache.hpp"
 #include "duckdb/execution/ht_entry.hpp"
 
 namespace duckdb {
@@ -145,7 +146,15 @@ public:
 		SelectionVector keys_to_compare_sel;
 		SelectionVector keys_no_match_sel;
 	};
+	
+	enum class FastCachePhase : uint8_t {WARMUP, READY};
 
+	//! Number of probe-side rows each thread processed before populating the fast hash cache.
+	//! TODO for testing this new data structure, using 100k rows since we know the specific testing query
+	//!  In the future, we might want to at least cover 1 DuckDB row group (2048 * 60 = 122,880 rows)
+	static constexpr idx_t FAST_CACHE_WARMUP_ROWS = 100000;
+
+	//! There is one instance of this per thread at runtime
 	struct ProbeState : SharedState {
 		ProbeState();
 
@@ -154,6 +163,18 @@ public:
 		SelectionVector non_empty_sel;
 		uint64_t *probe_for_pointers_time_ns = nullptr;
 		uint64_t *match_time_ns = nullptr;
+		uint64_t *fast_cache_time_ns = nullptr;
+		
+		//! Per-thread vectors for fast cache probing
+		Vector cache_rhs_row_locations;
+		Vector cache_result_pointers;
+		SelectionVector cache_candidates_sel;
+		SelectionVector cache_miss_sel;
+
+		// Fast cache warmup state (per thread)
+		FastCachePhase fast_cache_phase = FastCachePhase::WARMUP;
+		idx_t warmup_rows_probed = 0;
+
 	};
 
 	struct InsertState : SharedState {
@@ -188,6 +209,9 @@ public:
 	//! Finalize must be called before any call to Probe, and after Finalize is called Build should no longer be
 	//! ever called.
 	void Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool parallel);
+	//! Create the (shared) fast hash cache if the table is large enough.
+	//! Must be called after the Finalize tasks that create the global HT
+	void InitializeFastCache();
 	//! Probe the HT with the given input chunk, resulting in the given result
 	void Probe(ScanStructure &scan_structure, DataChunk &keys, TupleDataChunkState &key_state, ProbeState &probe_state,
 	           optional_ptr<Vector> precomputed_hashes = nullptr);
@@ -327,6 +351,12 @@ private:
 	//! An empty tuple that's a "dead end", can be used to stop chains early
 	unsafe_unique_array<data_t> dead_end;
 
+	unique_ptr<FastHashCache> fast_cache;
+	
+	//! The byte offset of the join key in each cached row
+	//! Before that key, there is the validity byte coming from data_collection
+	idx_t fast_cache_key_offset = 0;
+	
 	//! Copying not allowed
 	JoinHashTable(const JoinHashTable &) = delete;
 

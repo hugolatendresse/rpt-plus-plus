@@ -1,0 +1,41 @@
+#pragma once
+
+#include "duckdb/common/constants.hpp"
+#include "duckdb/common/typedefs.hpp"
+#include "duckdb/common/types/selection_vector.hpp"
+
+class FastHashCache {
+public:
+//! Only create the fast hash cache if the global hash table has at least that capacity	
+static constexpr idx_t ACTIVATION_THRESHOLD = 10ULL * 1024 * 1024 / sizeof(uint64_t);
+
+//! capacity_p is the number of slots to create
+//! row_size_p is the number of bytes in each row of data_collection.
+//!            This is smaller than the entry size of each row of our
+//!            fast cache since the latter also includes a hash 
+FastHashCache(idx_t capacity_p, idx_t row_size_p) : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), 
+entry_stride(ComputeEntryStride(row_size_p)) {
+    D_ASSERT(IsPowerOfTwo(capacity)); // Needed for bitmask logic
+    auto total_bytes = capacity * entry_stride;
+    // TODO should we use BPM? Or Arena?
+    data = make_unsafe_uniq_array_uninitialized<data_t>(total_bytes);
+    memset(data.get(), 0, total_bytes);
+}
+
+private:
+
+  // We store the hashes but not pointers
+  // Hashes allow faster linear probing
+  // Pointers are not needed since are copying the whole payload (TODO for now?)
+  static constexpr idx_t HEADER_SIZE = sizeof(hash_t);
+  
+  static idx_t ComputeEntryStride(idx_t row_size) {
+    return (HEADER_SIZE + row_size + 7) & ~idx_t(7);
+  }
+
+
+  idx_t capacity;
+  idx_t bitmask;
+  idx_t row_size;
+  idx_t entry_stride;
+}

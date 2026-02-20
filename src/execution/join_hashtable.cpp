@@ -20,8 +20,7 @@ using ProbeSpillLocalState = JoinHashTable::ProbeSpillLocalAppendState;
 
 class ScopedHashJoinTimer {
 public:
-	explicit ScopedHashJoinTimer(uint64_t *target_p)
-	    : target(target_p), start(std::chrono::steady_clock::now()) {
+	explicit ScopedHashJoinTimer(uint64_t *target_p) : target(target_p), start(std::chrono::steady_clock::now()) {
 	}
 
 	~ScopedHashJoinTimer() {
@@ -311,8 +310,8 @@ static void GetRowPointersInternal(DataChunk &keys, TupleDataChunkState &key_sta
 		idx_t keys_to_compare_count = 0;
 		{
 			ScopedHashJoinTimer probe_for_pointers_timer(state.probe_for_pointers_time_ns);
-			keys_to_compare_count = ProbeForPointers<USE_SALTS>(state, ht, entries, hashes_v, pointers_result_v, row_sel,
-			                                                    elements_to_probe_count, has_row_sel);
+			keys_to_compare_count = ProbeForPointers<USE_SALTS>(state, ht, entries, hashes_v, pointers_result_v,
+			                                                    row_sel, elements_to_probe_count, has_row_sel);
 		}
 
 		// if there are no keys to compare, we are done
@@ -387,19 +386,24 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
                                    const SelectionVector *sel, idx_t &count, Vector &pointers_result_v,
                                    SelectionVector &match_sel, const bool has_sel) {
 
-	if (UseSalt()) {
-		GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries, pointers_result_v,
-		                             match_sel, has_sel);
-	} else {
-		GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries, pointers_result_v,
-		                              match_sel, has_sel);
+	if (!fast_cache) {
+		if (UseSalt()) {
+			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
+			                             pointers_result_v, match_sel, has_sel);
+		} else {
+			GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries,
+			                              pointers_result_v, match_sel, has_sel);
+		}
+		return;
 	}
+
+     
 }
 
 void JoinHashTable::Hash(DataChunk &keys, const SelectionVector &sel, idx_t count, Vector &hashes) {
 	if (count == keys.size()) {
 		// no null values are filtered: use regular hash functions // USING THIS since we dont have nulls
-		VectorOperations::Hash(keys.data[0], hashes, keys.size()); 
+		VectorOperations::Hash(keys.data[0], hashes, keys.size());
 		for (idx_t i = 1; i < equality_types.size(); i++) {
 			VectorOperations::CombineHash(hashes, keys.data[i], keys.size());
 		}
@@ -818,6 +822,24 @@ void JoinHashTable::Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool para
 
 		InsertHashes(hashes, count, chunk_state, insert_state, parallel);
 	} while (iterator.Next());
+}
+
+void JoinHashTable::InitializeFastCache() {
+	if (capacity <= FastHashCache::ACTIVATION_THRESHOLD) {
+		return;
+	}
+
+	// TODO should we skip fast cache for certain key types? VARCHAR/LIST/STRUCT/etc
+
+    fast_cache = make_uniq<FastHashCache>(cache_capacity, row_size, row_copy_offset);
+
+
+	fprintf(stderr, "[InitFastCache] row_size=%lu (tuple_size=%lu, pointer_offset=%lu), entry_stride=%lu, capacity=%lu, total=%.1f MiB\n",
+	        (unsigned long)row_size, (unsigned long)tuple_size, (unsigned long)pointer_offset,
+	        (unsigned long)((sizeof(hash_t) + row_size + 7) & ~idx_t(7)),
+	        (unsigned long)cache_capacity,
+	        (double)(cache_capacity * ((sizeof(hash_t) + row_size + 7) & ~idx_t(7))) / (1024.0 * 1024.0));
+
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,
