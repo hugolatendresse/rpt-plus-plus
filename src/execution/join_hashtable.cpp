@@ -6,6 +6,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/radix_partitioning.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/common/vector_size.hpp"
 #include "duckdb/execution/ht_entry.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
@@ -44,9 +45,8 @@ JoinHashTable::SharedState::SharedState()
 JoinHashTable::ProbeState::ProbeState()
     : SharedState(), ht_offsets_v(LogicalType::UBIGINT), hashes_dense_v(LogicalType::HASH),
       non_empty_sel(STANDARD_VECTOR_SIZE), cache_rhs_row_locations(LogicalType::POINTER),
-      cache_result_pointers(LogicalType::POINTER), cache_candidates_sel(STANDARD_VECTOR_SIZE)
-
-{
+      cache_result_pointers(LogicalType::POINTER), cache_candidates_sel(STANDARD_VECTOR_SIZE),
+      cache_miss_sel(STANDARD_VECTOR_SIZE) {
 }
 
 JoinHashTable::InsertState::InsertState(const JoinHashTable &ht)

@@ -1152,7 +1152,7 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 	} // End timer scope to not capture materialization
 
 	{
-		// We don't need the fast cache or HT at the point - we just use pointers in state.scan_structure
+		// We don't need the fast cache or HT at this point - we just use pointers in state.scan_structure
 		ScopedHashJoinTimer scan_next_timer(state.execute_scan_next_time_ns);
 		state.scan_structure.Next(state.lhs_join_keys, state.lhs_output, chunk);
 	}
