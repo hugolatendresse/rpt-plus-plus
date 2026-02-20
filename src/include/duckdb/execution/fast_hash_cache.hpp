@@ -30,7 +30,7 @@ public:
 	//!            fast cache since the latter also includes a hash
 	//! row_copy_offset_p how many bytes to skip over in each data_collection row before starting copying into the fast
 	//! cache
-	FastHashCache(idx_t capacity_p, idx_t row_size_p, idx_t row_copy_offset_p)
+	FastHashCache(idx_t capacity_p, idx_t row_size_p, idx_t row_copy_offset_p = 0)
 	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), row_copy_offset(row_copy_offset_p),
 	      entry_stride(ComputeEntryStride(row_size_p)) {
 		D_ASSERT(IsPowerOfTwo(capacity)); // Needed for bitmask logic
@@ -90,7 +90,7 @@ public:
 				if (stored_hash == probe_hash) {
 					auto row_ptr = GetRowPtr(entry_ptr);
 					auto cache_key = Load<T>(row_ptr + key_offset);
-					if (cache_key = probe_key) {
+					if (cache_key == probe_key) {
 						result_ptrs[row_index] = row_ptr;
 						match_sel.set_index(match_count++, row_index);
 						found = true;
@@ -125,7 +125,7 @@ public:
 				insert_new.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
-			
+
 			if (expected == hash) {
 				// Don't try linear probing if the hashes perfect match. TODO could try linear probing here too
 				insert_dup.fetch_add(1, std::memory_order_relaxed);
@@ -134,6 +134,38 @@ public:
 
 			slot = (slot + 1) & bitmask; // linear probe is the hashes don't fully match
 		}
+	}
+
+	idx_t GetCapacity() const {
+		return capacity;
+	}
+
+	idx_t CountOccupiedEntries() const {
+		idx_t count = 0;
+		for (idx_t s = 0; s < capacity; s++) {
+			if (LoadHash(GetEntryPtr(s)) != 0) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	idx_t GetRowSize() const {
+		return row_size;
+	}
+
+	//! Largest power-of-2 capacity that fits within the budget.
+	static idx_t ComputeCapacity(idx_t row_size, idx_t l3_budget = DEFAULT_L3_BUDGET) {
+		auto stride = ComputeEntryStride(row_size);
+		auto raw = l3_budget / stride;
+		if (raw < 64) {
+			return 64;
+		}
+		auto pot = NextPowerOfTwo(raw);
+		if (pot > raw) {
+			pot >>= 1;
+		}
+		return pot;
 	}
 
 private:
