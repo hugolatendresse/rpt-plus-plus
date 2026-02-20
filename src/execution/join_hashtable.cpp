@@ -481,7 +481,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	idx_t cache_miss_count = 0;
 	auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
 
-	bool used_single_pass = false;
+	bool used_probe_and_match = false;
 	if (equality_types.size() == 1 && equality_types[0].IsIntegral()) {
 		const auto key_offset = fast_cache_key_offset;
 
@@ -494,7 +494,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<int8_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                  pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                  cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::INT16: {
@@ -502,7 +502,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<int16_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                   cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::INT32: {
@@ -510,7 +510,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<int32_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                   cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::INT64: {
@@ -518,7 +518,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<int64_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                   cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT8: {
@@ -526,7 +526,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<uint8_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                   cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT16: {
@@ -534,7 +534,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<uint16_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                    pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                    cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT32: {
@@ -542,7 +542,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<uint32_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                    pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                    cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT64: {
@@ -550,7 +550,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			fast_cache->ProbeAndMatch<uint64_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
 			                                    pointers_result, match_sel, match_count, state.cache_miss_sel,
 			                                    cache_miss_count);
-			used_single_pass = true;
+			used_probe_and_match = true;
 			break;
 		}
 		default:
@@ -558,7 +558,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		}
 	}
 
-	if (!used_single_pass) {
+	if (!used_probe_and_match) {
 		auto cache_result_ptrs = FlatVector::GetData<data_ptr_t>(state.cache_result_pointers);
 		auto cache_rhs_locations = FlatVector::GetData<data_ptr_t>(state.cache_rhs_row_locations);
 		idx_t cache_candidates_count = 0;
