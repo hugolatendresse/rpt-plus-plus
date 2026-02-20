@@ -102,7 +102,6 @@ public:
 			}
 			if (!found) {
 				miss_sel.set_index(miss_count++, row_index);
-				int x = 0;
 			}
 		}
 	}
