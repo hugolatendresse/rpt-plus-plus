@@ -41,7 +41,57 @@ public:
 		memset(data.get(), 0, total_bytes);
 	}
 
-	//! Looks up based on hash and key.
+	//! TODO Find the cache entry whose stored hash matches.
+	//! TODO Only compares hashes! Can have false positives!
+	//! Returns pointers to the cached row data (usable by RowMatcher and GatherResult).
+	//! On miss, doesn't go to data_collection, but records the row in cache_miss_sel (and cache_miss_count)
+	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, bool has_row_sel,
+	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
+	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations, SelectionVector &cache_miss_sel,
+	                 idx_t &cache_miss_count) const {
+
+		static constexpr idx_t SLOT_PREFETCH_DIST = 16;
+
+		cache_candidates_count = 0;
+		cache_miss_count = 0;
+
+		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
+			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
+		}
+
+		for (idx_t i = 0; i < count; i++) {
+			if (i + SLOT_PREFETCH_DIST < count) {
+				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
+			}
+
+			const auto row_index = has_row_sel ? row_sel->get_index(i) : i;
+			const auto probe_hash = hashes_dense[i];
+			auto slot = probe_hash & bitmask;
+
+			bool found = false;
+			while (true) {
+				auto entry_ptr = GetEntryPtr(slot);
+				const auto stored_hash = LoadHash(entry_ptr);
+				if (stored_hash == 0) {
+					break;
+				}
+				if (stored_hash == probe_hash) {
+					auto row_ptr = GetRowPtr(entry_ptr);
+					cache_result_ptrs[row_index] = row_ptr;
+					cache_rhs_locations[row_index] = row_ptr;
+					cache_candidates_sel.set_index(cache_candidates_count++, row_index);
+					found = true;
+					break;
+				}
+				slot = (slot + 1) & bitmask;
+			}
+			if (!found) {
+				cache_miss_sel.set_index(cache_miss_count++, row_index);
+			}
+		}
+	}
+
+    //! Looks up based on hash and key.
 	//! Returns true matches only (no false positives like ProbeByHash).
 	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	template <class T>
@@ -115,7 +165,6 @@ public:
 				insert_new.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
-
 			if (expected == hash) {
 				// Don't try linear probing if the hashes perfect match. TODO could try linear probing here too
 				insert_dup.fetch_add(1, std::memory_order_relaxed);

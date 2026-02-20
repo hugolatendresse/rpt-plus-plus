@@ -244,7 +244,6 @@ public:
 	bool NullValuesAreEqual(idx_t col_idx) const {
 		return null_values_are_equal[col_idx];
 	}
-
 	ClientContext &context;
 	//! BufferManager
 	BufferManager &buffer_manager;
@@ -357,6 +356,11 @@ private:
 	//! An empty tuple that's a "dead end", can be used to stop chains early
 	unsafe_unique_array<data_t> dead_end;
 
+
+    //! Shared fast hash cache for accelerating repeated probe lookups.
+	//! Created during Finalize when the hash table is large enough.
+	//! During warmup, entries are inserted via idempotent Insert() calls.
+	//! After warmup, the cache is read-only (no more writes).
 	unique_ptr<FastHashCache> fast_cache;
 
 	//! The byte offset of the join key in each cached row
