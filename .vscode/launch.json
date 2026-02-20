@@ -12,7 +12,8 @@
           // "${workspaceFolder}/scripts/debug/left_deep_two_way_big_unique.sql"
           // "${workspaceFolder}/scripts/debug/left_deep_two_way_big_non_unique.sql"
           // "${workspaceFolder}/scripts/debug/left_deep_three_way.sql"
-          "${workspaceFolder}/scripts/measure/100_cold_interleaved.sql"
+          // "${workspaceFolder}/scripts/measure/100_cold_interleaved.sql"
+          "${workspaceFolder}/scripts/measure/1_cold_interleaved_DEBUG.sql"
         ],
         // "preLaunchTask": "Build Debug",
         "cwd": "${workspaceFolder}"

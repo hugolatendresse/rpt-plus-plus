@@ -51,7 +51,7 @@ public:
 		// TODO
 	}
 
-	//! Looks up based on hash and key.
+//! Looks up based on hash and key.
 	//! Returns true matches only (no false positives like ProbeByHash).
 	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	template <class T>
@@ -101,6 +101,7 @@ public:
 			}
 			if (!found) {
 				miss_sel.set_index(miss_count++, row_index);
+				int x = 0;
 			}
 		}
 	}

@@ -978,8 +978,9 @@ void JoinHashTable::InitializeFastCache() {
 
 	// TODO should we skip fast cache for certain key types? VARCHAR/LIST/STRUCT/etc
 	// TODO consts below are hacks - generalize!!!
-	const idx_t data_collection_row_size = pointer_offset + sizeof(data_ptr_t); // TODO might be duplicative of logic in FashHashCache
-    const idx_t row_copy_offset = 0; // TODO hack?
+	const idx_t data_collection_row_size =
+	    pointer_offset + sizeof(data_ptr_t); // TODO might be duplicative of logic in FashHashCache
+	const idx_t row_copy_offset = 0;         // TODO hack?
 	const idx_t cache_capacity = FastHashCache::ComputeCapacity(data_collection_row_size);
 	fast_cache = make_uniq<FastHashCache>(cache_capacity, data_collection_row_size, row_copy_offset);
 
@@ -988,7 +989,8 @@ void JoinHashTable::InitializeFastCache() {
 	        "total=%.1f MiB\n",
 	        (unsigned long)data_collection_row_size, (unsigned long)tuple_size, (unsigned long)pointer_offset,
 	        (unsigned long)((sizeof(hash_t) + data_collection_row_size + 7) & ~idx_t(7)), (unsigned long)cache_capacity,
-	        (double)(cache_capacity * ((sizeof(hash_t) + data_collection_row_size + 7) & ~idx_t(7))) / (1024.0 * 1024.0));
+	        (double)(cache_capacity * ((sizeof(hash_t) + data_collection_row_size + 7) & ~idx_t(7))) /
+	            (1024.0 * 1024.0));
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,
