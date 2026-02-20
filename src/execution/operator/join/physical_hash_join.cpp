@@ -34,8 +34,7 @@ namespace duckdb {
 
 class ScopedHashJoinTimer {
 public:
-	explicit ScopedHashJoinTimer(uint64_t &target_p)
-	    : target(target_p), start(std::chrono::steady_clock::now()) {
+	explicit ScopedHashJoinTimer(uint64_t &target_p) : target(target_p), start(std::chrono::steady_clock::now()) {
 	}
 
 	~ScopedHashJoinTimer() {
@@ -49,13 +48,10 @@ private:
 	std::chrono::steady_clock::time_point start;
 };
 
-static InsertionOrderPreservingMap<string> GetHashJoinTimingInfo(const uint64_t build_ns, const uint64_t probe_ns,
-                                                                 const uint64_t execute_probe_ns,
-                                                                 const uint64_t external_probe_ns,
-                                                                 const uint64_t execute_scan_next_ns,
-                                                                 const uint64_t probe_for_pointers_ns,
-                                                                 const uint64_t match_ns,
-                                                                 const uint64_t fast_cache_ns) {
+static InsertionOrderPreservingMap<string>
+GetHashJoinTimingInfo(const uint64_t build_ns, const uint64_t probe_ns, const uint64_t execute_probe_ns,
+                      const uint64_t external_probe_ns, const uint64_t execute_scan_next_ns,
+                      const uint64_t probe_for_pointers_ns, const uint64_t match_ns, const uint64_t fast_cache_ns) {
 	InsertionOrderPreservingMap<string> result;
 	result["Build Time"] = StringUtil::Format("%.3f ms", static_cast<double>(build_ns) / 1000000.0);
 	result["Probe Time"] = StringUtil::Format("%.3f ms", static_cast<double>(probe_ns) / 1000000.0);
@@ -65,8 +61,7 @@ static InsertionOrderPreservingMap<string> GetHashJoinTimingInfo(const uint64_t 
 	    StringUtil::Format("%.3f ms", static_cast<double>(external_probe_ns) / 1000000.0);
 	result["Scan Structure Next Time (ExecuteInternal)"] =
 	    StringUtil::Format("%.3f ms", static_cast<double>(execute_scan_next_ns) / 1000000.0);
-	result["Fast Cache Time"] =
-	    StringUtil::Format("%.3f ms", static_cast<double>(fast_cache_ns) / 1000000.0);
+	result["Fast Cache Time"] = StringUtil::Format("%.3f ms", static_cast<double>(fast_cache_ns) / 1000000.0);
 	result["ProbeForPointers Time"] =
 	    StringUtil::Format("%.3f ms", static_cast<double>(probe_for_pointers_ns) / 1000000.0);
 	result["Match Time"] = StringUtil::Format("%.3f ms", static_cast<double>(match_ns) / 1000000.0);
@@ -256,7 +251,7 @@ public:
 	atomic<uint64_t> external_probe_time_ns {0};
 	//! Total time spent in PhysicalHashJoin::ExecuteInternal scan_structure.Next
 	atomic<uint64_t> execute_scan_next_time_ns {0};
-	//! Total time spent in fast hash cache probe + match
+	//! Total time spent in fast hash cache probe + match // TODO are we including misses?
 	atomic<uint64_t> fast_cache_time_ns {0};
 	//! Total time spent in JoinHashTable::ProbeForPointers
 	atomic<uint64_t> probe_for_pointers_time_ns {0};
@@ -1157,7 +1152,7 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 	} // End timer scope to not capture materialization
 
 	{
-		// We don't need the fast cache at the point - we just use pointers in state.scan_structure
+		// We don't need the fast cache or HT at this point - we just use pointers in state.scan_structure
 		ScopedHashJoinTimer scan_next_timer(state.execute_scan_next_time_ns);
 		state.scan_structure.Next(state.lhs_join_keys, state.lhs_output, chunk);
 	}

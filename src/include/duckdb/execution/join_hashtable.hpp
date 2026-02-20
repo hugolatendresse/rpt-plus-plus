@@ -146,20 +146,20 @@ public:
 		SelectionVector keys_to_compare_sel;
 		SelectionVector keys_no_match_sel;
 	};
-	
-	enum class FastCachePhase : uint8_t {WARMUP, READY};
+
+	enum class FastCachePhase : uint8_t { WARMUP, READY };
 
 	//! Number of probe-side rows each thread processed before populating the fast hash cache.
-	//! TODO 200k rows seem to work better than 100k? Understand what's going on 
+	//! TODO 200k rows seem to work better than 100k? Understand what's going on
 	//!  In the future, we might want to at least cover 1 DuckDB row group (2048 * 60 = 122,880 rows)
 	static constexpr idx_t FAST_CACHE_WARMUP_ROWS = 200000;
 
-	//! There is one instance of this per thread at runtime
 	struct WarmupEntry {
 		hash_t hash;
 		const_data_ptr_t row_ptr;
 	};
 
+	//! There is one instance of this per thread at runtime
 	struct ProbeState : SharedState {
 		ProbeState();
 
@@ -169,7 +169,7 @@ public:
 		uint64_t *probe_for_pointers_time_ns = nullptr;
 		uint64_t *match_time_ns = nullptr;
 		uint64_t *fast_cache_time_ns = nullptr;
-		
+
 		//! Per-thread vectors for fast cache probing
 		Vector cache_rhs_row_locations;
 		Vector cache_result_pointers;
@@ -180,8 +180,6 @@ public:
 		FastCachePhase fast_cache_phase = FastCachePhase::WARMUP;
 		idx_t warmup_rows_probed = 0;
 
-		//! Buffer of (hash, row_ptr) pairs collected during warmup.
-		//! Batch-flushed into the FastHashCache when warmup completes.
 		vector<WarmupEntry> warmup_entries;
 	};
 
@@ -364,11 +362,11 @@ private:
 	//! During warmup, entries are inserted via idempotent Insert() calls.
 	//! After warmup, the cache is read-only (no more writes).
 	unique_ptr<FastHashCache> fast_cache;
-	
+
 	//! The byte offset of the join key in each cached row
 	//! Before that key, there is the validity byte coming from data_collection
 	idx_t fast_cache_key_offset = 0;
-	
+
 	//! Copying not allowed
 	JoinHashTable(const JoinHashTable &) = delete;
 

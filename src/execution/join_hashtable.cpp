@@ -462,7 +462,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			        "[Warmup→Ready] warmup_rows=%lu, buffered=%lu, cache entries=%lu (cap=%lu), insert_new=%lu, "
 			        "insert_dup=%lu\n",
 			        (unsigned long)state.warmup_rows_probed, (unsigned long)state.warmup_entries.size(),
-			        (unsigned long)fast_cache->CountEntries(), (unsigned long)fast_cache->GetCapacity(),
+			        (unsigned long)fast_cache->CountOccupiedEntries(), (unsigned long)fast_cache->GetCapacity(),
 			        (unsigned long)fast_cache->insert_new.load(), (unsigned long)fast_cache->insert_dup.load());
 			state.warmup_entries.clear();
 			state.warmup_entries.shrink_to_fit();
@@ -1080,19 +1080,20 @@ void JoinHashTable::InitializeFastCache() {
 	// at pointer_offset so that AdvancePointers can correctly follow chains.
 	// This means cache hits completely bypass data_collection for key matching,
 	// payload gathering (GatherResult), AND chain following (AdvancePointers).
-	const idx_t row_size = pointer_offset + sizeof(data_ptr_t);
+	const idx_t data_collection_row_size = pointer_offset + sizeof(data_ptr_t);
 	const idx_t row_copy_offset = 0;
 	fast_cache_key_offset = layout_ptr->GetOffsets()[0]; // key after validity bytes
 
-	const idx_t cache_capacity = FastHashCache::ComputeCapacity(row_size);
-	fast_cache = make_uniq<FastHashCache>(cache_capacity, row_size, row_copy_offset);
+	const idx_t cache_capacity = FastHashCache::ComputeCapacity(data_collection_row_size);
+	fast_cache = make_uniq<FastHashCache>(cache_capacity, data_collection_row_size, row_copy_offset);
 
 	fprintf(stderr,
 	        "[InitFastCache] row_size=%lu (tuple_size=%lu, pointer_offset=%lu), entry_stride=%lu, capacity=%lu, "
 	        "total=%.1f MiB\n",
-	        (unsigned long)row_size, (unsigned long)tuple_size, (unsigned long)pointer_offset,
-	        (unsigned long)((sizeof(hash_t) + row_size + 7) & ~idx_t(7)), (unsigned long)cache_capacity,
-	        (double)(cache_capacity * ((sizeof(hash_t) + row_size + 7) & ~idx_t(7))) / (1024.0 * 1024.0));
+	        (unsigned long)data_collection_row_size, (unsigned long)tuple_size, (unsigned long)pointer_offset,
+	        (unsigned long)((sizeof(hash_t) + data_collection_row_size + 7) & ~idx_t(7)), (unsigned long)cache_capacity,
+	        (double)(cache_capacity * ((sizeof(hash_t) + data_collection_row_size + 7) & ~idx_t(7))) /
+	            (1024.0 * 1024.0));
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,

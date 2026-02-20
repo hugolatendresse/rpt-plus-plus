@@ -90,7 +90,7 @@ public:
 		}
 	}
 
-	//! Looks up based on hash and key.
+//! Looks up based on hash and key.
 	//! Returns true matches only (no false positives like ProbeByHash).
 	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	template <class T>
@@ -140,6 +140,7 @@ public:
 			}
 			if (!found) {
 				miss_sel.set_index(miss_count++, row_index);
+				int x = 0;
 			}
 		}
 	}
@@ -174,14 +175,11 @@ public:
 		}
 	}
 
-	// -----------------------------------------------------------------------
-	// Accessors
-	// -----------------------------------------------------------------------
 	idx_t GetCapacity() const {
 		return capacity;
 	}
 
-	idx_t CountEntries() const {
+	idx_t CountOccupiedEntries() const {
 		idx_t count = 0;
 		for (idx_t s = 0; s < capacity; s++) {
 			if (LoadHash(GetEntryPtr(s)) != 0) {

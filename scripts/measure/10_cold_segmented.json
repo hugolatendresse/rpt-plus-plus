@@ -1,12 +1,12 @@
 {
     "rows_returned": 1,
-    "latency": 1.703528459,
+    "latency": 1.054217182,
     "result_set_size": 8,
     "query_name": "SELECT min(b.keyB1) \nFROM a \nJOIN b ON a.keyB1 = b.keyB1;",
     "blocked_thread_time": 0.0,
     "system_peak_buffer_memory": 8918423552,
     "system_peak_temp_dir_size": 0,
-    "cpu_time": 6.5838904199999915,
+    "cpu_time": 4.060262230000009,
     "extra_info": {},
     "cumulative_cardinality": 1204000005,
     "cumulative_rows_scanned": 1616000008,
@@ -14,7 +14,7 @@
         {
             "result_set_size": 8,
             "operator_name": "UNGROUPED_AGGREGATE",
-            "cpu_time": 6.5838904199999915,
+            "cpu_time": 4.060262230000009,
             "extra_info": {
                 "Aggregates": "min(#0)"
             },
@@ -23,12 +23,12 @@
             "operator_cardinality": 1,
             "cumulative_rows_scanned": 1616000008,
             "operator_rows_scanned": 0,
-            "operator_timing": 0.36860380900000206,
+            "operator_timing": 0.23057287699999654,
             "children": [
                 {
                     "result_set_size": 3200000008,
                     "operator_name": "PROJECTION",
-                    "cpu_time": 6.215286610999989,
+                    "cpu_time": 3.829689353000013,
                     "extra_info": {
                         "Projections": "keyB1",
                         "Estimated Cardinality": "4000001"
@@ -38,36 +38,36 @@
                     "operator_cardinality": 400000001,
                     "cumulative_rows_scanned": 1616000008,
                     "operator_rows_scanned": 0,
-                    "operator_timing": 0.052517709999999815,
+                    "operator_timing": 0.033175194999997236,
                     "children": [
                         {
                             "result_set_size": 6400000016,
                             "operator_name": "HASH_JOIN",
-                            "cpu_time": 6.162768900999989,
+                            "cpu_time": 3.7965141580000155,
                             "extra_info": {
                                 "Join Type": "INNER",
                                 "Conditions": "keyB1 = keyB1",
                                 "Estimated Cardinality": "4000001",
-                                "Build Time": "72.047 ms",
-                                "Probe Time": "2813.541 ms",
-                                "Probe Time (ExecuteInternal)": "2813.541 ms",
+                                "Build Time": "46.374 ms",
+                                "Probe Time": "1695.657 ms",
+                                "Probe Time (ExecuteInternal)": "1695.657 ms",
                                 "Probe Time (ExternalProbe)": "0.000 ms",
-                                "Scan Structure Next Time (ExecuteInternal)": "950.144 ms",
-                                "Fast Cache Time": "1534.429 ms",
-                                "ProbeForPointers Time": "2.438 ms",
-                                "Match Time": "7.232 ms"
+                                "Scan Structure Next Time (ExecuteInternal)": "609.164 ms",
+                                "Fast Cache Time": "888.180 ms",
+                                "ProbeForPointers Time": "1.405 ms",
+                                "Match Time": "4.000 ms"
                             },
                             "cumulative_cardinality": 804000003,
                             "operator_type": "HASH_JOIN",
                             "operator_cardinality": 400000001,
                             "cumulative_rows_scanned": 1616000008,
                             "operator_rows_scanned": 0,
-                            "operator_timing": 5.994857591999988,
+                            "operator_timing": 3.6985674170000165,
                             "children": [
                                 {
                                     "result_set_size": 3200000008,
                                     "operator_name": "SEQ_SCAN ",
-                                    "cpu_time": 0.1663812410000006,
+                                    "cpu_time": 0.09682639999999915,
                                     "extra_info": {
                                         "Table": "a",
                                         "Type": "Sequential Scan",
@@ -79,13 +79,13 @@
                                     "operator_cardinality": 400000001,
                                     "cumulative_rows_scanned": 1600000004,
                                     "operator_rows_scanned": 1600000004,
-                                    "operator_timing": 0.1663812410000006,
+                                    "operator_timing": 0.09682639999999915,
                                     "children": []
                                 },
                                 {
                                     "result_set_size": 32000008,
                                     "operator_name": "SEQ_SCAN ",
-                                    "cpu_time": 0.0015300679999999999,
+                                    "cpu_time": 0.0011203410000000008,
                                     "extra_info": {
                                         "Table": "b",
                                         "Type": "Sequential Scan",
@@ -97,7 +97,7 @@
                                     "operator_cardinality": 4000001,
                                     "cumulative_rows_scanned": 16000004,
                                     "operator_rows_scanned": 16000004,
-                                    "operator_timing": 0.0015300679999999999,
+                                    "operator_timing": 0.0011203410000000008,
                                     "children": []
                                 }
                             ]
