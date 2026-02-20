@@ -34,8 +34,7 @@ namespace duckdb {
 
 class ScopedHashJoinTimer {
 public:
-	explicit ScopedHashJoinTimer(uint64_t &target_p)
-	    : target(target_p), start(std::chrono::steady_clock::now()) {
+	explicit ScopedHashJoinTimer(uint64_t &target_p) : target(target_p), start(std::chrono::steady_clock::now()) {
 	}
 
 	~ScopedHashJoinTimer() {
@@ -49,12 +48,10 @@ private:
 	std::chrono::steady_clock::time_point start;
 };
 
-static InsertionOrderPreservingMap<string> GetHashJoinTimingInfo(const uint64_t build_ns, const uint64_t probe_ns,
-                                                                 const uint64_t execute_probe_ns,
-                                                                 const uint64_t external_probe_ns,
-                                                                 const uint64_t execute_scan_next_ns,
-                                                                 const uint64_t probe_for_pointers_ns,
-                                                                 const uint64_t match_ns) {
+static InsertionOrderPreservingMap<string>
+GetHashJoinTimingInfo(const uint64_t build_ns, const uint64_t probe_ns, const uint64_t execute_probe_ns,
+                      const uint64_t external_probe_ns, const uint64_t execute_scan_next_ns,
+                      const uint64_t probe_for_pointers_ns, const uint64_t match_ns, const uint64_t fast_cache_ns) {
 	InsertionOrderPreservingMap<string> result;
 	result["Build Time"] = StringUtil::Format("%.3f ms", static_cast<double>(build_ns) / 1000000.0);
 	result["Probe Time"] = StringUtil::Format("%.3f ms", static_cast<double>(probe_ns) / 1000000.0);
@@ -64,6 +61,7 @@ static InsertionOrderPreservingMap<string> GetHashJoinTimingInfo(const uint64_t 
 	    StringUtil::Format("%.3f ms", static_cast<double>(external_probe_ns) / 1000000.0);
 	result["Scan Structure Next Time (ExecuteInternal)"] =
 	    StringUtil::Format("%.3f ms", static_cast<double>(execute_scan_next_ns) / 1000000.0);
+	result["Fast Cache Time"] = StringUtil::Format("%.3f ms", static_cast<double>(fast_cache_ns) / 1000000.0);
 	result["ProbeForPointers Time"] =
 	    StringUtil::Format("%.3f ms", static_cast<double>(probe_for_pointers_ns) / 1000000.0);
 	result["Match Time"] = StringUtil::Format("%.3f ms", static_cast<double>(match_ns) / 1000000.0);
@@ -253,6 +251,8 @@ public:
 	atomic<uint64_t> external_probe_time_ns {0};
 	//! Total time spent in PhysicalHashJoin::ExecuteInternal scan_structure.Next
 	atomic<uint64_t> execute_scan_next_time_ns {0};
+	//! Total time spent in fast hash cache probe + match // TODO are we including misses?
+	atomic<uint64_t> fast_cache_time_ns {0};
 	//! Total time spent in JoinHashTable::ProbeForPointers
 	atomic<uint64_t> probe_for_pointers_time_ns {0};
 	//! Total time spent in RowMatcher::Match from GetRowPointersInternal
@@ -646,10 +646,13 @@ public:
 		SetTasks(std::move(finalize_tasks));
 	}
 
+	// This is called by HashJoinFinalizeTask::ExecuteTask at the end
+	// of the build phase (after populating the global hash table).
 	void FinishEvent() override {
 		auto &ht = *sink.hash_table;
 		PrintJoinHashTableFinalizeStats(ht);
 		sink.hash_table->GetDataCollection().VerifyEverythingPinned();
+		sink.hash_table->InitializeFastCache();
 		sink.hash_table->finalized = true;
 	}
 
@@ -682,11 +685,13 @@ void HashJoinGlobalSinkState::EmitProbeTiming(ExecutionContext &context) const {
 	auto execute_probe_ns = execute_probe_time_ns.load(std::memory_order_relaxed);
 	auto external_probe_ns = external_probe_time_ns.load(std::memory_order_relaxed);
 	auto execute_scan_next_ns = execute_scan_next_time_ns.load(std::memory_order_relaxed);
+	auto fast_cache_ns = fast_cache_time_ns.load(std::memory_order_relaxed);
 	auto probe_for_pointers_ns = probe_for_pointers_time_ns.load(std::memory_order_relaxed);
 	auto match_ns = match_time_ns.load(std::memory_order_relaxed);
 	auto probe_ns = execute_probe_ns + external_probe_ns;
 	context.thread.profiler.AddExtraInfo(GetHashJoinTimingInfo(build_ns, probe_ns, execute_probe_ns, external_probe_ns,
-	                                                           execute_scan_next_ns, probe_for_pointers_ns, match_ns));
+	                                                           execute_scan_next_ns, probe_for_pointers_ns, match_ns,
+	                                                           fast_cache_ns));
 }
 
 class HashJoinRepartitionTask : public ExecutorTask {
@@ -1017,6 +1022,7 @@ public:
 	    : sink(sink_p), probe_executor(context), scan_structure(*sink.hash_table, join_key_state) {
 		probe_state.probe_for_pointers_time_ns = &probe_for_pointers_time_ns;
 		probe_state.match_time_ns = &match_time_ns;
+		probe_state.fast_cache_time_ns = &fast_cache_time_ns;
 	}
 
 	~HashJoinOperatorState() override {
@@ -1042,6 +1048,7 @@ public:
 	DataChunk spill_chunk;
 	uint64_t execute_probe_time_ns = 0;
 	uint64_t execute_scan_next_time_ns = 0;
+	uint64_t fast_cache_time_ns = 0;
 	uint64_t probe_for_pointers_time_ns = 0;
 	uint64_t match_time_ns = 0;
 
@@ -1052,6 +1059,7 @@ public:
 		}
 		sink.execute_probe_time_ns.fetch_add(execute_probe_time_ns, std::memory_order_relaxed);
 		sink.execute_scan_next_time_ns.fetch_add(execute_scan_next_time_ns, std::memory_order_relaxed);
+		sink.fast_cache_time_ns.fetch_add(fast_cache_time_ns, std::memory_order_relaxed);
 		sink.probe_for_pointers_time_ns.fetch_add(probe_for_pointers_time_ns, std::memory_order_relaxed);
 		sink.match_time_ns.fetch_add(match_time_ns, std::memory_order_relaxed);
 		timings_flushed = true;
@@ -1144,6 +1152,7 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 	} // End timer scope to not capture materialization
 
 	{
+		// We don't need the fast cache or HT at this point - we just use pointers in state.scan_structure
 		ScopedHashJoinTimer scan_next_timer(state.execute_scan_next_time_ns);
 		state.scan_structure.Next(state.lhs_join_keys, state.lhs_output, chunk);
 	}
@@ -1270,6 +1279,7 @@ public:
 	idx_t full_outer_chunk_idx_to = DConstants::INVALID_INDEX;
 	unique_ptr<JoinHTScanState> full_outer_scan_state;
 	uint64_t external_probe_time_ns = 0;
+	uint64_t fast_cache_time_ns = 0;
 	uint64_t probe_for_pointers_time_ns = 0;
 	uint64_t match_time_ns = 0;
 
@@ -1468,6 +1478,7 @@ HashJoinLocalSourceState::HashJoinLocalSourceState(const PhysicalHashJoin &op, H
 	TupleDataCollection::InitializeChunkState(join_key_state, op.condition_types);
 	probe_state.probe_for_pointers_time_ns = &probe_for_pointers_time_ns;
 	probe_state.match_time_ns = &match_time_ns;
+	probe_state.fast_cache_time_ns = &fast_cache_time_ns;
 
 	for (auto &cond : op.conditions) {
 		lhs_join_key_executor.AddExpression(*cond.left);
@@ -1483,6 +1494,7 @@ void HashJoinLocalSourceState::FlushLocalTimings() {
 		return;
 	}
 	sink.external_probe_time_ns.fetch_add(external_probe_time_ns, std::memory_order_relaxed);
+	sink.fast_cache_time_ns.fetch_add(fast_cache_time_ns, std::memory_order_relaxed);
 	sink.probe_for_pointers_time_ns.fetch_add(probe_for_pointers_time_ns, std::memory_order_relaxed);
 	sink.match_time_ns.fetch_add(match_time_ns, std::memory_order_relaxed);
 	timings_flushed = true;
