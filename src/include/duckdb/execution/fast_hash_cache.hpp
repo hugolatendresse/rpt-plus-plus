@@ -40,7 +40,7 @@ public:
 		memset(data.get(), 0, total_bytes);
 	}
 
-	//! Find the cache entry whose stored hash matches.
+	//! Find the cache entry whose stored hash matches. 
 	//! Only compared hashes! Can have false positives!
 	//! Returns pointers to the cached row data (usable by RowMatcher and GatherResult).
 	//! On miss, doesn't go to data_collection but records row in cache_miss_sel (and cache_miss_count)

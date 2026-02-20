@@ -155,6 +155,11 @@ public:
 	static constexpr idx_t FAST_CACHE_WARMUP_ROWS = 200000;
 
 	//! There is one instance of this per thread at runtime
+	struct WarmupEntry {
+		hash_t hash;
+		const_data_ptr_t row_ptr;
+	};
+
 	struct ProbeState : SharedState {
 		ProbeState();
 
@@ -175,6 +180,9 @@ public:
 		FastCachePhase fast_cache_phase = FastCachePhase::WARMUP;
 		idx_t warmup_rows_probed = 0;
 
+		//! Buffer of (hash, row_ptr) pairs collected during warmup.
+		//! Batch-flushed into the FastHashCache when warmup completes.
+		vector<WarmupEntry> warmup_entries;
 	};
 
 	struct InsertState : SharedState {
