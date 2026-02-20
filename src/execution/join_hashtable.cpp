@@ -448,7 +448,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			        "[Warmup→Ready] warmup_rows=%lu, buffered=%lu, cache entries=%lu (cap=%lu), insert_new=%lu, "
 			        "insert_dup=%lu\n",
 			        (unsigned long)state.warmup_rows_probed, (unsigned long)state.warmup_entries.size(),
-			        (unsigned long)fast_cache->CountEntries(), (unsigned long)fast_cache->GetCapacity(),
+			        (unsigned long)fast_cache->CountOccupiedEntries(), (unsigned long)fast_cache->GetCapacity(),
 			        (unsigned long)fast_cache->insert_new.load(), (unsigned long)fast_cache->insert_dup.load());
 			state.warmup_entries.clear();
 			state.warmup_entries.shrink_to_fit();

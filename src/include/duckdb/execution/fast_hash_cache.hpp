@@ -185,7 +185,7 @@ public:
 		return capacity;
 	}
 
-	idx_t CountEntries() const {
+	idx_t CountOccupiedEntries() const {
 		idx_t count = 0;
 		for (idx_t s = 0; s < capacity; s++) {
 			if (LoadHash(GetEntryPtr(s)) != 0) {
