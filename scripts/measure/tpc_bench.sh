@@ -67,7 +67,7 @@ USAGE
 }
 
 # First we build
-GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' make release -j 7
+GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' make release -j $(nproc)
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
