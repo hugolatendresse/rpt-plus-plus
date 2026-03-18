@@ -240,7 +240,7 @@ public:
 			return 64;
 		}
 		auto pot = NextPowerOfTwo(raw);
-		while (pot > l3_budget) {
+		while (pot > raw) {
 			pot >>= 1;
 		}
 		return pot;
