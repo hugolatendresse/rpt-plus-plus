@@ -15,6 +15,7 @@
 #define DEBUG_LOG(...)                                                                                           \
 	do {                                                                                                               \
 		std::fprintf(stderr, __VA_ARGS__);                                                                              \
+		std::fflush(stderr);                                                                                             \
 	} while (0)
 #else
 #define DEBUG_LOG(...)                                                                                           \

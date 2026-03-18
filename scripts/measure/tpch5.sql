@@ -3,9 +3,17 @@
 
 -- https://duckdb.org/docs/stable/dev/profiling
 PRAGMA enable_profiling = 'json';
-PRAGMA profiling_output = 'tpch5.json';
+PRAGMA profiling_output = 'results.json';
 PRAGMA profiling_coverage = 'SELECT';
 -- PRAGMA profiling_mode = 'detailed';
+
+SET threads = 1;
+SET pin_threads = 'on';
+SET thc_l3_budget = 4194304;
+SET thc_collect_phase_rows = 100000;
+SET thc_collect_budget_fraction = 0.02;
+SET thc_miss_threshold = 0.05;
+SET thc_activation_threshold = 500000;
 
 SET disable_tiered_hash_cache = 'false';
 

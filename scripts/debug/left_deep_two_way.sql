@@ -2,6 +2,7 @@
 
 SET threads = 1; 
 
+SET pin_threads = 'on';
 
 -- Clean up
 DROP TABLE IF EXISTS a; 
