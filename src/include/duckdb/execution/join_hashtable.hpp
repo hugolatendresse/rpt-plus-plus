@@ -182,7 +182,8 @@ public:
 	//! Set to 95% — the THC can still save net time even at 90%+ miss rates
 	//! because each hit completely avoids data_collection access (expensive
 	//! LLC misses). Only abandon when nearly every probe misses.
-	static constexpr double THC_ABANDON_MISS_THRESHOLD = 0.95;
+	//! 1.00 means 100% (only abandon if all misses)
+	static constexpr double THC_ABANDON_MISS_THRESHOLD = 1.00;
 	//! Set to 1 — abandon at the very first checkpoint where miss rate exceeds
 	//! the threshold. This minimises the overhead of the initial COLLECT +
 	//! READ_ONLY phases for joins where the THC is clearly too small.
@@ -274,6 +275,10 @@ public:
 		//! Lifetime count of all probe rows processed by this thread.
 		//! Used as the denominator for the collect phase budget fraction check.
 		idx_t total_probe_rows = 0;
+
+		//! Lifetime count of genuinely new entries this thread inserted into the THC
+		//! (summed across all collect phases).
+		idx_t total_new_entries = 0;
 
 		//! --- Scratch space for collecting THC-miss matches during collect phase (cycle > 0) ---
 		//! After ProbeTHCAndFallback runs, these record which miss-fallback rows actually

@@ -834,16 +834,21 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			// Insert all collected entries into the shared THC.
 			// The THC's CAS-based Insert is thread-safe and silently
 			// drops entries if the table is full or has hash collisions.
+			idx_t new_entries_this_phase = 0;
 			for (auto &entry : state.collected_entries) {
-				tiered_hash_cache->Insert(entry.hash, entry.row_ptr);
+				if (tiered_hash_cache->Insert(entry.hash, entry.row_ptr)) {
+					new_entries_this_phase++;
+				}
 			}
+			state.total_new_entries += new_entries_this_phase;
 
 			DEBUG_LOG("[Collect->Read-Only] cycle=%lu, probe_rows_in_phase=%lu, buffered=%lu, "
-			               "cache_fill=%lu/%lu, insert_new=%lu, insert_dup=%lu, "
+			               "new_entries_this_phase=%lu, cache_fill=%lu/%lu, insert_new=%lu, insert_dup=%lu, "
 			               "total_collect_phase_rows=%lu, total_probe=%lu (%.2f%%)\n",
 			               (unsigned long)state.cycle_count,
 			               (unsigned long)state.probe_rows_in_phase,
 			               (unsigned long)state.collected_entries.size(),
+			               (unsigned long)new_entries_this_phase,
 			               (unsigned long)tiered_hash_cache->insert_new.load(),
 			               (unsigned long)tiered_hash_cache->GetCapacity(),
 			               (unsigned long)tiered_hash_cache->insert_new.load(),

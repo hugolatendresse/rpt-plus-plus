@@ -172,14 +172,17 @@ public:
 	//! Counts how many times Insert does NOT insert an entry because its hash is already in the table
 	std::atomic<idx_t> insert_dup {0};
 
-	//! Inserts an entry, including the row
-	void Insert(hash_t hash, const_data_ptr_t row_data_ptr) {
+	//! Inserts an entry, including the row.
+	//! Returns true if a genuinely new entry was inserted, false otherwise
+	//! (duplicate hash, table full, or probe distance exceeded).
+	//! TODO is there a way to vectorize this?
+	bool Insert(hash_t hash, const_data_ptr_t row_data_ptr) {
 		// Refuse to insert once we've reached the maximum load factor.
 		// Without this guard the unbounded linear-probing loop below can
 		// spin forever when the table is (nearly) full.
 		if (insert_new.load(std::memory_order_relaxed) >= max_fill) {
-			return; // TODO is there a way to communicate that to JoinHashTable to avoid having to try to insert
-			        // thousands of additional times?
+			return false; // TODO is there a way to communicate that to JoinHashTable to avoid having to try to insert
+			              // thousands of additional times?
 		}
 		auto slot = hash & bitmask;
 		for (idx_t probes = 0; probes < MAX_PROBE_DISTANCE; probes++) {
@@ -191,18 +194,19 @@ public:
 			if (hash_ptr->compare_exchange_strong(expected, hash, std::memory_order_acq_rel)) {
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
 				insert_new.fetch_add(1, std::memory_order_relaxed);
-				return;
+				return true;
 			}
 			if (expected == hash) {
 				// Don't try linear probing if the hashes perfect match. TODO could try linear probing here too
 				insert_dup.fetch_add(1, std::memory_order_relaxed);
-				return;
+				return false;
 			}
 
 			slot = (slot + 1) & bitmask; // linear probe is the hashes don't fully match
 		}
 		// Exceeded MAX_PROBE_DISTANCE -> silently drop the entry. It will be a miss later.
 		// TODO should we completely stop populating the THC if we reach here?
+		return false;
 	}
 
 	idx_t GetCapacity() const {
