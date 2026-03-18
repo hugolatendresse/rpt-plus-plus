@@ -390,7 +390,7 @@ public:
 	//! If there is more than one element in the chain, we need to scan the next elements of the chain
 	bool chains_longer_than_one;
 
-	//! The capacity of the HT. Is the same as hash_map.GetSize() / sizeof(ht_entry_t)
+	//! The capacity of the HT (count of entries). Is the same as hash_map.GetSize() / sizeof(ht_entry_t)
 	idx_t capacity = DConstants::INVALID_INDEX;
 	//! The size of an entry as stored in the HashTable
 	idx_t entry_size;

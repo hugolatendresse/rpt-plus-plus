@@ -232,6 +232,7 @@ public:
 	}
 
 	//! Largest power-of-2 capacity that fits within the budget.
+	//! Returns the number of entries we can have in the THC
 	static idx_t ComputeCapacity(idx_t row_size, idx_t l3_budget = DEFAULT_L3_BUDGET) {
 		auto stride = ComputeEntryStride(row_size);
 		auto raw = l3_budget / stride;
@@ -239,7 +240,7 @@ public:
 			return 64;
 		}
 		auto pot = NextPowerOfTwo(raw);
-		if (pot > raw) {
+		while (pot > raw) {
 			pot >>= 1;
 		}
 		return pot;
@@ -252,7 +253,9 @@ private:
 	static constexpr idx_t HEADER_SIZE = sizeof(hash_t);
 
 	static idx_t ComputeEntryStride(idx_t row_size) {
-		return (HEADER_SIZE + row_size + 7) & ~idx_t(7);
+		idx_t stride = (HEADER_SIZE + row_size + 7) & ~idx_t(7);
+		DEBUG_LOG("[THC] Stride is %lu bytes\n", stride);
+		return stride;
 	}
 
 	// Get a pointer to the `slot`th entry in the THC

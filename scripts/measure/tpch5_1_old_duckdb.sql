@@ -1,11 +1,19 @@
--- Can run with:
--- build/release/duckdb ../benchmark_data/tpch/tpch_sf100.duckdb -f scripts/measure/tpch5_forward_backward.sql
+/* Can run with:
+clear; build/release/duckdb ../benchmark_data/tpch/tpch_sf10.duckdb -f scripts/measure/tpch5_1_old_duckdb.sql
+clear; build/release/duckdb ../benchmark_data/tpch/tpch_sf50.duckdb -f scripts/measure/tpch5_1_old_duckdb.sql
+clear; build/release/duckdb ../benchmark_data/tpch/tpch_sf100.duckdb -f scripts/measure/tpch5_1_old_duckdb.sql
+*/
 
 -- https://duckdb.org/docs/stable/dev/profiling
 PRAGMA enable_profiling = 'json';
-PRAGMA profiling_output = 'tpch5.json';
+PRAGMA profiling_output = 'results.json';
 PRAGMA profiling_coverage = 'SELECT';
 -- PRAGMA profiling_mode = 'detailed';
+
+-------- Case #1: Old DuckDB --------------  
+SET disable_rpt = true;
+SET disable_tiered_hash_cache = true;
+------------------------------------------
 
 SET threads = 4;
 SET pin_threads = 'on';
@@ -14,10 +22,6 @@ SET thc_collect_phase_rows = 100000;
 SET thc_collect_budget_fraction = 0.02; 
 SET thc_miss_threshold = 0.05; 
 SET thc_activation_threshold = 500000;
-
--- Run RPT+ as-is (forward and backward)
--- SET rpt_forward_only = true;
-SET disable_tiered_hash_cache = true;
 
 load tpch;
 -- call dbgen(sf = 10);
@@ -59,8 +63,8 @@ load tpch;
 -- FROM per_order_lineitem_fanout;
 
 
-EXPLAIN ANALYZE SELECT
--- SELECT
+-- EXPLAIN ANALYZE SELECT
+SELECT
     n_name,
     sum(l_extendedprice * (1 - l_discount)) AS revenue
 FROM
@@ -74,8 +78,8 @@ WHERE
     c_custkey = o_custkey
     AND l_orderkey = o_orderkey -- o_ is build side
     AND l_suppkey = s_suppkey
-    AND c_nationkey = s_nationkey
-    AND s_nationkey = n_nationkey
+    AND c_nationkey = s_nationkey -- actually being done
+    AND s_nationkey = n_nationkey -- being replaced by c_nationkey = n_nationkey. Actually making this change doesn't affect the result
     AND n_regionkey = r_regionkey
     AND r_name = 'ASIA'
     AND o_orderdate >= CAST('1994-01-01' AS date)

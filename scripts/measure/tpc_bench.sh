@@ -27,7 +27,7 @@ PASSED_OPTIONS=()
 
 usage() {
 	cat <<'USAGE'
-Usage: scripts/run_TPC_bench.sh [options]
+Usage: scripts/measure/tpc_bench.sh [options]
 
 Options:
 	--sf <scale_factor>     Scale factor for dbgen (default: 100)

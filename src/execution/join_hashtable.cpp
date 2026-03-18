@@ -1341,9 +1341,10 @@ void JoinHashTable::InsertHashes(Vector &hashes_v, const idx_t count, TupleDataC
 }
 
 void JoinHashTable::AllocatePointerTable() {
-	capacity = PointerTableCapacity(Count());
+	idx_t data_collection_row_cnt = Count();
+	capacity = PointerTableCapacity(data_collection_row_cnt);
 	D_ASSERT(IsPowerOfTwo(capacity));
-	DEBUG_LOG("[JoinHashTable::AllocatePointerTable] Pointer table capacity is %lu\n", (unsigned long)capacity);
+	DEBUG_LOG("[JoinHashTable::AllocatePointerTable] Pointer table capacity is %lu for a build side row count of %lu\n", (unsigned long)capacity, data_collection_row_cnt);
 
 	if (hash_map.get()) {
 		// There is already a hash map
@@ -1397,10 +1398,12 @@ void JoinHashTable::Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool para
 void JoinHashTable::InitializeTieredHashCache() {
 	auto &config = ClientConfig::GetConfig(context);
 	if (config.disable_tiered_hash_cache) {
+		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since it's disabled with disable_tiered_hash_cache.\n");
 		return;
 	}
 
 	if (capacity <= thc_activation_threshold) {
+		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since capacity of %lu does not meet thc_activation_threshold of %lu\n", capacity, thc_activation_threshold);
 		return;
 	}
 
@@ -1409,6 +1412,7 @@ void JoinHashTable::InitializeTieredHashCache() {
 	for (const auto &type : equality_types) {
 		if (type.InternalType() == PhysicalType::VARCHAR || type.InternalType() == PhysicalType::STRUCT ||
 		    type.InternalType() == PhysicalType::LIST) {
+				DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since unsupported key type.\n");
 			return;
 		}
 	}
@@ -1446,21 +1450,21 @@ void JoinHashTable::InitializeTieredHashCache() {
 	static constexpr double MIN_COVERAGE_RATIO = 0.05;
 	const double coverage_ratio = static_cast<double>(cache_capacity) / static_cast<double>(capacity);
 	if (coverage_ratio < MIN_COVERAGE_RATIO) {
-		DEBUG_LOG("[InitTHC] Skipping: coverage ratio %.2f%% (cache_capacity=%lu, ht_capacity=%lu) below %.0f%% threshold\n",
+		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since coverage ratio %.2f%% (cache_capacity=%lu, ht_capacity=%lu) below %.0f%% threshold\n",
 		          coverage_ratio * 100.0, (unsigned long)cache_capacity, (unsigned long)capacity,
 		          MIN_COVERAGE_RATIO * 100.0);
 		return;
 	}
 
+	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Instantiating THC (cache_capacity=%lu, row_size=%lu, row_copy_offset=%lu, "
+	          "coverage=%.2f%%, tuple_size=%lu, pointer_offset=%lu, entry_stride=%lu, total=%.1f MiB)\n",
+	          (unsigned long)cache_capacity, (unsigned long)data_collection_row_size,
+	          (unsigned long)row_copy_offset, coverage_ratio * 100.0, (unsigned long)tuple_size,
+	          (unsigned long)pointer_offset,
+	          (unsigned long)((sizeof(hash_t) + data_collection_row_size + 7) & ~idx_t(7)),
+	          (double)(cache_capacity * ((sizeof(hash_t) + data_collection_row_size + 7) & ~idx_t(7))) /
+	              (1024.0 * 1024.0));
 	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size, row_copy_offset);
-
-	DEBUG_LOG("[InitTHC] row_size=%lu (tuple_size=%lu, pointer_offset=%lu), entry_stride=%lu, capacity=%lu, "
-	               "total=%.1f MiB\n",
-	               (unsigned long)data_collection_row_size, (unsigned long)tuple_size, (unsigned long)pointer_offset,
-	               (unsigned long)((sizeof(hash_t) + data_collection_row_size + 7) & ~idx_t(7)),
-	               (unsigned long)cache_capacity,
-	               (double)(cache_capacity * ((sizeof(hash_t) + data_collection_row_size + 7) & ~idx_t(7))) /
-	                   (1024.0 * 1024.0));
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,
