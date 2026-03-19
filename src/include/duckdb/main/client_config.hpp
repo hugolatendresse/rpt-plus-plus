@@ -80,8 +80,8 @@ struct ClientConfig {
 	bool disable_tiered_hash_cache = false;
 	//! Memory budget (in bytes) for the Tiered Hash Cache.
 	//! Controls how much of L3 the THC is allowed to occupy.
-	//! Default: 22 MiB (sized for typical L3 caches).
-	idx_t thc_budget_bytes = 22ULL * 1024 * 1024;
+	//! Default: 32 MiB (sized for typical L3 caches).
+	idx_t thc_budget_bytes = 32ULL * 1024 * 1024;
 	//! Number of probe-side rows processed per THC collect phase.
 	//! Smaller values mean faster warm-up but more frequent collect/flush cycles.
 	idx_t thc_collect_phase_rows = 200000;
