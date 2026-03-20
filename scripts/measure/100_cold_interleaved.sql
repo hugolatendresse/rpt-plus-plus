@@ -2,6 +2,23 @@
 -- Hash table size: 1672MiB, of which 14MiB is hot
 -- Does not use perfect hashing
 
+-------- Case #1: Old DuckDB --------------  
+-- SET disable_rpt = true;
+-- SET disable_tiered_hash_cache = true;
+------------------------------------------
+
+-------- Case #2: RPT+ Forward Pass Only -------- 
+-- SET rpt_forward_only = true;
+-- SET disable_tiered_hash_cache = true;
+-------------------------------------------------
+
+-------- Case #3: RPT+ Forward + THC -------- 
+SET rpt_forward_only = true;
+---------------------------------------------
+
+-------- Case #4: RPT+ Forward + Backward ----
+-- SET disable_tiered_hash_cache = true;
+----------------------------------------------
 
 -- https://duckdb.org/docs/stable/dev/profiling
 PRAGMA enable_profiling = 'json';
@@ -12,7 +29,7 @@ PRAGMA profiling_coverage = 'SELECT';
 
 -- https://duckdb.org/docs/stable/configuration/overview#:~:text=max_temp_directory_size
 SET max_temp_directory_size='0KiB'; -- Forces no disk spill, I think?
-SET threads = 4; 
+SET threads = 64; 
 SET disabled_optimizers = 'compressed_materialization';
 
 
@@ -51,7 +68,27 @@ ORDER BY random();
 ANALYZE a;
 ANALYZE b;
 
--- EXPLAIN ANALYZE 
+PREPARE benchmark_query AS
 SELECT min(b.valueB1) 
 FROM a 
 JOIN b ON a.keyB1 = b.keyB1;
+
+-- Warmup: prime the OS page cache.
+EXECUTE benchmark_query;
+
+.print Running the 100_cold_interleaved benchmark query
+SET VARIABLE t0 = epoch_ms(now());
+.timer on
+EXECUTE benchmark_query;
+EXECUTE benchmark_query;
+EXECUTE benchmark_query;
+EXECUTE benchmark_query;
+EXECUTE benchmark_query;
+.timer off
+SET VARIABLE t5 = epoch_ms(now());
+
+.print Show the detailed timed query plan
+.output stdout
+EXPLAIN ANALYZE EXECUTE benchmark_query;
+
+SELECT printf('Average run time: %.3f s', (getvariable('t5') - getvariable('t0')) / 5.0 / 1000.0) AS info;
