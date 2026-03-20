@@ -13,20 +13,20 @@
 -------------------------------------------------
 
 -------- Case #3: RPT+ Forward + THC -------- 
-SET rpt_forward_only = true;
+-- SET rpt_forward_only = true;
 ---------------------------------------------
 
 -------- Case #4: RPT+ Forward + Backward ----
--- SET disable_tiered_hash_cache = true;
+SET disable_tiered_hash_cache = true;
 ----------------------------------------------
 
-
+SET thc_collect_phase_rows = 400_000;
 
 
 
 -- https://duckdb.org/docs/stable/dev/profiling
 PRAGMA enable_profiling = 'json';
-PRAGMA profiling_output = 'scripts/measure/100_cold_interleaved.json';
+PRAGMA profiling_output = 'scripts/measure/100_cold_interleaved_5_times.json';
 PRAGMA profiling_coverage = 'SELECT';
 -- PRAGMA profiling_mode = 'detailed';
 
@@ -72,7 +72,27 @@ ORDER BY random();
 ANALYZE a;
 ANALYZE b;
 
--- EXPLAIN ANALYZE 
+PREPARE benchmark_query AS
 SELECT min(b.valueB1) 
 FROM a 
 JOIN b ON a.keyB1 = b.keyB1;
+
+-- Warmup: prime the OS page cache.
+EXECUTE benchmark_query;
+
+.print Running the 100_cold_interleaved benchmark query
+SET VARIABLE t0 = epoch_ms(now());
+.timer on
+EXECUTE benchmark_query;
+EXECUTE benchmark_query;
+EXECUTE benchmark_query;
+EXECUTE benchmark_query;
+EXECUTE benchmark_query;
+.timer off
+SET VARIABLE t5 = epoch_ms(now());
+
+.print Show the detailed timed query plan
+.output stdout
+EXPLAIN ANALYZE EXECUTE benchmark_query;
+
+SELECT printf('Average run time: %.3f s', (getvariable('t5') - getvariable('t0')) / 5.0 / 1000.0) AS info;

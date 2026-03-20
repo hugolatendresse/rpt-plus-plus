@@ -1450,7 +1450,7 @@ void JoinHashTable::InitializeTieredHashCache() {
 	// Below 5%, THC is net negative for uniform workloads and quickly
 	// gets abandoned anyway (wasting the collect-phase overhead).
 	// ---------------------------------------------------------------
-	static constexpr double MIN_COVERAGE_RATIO = 0.05;
+	static constexpr double MIN_COVERAGE_RATIO = 0.00;
 	const double coverage_ratio = static_cast<double>(cache_capacity) / static_cast<double>(capacity);
 	if (coverage_ratio < MIN_COVERAGE_RATIO) {
 		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since coverage ratio %.2f%% (cache_capacity=%lu, ht_capacity=%lu) below %.0f%% threshold\n",
