@@ -47,6 +47,7 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
 	auto &config = ClientConfig::GetConfig(context);
 	thc_budget_bytes = config.thc_budget_bytes;
 	thc_collect_phase_rows = config.thc_collect_phase_rows;
+	thc_first_read_only_phase_rows = config.thc_first_read_only_phase_rows;
 	thc_collect_budget_fraction = config.thc_collect_budget_fraction;
 	thc_miss_threshold = config.thc_miss_threshold;
 	thc_activation_threshold = config.thc_activation_threshold;
@@ -867,10 +868,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			// Transition to READ_ONLY with exponentially growing target.
 			// The first READ_ONLY segment uses READ_ONLY_BASE_ROWS.
 			// Each subsequent segment doubles in length.
-			state.tiered_hash_cache_phase = TieredHashCachePhase::READ_ONLY;
-			// The first READ_ONLY segment length equals the collect phase size.
-			// Each subsequent segment doubles (exponential backoff).
-			state.read_only_rows_target = thc_collect_phase_rows * (idx_t(1) << state.checkpoint_count);
+		state.tiered_hash_cache_phase = TieredHashCachePhase::READ_ONLY;
+		state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
 			state.read_only_rows_processed = 0;
 			state.ro_miss_count = 0;
 			state.ro_total_count = 0;
@@ -964,9 +963,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			state.probe_rows_in_phase = 0;
 			state.collected_entries.clear();
 		} else {
-			// Stay in READ_ONLY with a doubled target.
-			// Reset segment counters for the next checkpoint evaluation.
-			state.read_only_rows_target = thc_collect_phase_rows * (idx_t(1) << state.checkpoint_count);
+		// Stay in READ_ONLY with a doubled target.
+		state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
 			state.read_only_rows_processed = 0;
 			state.ro_miss_count = 0;
 			state.ro_total_count = 0;

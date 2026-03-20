@@ -606,6 +606,16 @@ struct ThcCollectPhaseRowsSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct ThcFirstReadOnlyPhaseRowsSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "thc_first_read_only_phase_rows";
+	static constexpr const char *Description = "Base length (in probe rows) of the first THC READ_ONLY phase (default: 200000)";
+	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct ThcCollectBudgetFractionSetting {
 	using RETURN_TYPE = double;
 	static constexpr const char *Name = "thc_collect_budget_fraction";

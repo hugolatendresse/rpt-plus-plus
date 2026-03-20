@@ -601,6 +601,23 @@ Value ThcCollectPhaseRowsSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// THC First Read-Only Phase Rows
+//===----------------------------------------------------------------------===//
+void ThcFirstReadOnlyPhaseRowsSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_first_read_only_phase_rows = static_cast<idx_t>(input.GetValue<int64_t>());
+}
+
+void ThcFirstReadOnlyPhaseRowsSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_first_read_only_phase_rows = ClientConfig().thc_first_read_only_phase_rows;
+}
+
+Value ThcFirstReadOnlyPhaseRowsSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BIGINT(static_cast<int64_t>(config.thc_first_read_only_phase_rows));
+}
+
+//===----------------------------------------------------------------------===//
 // THC Collect Budget Fraction
 //===----------------------------------------------------------------------===//
 void ThcCollectBudgetFractionSetting::SetLocal(ClientContext &context, const Value &input) {
