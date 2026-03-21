@@ -15,7 +15,7 @@ SET rpt_forward_only = true;
 SET disable_tiered_hash_cache = true;
 -------------------------------------------------
 
-SET threads = 4;
+SET threads = 1;
 SET pin_threads = 'on';
 SET thc_l3_budget = 4194304;
 SET thc_collect_phase_rows = 100000; 
