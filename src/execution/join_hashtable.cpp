@@ -443,8 +443,8 @@ inline bool JoinHashTable::UseSalt() const {
 //!
 void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &key_state, ProbeState &state,
                                         Vector &hashes_v, const SelectionVector *sel, idx_t &count, bool has_sel,
-                                        Vector &pointers_result_v, SelectionVector &match_sel,
-                                        idx_t &match_count, idx_t &cache_miss_count) {
+                                        Vector &pointers_result_v, SelectionVector &match_sel, idx_t &match_count,
+                                        idx_t &cache_miss_count) {
 
 	// ---- Step 1: Densify hashes ----
 	// The THC probe functions expect a dense array of hashes (one per probe row,
@@ -483,70 +483,70 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		ScopedHashJoinTimer tiered_hash_cache_timer(state.tiered_hash_cache_time_ns);
 		keys.data[0].Flatten(keys.size());
 
-		// This switch statement populates `match_sel` and `state.cache_miss_sel` with indexes of keys that 
+		// This switch statement populates `match_sel` and `state.cache_miss_sel` with indexes of keys that
 		// found and didn't find a match, respectively.
 		switch (equality_types[0].InternalType()) {
 		case PhysicalType::INT8: {
 			auto probe_keys = FlatVector::GetData<int8_t>(keys.data[0]);
 			tiered_hash_cache->ProbeAndMatch<int8_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
-			                                  pointers_result, match_sel, match_count, state.cache_miss_sel,
-			                                  cache_miss_count);
+			                                         pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                         cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::INT16: {
 			auto probe_keys = FlatVector::GetData<int16_t>(keys.data[0]);
 			tiered_hash_cache->ProbeAndMatch<int16_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
-			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
-			                                   cache_miss_count);
+			                                          pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                          cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::INT32: {
 			auto probe_keys = FlatVector::GetData<int32_t>(keys.data[0]);
 			tiered_hash_cache->ProbeAndMatch<int32_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
-			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
-			                                   cache_miss_count);
+			                                          pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                          cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::INT64: {
 			auto probe_keys = FlatVector::GetData<int64_t>(keys.data[0]);
 			tiered_hash_cache->ProbeAndMatch<int64_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
-			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
-			                                   cache_miss_count);
+			                                          pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                          cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT8: {
 			auto probe_keys = FlatVector::GetData<uint8_t>(keys.data[0]);
 			tiered_hash_cache->ProbeAndMatch<uint8_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
-			                                   pointers_result, match_sel, match_count, state.cache_miss_sel,
-			                                   cache_miss_count);
+			                                          pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                          cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT16: {
 			auto probe_keys = FlatVector::GetData<uint16_t>(keys.data[0]);
 			tiered_hash_cache->ProbeAndMatch<uint16_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
-			                                    pointers_result, match_sel, match_count, state.cache_miss_sel,
-			                                    cache_miss_count);
+			                                           pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                           cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT32: {
 			auto probe_keys = FlatVector::GetData<uint32_t>(keys.data[0]);
 			tiered_hash_cache->ProbeAndMatch<uint32_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
-			                                    pointers_result, match_sel, match_count, state.cache_miss_sel,
-			                                    cache_miss_count);
+			                                           pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                           cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT64: {
 			auto probe_keys = FlatVector::GetData<uint64_t>(keys.data[0]);
 			tiered_hash_cache->ProbeAndMatch<uint64_t>(hashes_dense, probe_keys, key_offset, count, sel, has_sel,
-			                                    pointers_result, match_sel, match_count, state.cache_miss_sel,
-			                                    cache_miss_count);
+			                                           pointers_result, match_sel, match_count, state.cache_miss_sel,
+			                                           cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
@@ -567,8 +567,8 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		{
 			ScopedHashJoinTimer tiered_hash_cache_timer(state.tiered_hash_cache_time_ns);
 			tiered_hash_cache->ProbeByHash(hashes_dense, count, sel, has_sel, state.cache_candidates_sel,
-			                        cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
-			                        state.cache_miss_sel, cache_miss_count);
+			                               cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
+			                               state.cache_miss_sel, cache_miss_count);
 		}
 
 		if (cache_candidates_count > 0) {
@@ -581,7 +581,8 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 				    state.cache_rhs_row_locations, &state.keys_no_match_sel, cache_no_match_count);
 			}
 
-			// TODO rewrite ProbeByHash OR .Match to do this automatically. Why do this in a separate step after ProbeByHash? 
+			// TODO rewrite ProbeByHash OR .Match to do this automatically. Why do this in a separate step after
+			// ProbeByHash?
 			for (idx_t i = 0; i < cache_match_count; i++) {
 				const auto row_index = state.cache_candidates_sel.get_index(i);
 				pointers_result[row_index] = cache_result_ptrs[row_index];
@@ -616,15 +617,15 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 			GetRowPointersInternal<false>(keys, key_state, state, hashes_v, &state.cache_miss_sel, regular_count, *this,
 			                              entries, pointers_result_v, regular_match_sel, true);
 		}
-		
+
 		// Update the combined match_sel with fallback matches.
 		// Also populate thc_miss_match_sel + dense-index mapping, but ONLY
 		// during COLLECT phase (cycle > 0) where the caller will consume them
 		// to insert new entries into the THC. In READ_ONLY phase this work
 		// is wasted — the data is never read.
 		// TODO pass this as a parameter instead of calculating it
-		const bool collecting = (state.tiered_hash_cache_phase == TieredHashCachePhase::COLLECT
-		                         && state.cycle_count > 0);
+		const bool collecting =
+		    (state.tiered_hash_cache_phase == TieredHashCachePhase::COLLECT && state.cycle_count > 0);
 
 		for (idx_t i = 0; i < regular_count; i++) {
 			const auto row_index = regular_match_sel.get_index(i);
@@ -646,17 +647,17 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 //! Uses THC's `ProbeAndMatch` for single integer keys and `ProbeByHash` for everything else
 //! `ProbeAndMatch` does equality comparison on the keys
 //! `ProbeByHash` only compares hashes, and `Match` compares the keys
-//! 
-//! If there are duplicate keys on the build side, data_collection is guaranteed to link them 
-//! through NEXT pointers. ScanStructure will walk that linked list regardless of whether 
+//!
+//! If there are duplicate keys on the build side, data_collection is guaranteed to link them
+//! through NEXT pointers. ScanStructure will walk that linked list regardless of whether
 //! `ProbeAndMatch` or `ProbeByHash` is used.
 //!
 //! If there are different keys with the same hash:
 //! - `ProbeAndMatch` compares keys and moves on to next slot of THC
-//! - `ProbeByHash` will stop at the first hash collision, the `Match` will 
-//!   find that the keys are different, and the probe will fall back to 
+//! - `ProbeByHash` will stop at the first hash collision, the `Match` will
+//!   find that the keys are different, and the probe will fall back to
 //!   regular DuckDB probe with `GetRowPointersInternal`.
-//! 
+//!
 //! @param keys chunk of keys to match
 //! @param key_state TODO
 //! @param state the per-thread state (contains ht_offsets_v, etc)
@@ -779,8 +780,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			// We call the same logic, then additionally collect miss-matched rows.
 			idx_t match_count = 0;
 			idx_t cache_miss_count = 0;
-			ProbeTHCAndFallback(keys, key_state, state, hashes_v, sel, count, has_sel,
-			                    pointers_result_v, match_sel, match_count, cache_miss_count);
+			ProbeTHCAndFallback(keys, key_state, state, hashes_v, sel, count, has_sel, pointers_result_v, match_sel,
+			                    match_count, cache_miss_count);
 			count = match_count;
 
 			// Collect the THC-miss rows that found a match in the regular HT.
@@ -844,22 +845,18 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			state.total_new_entries += new_entries_this_phase;
 
 			DEBUG_LOG("[Collect->Read-Only] cycle=%lu, probe_rows_in_phase=%lu, buffered=%lu, "
-			               "new_entries_this_phase=%lu, cache_fill=%lu/%lu, insert_new=%lu, insert_dup=%lu, "
-			               "total_collect_phase_rows=%lu, total_probe=%lu (%.2f%%)\n",
-			               (unsigned long)state.cycle_count,
-			               (unsigned long)state.probe_rows_in_phase,
-			               (unsigned long)state.collected_entries.size(),
-			               (unsigned long)new_entries_this_phase,
-			               (unsigned long)tiered_hash_cache->insert_new.load(),
-			               (unsigned long)tiered_hash_cache->GetCapacity(),
-			               (unsigned long)tiered_hash_cache->insert_new.load(),
-			               (unsigned long)tiered_hash_cache->insert_dup.load(),
-			               (unsigned long)state.total_collect_phase_rows,
-			               (unsigned long)state.total_probe_rows,
-			               state.total_probe_rows > 0
-			                   ? 100.0 * static_cast<double>(state.total_collect_phase_rows) /
-			                         static_cast<double>(state.total_probe_rows)
-			                   : 0.0);
+			          "new_entries_this_phase=%lu, cache_fill=%lu/%lu, insert_new=%lu, insert_dup=%lu, "
+			          "total_collect_phase_rows=%lu, total_probe=%lu (%.2f%%)\n",
+			          (unsigned long)state.cycle_count, (unsigned long)state.probe_rows_in_phase,
+			          (unsigned long)state.collected_entries.size(), (unsigned long)new_entries_this_phase,
+			          (unsigned long)tiered_hash_cache->insert_new.load(),
+			          (unsigned long)tiered_hash_cache->GetCapacity(),
+			          (unsigned long)tiered_hash_cache->insert_new.load(),
+			          (unsigned long)tiered_hash_cache->insert_dup.load(),
+			          (unsigned long)state.total_collect_phase_rows, (unsigned long)state.total_probe_rows,
+			          state.total_probe_rows > 0 ? 100.0 * static_cast<double>(state.total_collect_phase_rows) /
+			                                           static_cast<double>(state.total_probe_rows)
+			                                     : 0.0);
 
 			// Free the collection buffer
 			state.collected_entries.clear();
@@ -868,8 +865,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			// Transition to READ_ONLY with exponentially growing target.
 			// The first READ_ONLY segment uses READ_ONLY_BASE_ROWS.
 			// Each subsequent segment doubles in length.
-		state.tiered_hash_cache_phase = TieredHashCachePhase::READ_ONLY;
-		state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
+			state.tiered_hash_cache_phase = TieredHashCachePhase::READ_ONLY;
+			state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
 			state.read_only_rows_processed = 0;
 			state.ro_miss_count = 0;
 			state.ro_total_count = 0;
@@ -888,8 +885,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 
 	idx_t match_count = 0;
 	idx_t cache_miss_count = 0;
-	ProbeTHCAndFallback(keys, key_state, state, hashes_v, sel, count, has_sel,
-	                    pointers_result_v, match_sel, match_count, cache_miss_count);
+	ProbeTHCAndFallback(keys, key_state, state, hashes_v, sel, count, has_sel, pointers_result_v, match_sel,
+	                    match_count, cache_miss_count);
 	count = match_count;
 
 	// Accumulate miss statistics for this READ_ONLY segment.
@@ -907,9 +904,9 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	if (state.read_only_rows_processed >= state.read_only_rows_target) {
 
 		// Compute the miss rate over this entire READ_ONLY segment
-		const double miss_rate = state.ro_total_count > 0
-		    ? static_cast<double>(state.ro_miss_count) / static_cast<double>(state.ro_total_count)
-		    : 0.0;
+		const double miss_rate = state.ro_total_count > 0 ? static_cast<double>(state.ro_miss_count) /
+		                                                        static_cast<double>(state.ro_total_count)
+		                                                  : 0.0;
 
 		// Check whether we can afford another collect phase within the total budget.
 		// We project the cost of the next COLLECT_PHASE_PROBE_ROWS and check if
@@ -926,11 +923,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		const bool should_collect = (miss_rate >= thc_miss_threshold) && budget_ok && !thc_full;
 
 		DEBUG_LOG("[Checkpoint] checkpoint=%lu, ro_rows=%lu, miss_rate=%.2f%%, budget_ok=%d, thc_full=%d -> %s\n",
-		               (unsigned long)state.checkpoint_count,
-		               (unsigned long)state.read_only_rows_processed,
-		               miss_rate * 100.0,
-		               (int)budget_ok, (int)thc_full,
-		               should_collect ? "COLLECT" : "SKIP");
+		          (unsigned long)state.checkpoint_count, (unsigned long)state.read_only_rows_processed,
+		          miss_rate * 100.0, (int)budget_ok, (int)thc_full, should_collect ? "COLLECT" : "SKIP");
 
 		// ---- Abandonment check ----
 		// If the miss rate is very high (above THC_ABANDON_MISS_THRESHOLD),
@@ -944,8 +938,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			if (state.consecutive_high_miss_checkpoints >= THC_ABANDON_CONSECUTIVE_MISSES) {
 				DEBUG_LOG("[THC Abandon] thread abandoned THC after %lu consecutive high-miss checkpoints "
 				          "(miss_rate=%.2f%%)\n",
-				          (unsigned long)state.consecutive_high_miss_checkpoints,
-				          miss_rate * 100.0);
+				          (unsigned long)state.consecutive_high_miss_checkpoints, miss_rate * 100.0);
 				state.thc_abandoned = true;
 				return;
 			}
@@ -963,8 +956,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			state.probe_rows_in_phase = 0;
 			state.collected_entries.clear();
 		} else {
-		// Stay in READ_ONLY with a doubled target.
-		state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
+			// Stay in READ_ONLY with a doubled target.
+			state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
 			state.read_only_rows_processed = 0;
 			state.ro_miss_count = 0;
 			state.ro_total_count = 0;
@@ -1347,7 +1340,8 @@ void JoinHashTable::AllocatePointerTable() {
 	idx_t data_collection_row_cnt = Count();
 	capacity = PointerTableCapacity(data_collection_row_cnt);
 	D_ASSERT(IsPowerOfTwo(capacity));
-	DEBUG_LOG("[JoinHashTable::AllocatePointerTable] Pointer table capacity is %lu for a build side row count of %lu\n", (unsigned long)capacity, data_collection_row_cnt);
+	DEBUG_LOG("[JoinHashTable::AllocatePointerTable] Pointer table capacity is %lu for a build side row count of %lu\n",
+	          (unsigned long)capacity, data_collection_row_cnt);
 
 	if (hash_map.get()) {
 		// There is already a hash map
@@ -1401,12 +1395,15 @@ void JoinHashTable::Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool para
 void JoinHashTable::InitializeTieredHashCache() {
 	auto &config = ClientConfig::GetConfig(context);
 	if (config.disable_tiered_hash_cache) {
-		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since it's disabled with disable_tiered_hash_cache.\n");
+		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since it's disabled with "
+		          "disable_tiered_hash_cache.\n");
 		return;
 	}
 
 	if (capacity <= thc_activation_threshold) {
-		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since capacity of %lu does not meet thc_activation_threshold of %lu\n", capacity, thc_activation_threshold);
+		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since capacity of %lu does not "
+		          "meet thc_activation_threshold of %lu\n",
+		          capacity, thc_activation_threshold);
 		return;
 	}
 
@@ -1415,7 +1412,7 @@ void JoinHashTable::InitializeTieredHashCache() {
 	for (const auto &type : equality_types) {
 		if (type.InternalType() == PhysicalType::VARCHAR || type.InternalType() == PhysicalType::STRUCT ||
 		    type.InternalType() == PhysicalType::LIST) {
-				DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since unsupported key type.\n");
+			DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since unsupported key type.\n");
 			return;
 		}
 	}
@@ -1424,12 +1421,12 @@ void JoinHashTable::InitializeTieredHashCache() {
 	// at the end of the row that acts as a chain pointer on the build side.
 	// It's found at pointer_offset on the build side and enables AdvancePointers to follow chains.
 	// Cache hits in THC completely bypass data_collection for key matching
-	// and payload gathering (GatherResult), but only for the first key match. 
+	// and payload gathering (GatherResult), but only for the first key match.
 	// For chain following (in case there are duplicate keys), need to go to data_collection.
 	// TODO consts below are hacks - generalize!!!
 	const idx_t data_collection_row_size =
-	    pointer_offset + sizeof(data_ptr_t);             // TODO might be duplicative of logic in FashHashCache
-	const idx_t row_copy_offset = 0;                     // TODO hack?
+	    pointer_offset + sizeof(data_ptr_t);                    // TODO might be duplicative of logic in FashHashCache
+	const idx_t row_copy_offset = 0;                            // TODO hack?
 	tiered_hash_cache_key_offset = layout_ptr->GetOffsets()[0]; // key after validity bytes // TODO this is a hack!!!
 	const idx_t cache_capacity = TieredHashCache::ComputeCapacity(data_collection_row_size, thc_budget_bytes);
 
@@ -1453,17 +1450,18 @@ void JoinHashTable::InitializeTieredHashCache() {
 	static constexpr double MIN_COVERAGE_RATIO = 0.00;
 	const double coverage_ratio = static_cast<double>(cache_capacity) / static_cast<double>(capacity);
 	if (coverage_ratio < MIN_COVERAGE_RATIO) {
-		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since coverage ratio %.2f%% (cache_capacity=%lu, ht_capacity=%lu) below %.0f%% threshold\n",
+		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since coverage ratio %.2f%% "
+		          "(cache_capacity=%lu, ht_capacity=%lu) below %.0f%% threshold\n",
 		          coverage_ratio * 100.0, (unsigned long)cache_capacity, (unsigned long)capacity,
 		          MIN_COVERAGE_RATIO * 100.0);
 		return;
 	}
 
-	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Instantiating THC (cache_capacity=%lu, row_size=%lu, row_copy_offset=%lu, "
+	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Instantiating THC (cache_capacity=%lu, row_size=%lu, "
+	          "row_copy_offset=%lu, "
 	          "coverage=%.2f%%, tuple_size=%lu, pointer_offset=%lu, entry_stride=%lu, total=%.1f MiB)\n",
-	          (unsigned long)cache_capacity, (unsigned long)data_collection_row_size,
-	          (unsigned long)row_copy_offset, coverage_ratio * 100.0, (unsigned long)tuple_size,
-	          (unsigned long)pointer_offset,
+	          (unsigned long)cache_capacity, (unsigned long)data_collection_row_size, (unsigned long)row_copy_offset,
+	          coverage_ratio * 100.0, (unsigned long)tuple_size, (unsigned long)pointer_offset,
 	          (unsigned long)((sizeof(hash_t) + data_collection_row_size + 7) & ~idx_t(7)),
 	          (double)(cache_capacity * ((sizeof(hash_t) + data_collection_row_size + 7) & ~idx_t(7))) /
 	              (1024.0 * 1024.0));
