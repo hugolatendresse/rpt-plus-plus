@@ -30,9 +30,6 @@ namespace duckdb {
 //! Thread safety is simply based on compare-and-swap (check if entry is empty)
 class TieredHashCache {
 public:
-	//! Memory budget for the cache (sized for L3)
-	static constexpr idx_t DEFAULT_L3_BUDGET = 22ULL * 1024 * 1024;
-
 	//! Only create the THC if the global hash table has at least that capacity
 	static constexpr idx_t ACTIVATION_THRESHOLD = 10ULL * 1024 * 1024 / sizeof(uint64_t);
 
@@ -237,7 +234,7 @@ public:
 
 	//! Largest power-of-2 capacity that fits within the budget.
 	//! Returns the number of entries we can have in the THC
-	static idx_t ComputeCapacity(idx_t row_size, idx_t l3_budget = DEFAULT_L3_BUDGET) {
+	static idx_t ComputeCapacity(idx_t row_size, idx_t l3_budget) {
 		auto stride = ComputeEntryStride(row_size);
 		auto raw = l3_budget / stride;
 		if (raw < 64) {

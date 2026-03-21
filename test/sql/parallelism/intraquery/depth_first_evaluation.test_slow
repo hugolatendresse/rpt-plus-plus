@@ -18,7 +18,7 @@ statement ok
 SET memory_limit = '2GiB'
 
 statement ok
-SET threads = 4
+SET threads = 1
 
 # 10M integers but the table is tiny because of delta compression
 statement ok
