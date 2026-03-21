@@ -495,6 +495,8 @@ private:
 	idx_t thc_budget_bytes;
 	//! Number of probe rows per collect phase before flushing to the THC.
 	idx_t thc_collect_phase_rows;
+	//! Base length (in probe rows) of the first READ_ONLY phase; doubles each cycle.
+	idx_t thc_first_read_only_phase_rows;
 	//! Maximum fraction of probe rows that can be spent in collect phases.
 	double thc_collect_budget_fraction;
 	//! Miss rate threshold for skipping collect phases.

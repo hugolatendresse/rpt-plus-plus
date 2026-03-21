@@ -112,6 +112,7 @@ static const ConfigurationOption internal_options[] = {
 	DUCKDB_LOCAL(DisableTieredHashCacheSetting),
 	DUCKDB_LOCAL(ThcL3BudgetSetting),
 	DUCKDB_LOCAL(ThcCollectPhaseRowsSetting),
+	DUCKDB_LOCAL(ThcFirstReadOnlyPhaseRowsSetting),
 	DUCKDB_LOCAL(ThcCollectBudgetFractionSetting),
 	DUCKDB_LOCAL(ThcMissThresholdSetting),
 	DUCKDB_LOCAL(ThcActivationThresholdSetting),

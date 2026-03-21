@@ -85,6 +85,9 @@ struct ClientConfig {
 	//! Number of probe-side rows processed per THC collect phase.
 	//! Smaller values mean faster warm-up but more frequent collect/flush cycles.
 	idx_t thc_collect_phase_rows = 200000;
+	//! Base length (in probe rows) of the first READ_ONLY phase after a collect.
+	//! Subsequent READ_ONLY phases double this via exponential backoff.
+	idx_t thc_first_read_only_phase_rows = 999999999;
 	//! Maximum fraction of probe rows that can be spent in THC collect phases.
 	//! Example: 0.02 means collect overhead is capped at 2% of probe rows.
 	double thc_collect_budget_fraction = 0.02;
