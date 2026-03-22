@@ -550,6 +550,23 @@ Value DisableRptSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// Disable Perfect Hashing
+//===----------------------------------------------------------------------===//
+void DisablePerfectHashingSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.disable_perfect_hashing = input.GetValue<bool>();
+}
+
+void DisablePerfectHashingSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).disable_perfect_hashing = ClientConfig().disable_perfect_hashing;
+}
+
+Value DisablePerfectHashingSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.disable_perfect_hashing);
+}
+
+//===----------------------------------------------------------------------===//
 // Disable Tiered Hash Cache
 //===----------------------------------------------------------------------===//
 void DisableTieredHashCacheSetting::SetLocal(ClientContext &context, const Value &input) {

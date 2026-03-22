@@ -78,6 +78,8 @@ struct ClientConfig {
 	bool disable_rpt = false;
 	//! When true, skip initializing the tiered hash cache
 	bool disable_tiered_hash_cache = false;
+	//! When true, never use perfect hash join
+	bool disable_perfect_hashing = false;
 	//! Memory budget (in bytes) for the Tiered Hash Cache.
 	//! Controls how much of L3 the THC is allowed to occupy.
 	//! Default: 32 MiB (sized for typical L3 caches).
