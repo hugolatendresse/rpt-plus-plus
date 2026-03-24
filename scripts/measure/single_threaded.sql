@@ -54,8 +54,3 @@ ORDER BY random();
 -- Update statistics for the cost-based optimizer
 ANALYZE a;
 ANALYZE b;
-
--- EXPLAIN ANALYZE 
-SELECT min(b.valueB1) 
-FROM a 
-JOIN b ON a.keyB1 = b.keyB1;
