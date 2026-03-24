@@ -2,14 +2,21 @@
 -- Hash table size: 1672MiB, of which 14MiB is hot
 -- Does not use perfect hashing
 
+
+/*
+USAGE
+build/release/duckdb -f scripts/measure/100_cold_interleaved_5_times.sql
+*/
+
+
 -------- Case #1: Old DuckDB --------------  
 -- SET disable_rpt = true;
 -- SET disable_tiered_hash_cache = true;
 ------------------------------------------
 
 -------- Case #2: RPT+ Forward Pass Only -------- 
--- SET rpt_forward_only = true;
--- SET disable_tiered_hash_cache = true;
+SET rpt_forward_only = true;
+SET disable_tiered_hash_cache = true;
 -------------------------------------------------
 
 -------- Case #3: RPT+ Forward + THC -------- 
@@ -17,8 +24,10 @@
 ---------------------------------------------
 
 -------- Case #4: RPT+ Forward + Backward ----
-SET disable_tiered_hash_cache = true;
+-- SET disable_tiered_hash_cache = true;
 ----------------------------------------------
+
+
 
 SET thc_collect_phase_rows = 400_000;
 

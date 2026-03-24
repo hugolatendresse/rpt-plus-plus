@@ -576,6 +576,16 @@ struct DisableRptSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct DisablePerfectHashingSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "disable_perfect_hashing";
+	static constexpr const char *Description = "When enabled, perfect hash join is never used";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct DisableTieredHashCacheSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "disable_tiered_hash_cache";
