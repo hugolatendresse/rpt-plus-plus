@@ -107,13 +107,6 @@ else
     CMD=(build/release/duckdb "$DB")
 fi
 
-build_query_sql() {
-    printf '%s\n' "$PROFILING_HEADER"
-    printf '%s\n' "$CASE_SETTINGS"
-    cat "$SETTINGS_SQL"
-    cat "$QUERY_SQL"
-}
-
 build_bench_sql() {
     printf '%s\n' "$PROFILING_HEADER"
     printf '%s\n' "$CASE_SETTINGS"
@@ -137,10 +130,5 @@ build_bench_sql() {
     echo "SELECT printf('Average run time: %.3f s', (getvariable('t1') - getvariable('t0')) / ${RUNS}.0 / 1000.0) AS info;"
 }
 
-if (( RUNS > 1 )); then
-    echo "=== Running query: ${DB_NAME} (case $CASE, $RUNS runs + warmup) ==="
-    build_bench_sql | "${CMD[@]}"
-else
-    echo "=== Running query: ${DB_NAME} (case $CASE) ==="
-    build_query_sql | "${CMD[@]}"
-fi
+echo "=== Running query: ${DB_NAME} (case $CASE, $RUNS runs + warmup) ==="
+build_bench_sql | "${CMD[@]}"
