@@ -117,7 +117,7 @@ build_bench_sql() {
     printf '%s\n' "$CASE_SETTINGS"
     echo "SET max_temp_directory_size='0KiB';"
     echo "SET threads = 1;"
-    echo "SET disabled_optimizers = 'compressed_materialization';"
+    echo "SET disabled_optimizers = 'compressed_materialization,join_order,build_side_probe_side,statistics_propagation';
     echo ""
     echo "PREPARE benchmark_query AS"
     echo "SELECT min(b.valueB1)"
