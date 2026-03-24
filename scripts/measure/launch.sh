@@ -75,6 +75,7 @@ cd "$REPO_ROOT"
 DB_NAME="${COLD}_cold_${LAYOUT}"
 DB="scripts/measure/data/${DB_NAME}.duckdb"
 SETUP_SQL="scripts/measure/generation/${DB_NAME}.sql"
+SETTINGS_SQL="scripts/measure/settings.sql"
 QUERY_SQL="scripts/measure/query.sql"
 PROFILE_JSON="scripts/measure/${DB_NAME}.json"
 
@@ -109,15 +110,14 @@ fi
 build_query_sql() {
     printf '%s\n' "$PROFILING_HEADER"
     printf '%s\n' "$CASE_SETTINGS"
+    cat "$SETTINGS_SQL"
     cat "$QUERY_SQL"
 }
 
 build_bench_sql() {
     printf '%s\n' "$PROFILING_HEADER"
     printf '%s\n' "$CASE_SETTINGS"
-    echo "SET max_temp_directory_size='0KiB';"
-    echo "SET threads = 1;"
-    echo "SET disabled_optimizers = 'compressed_materialization,join_order,build_side_probe_side,statistics_propagation';
+    cat "$SETTINGS_SQL"
     echo ""
     echo "PREPARE benchmark_query AS"
     echo "SELECT min(b.valueB1)"
