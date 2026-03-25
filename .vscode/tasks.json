@@ -14,7 +14,7 @@
       ],
       "hide": false
     },
-    {
+{
       "label": "Build Release",
       "type": "shell",
       "command": "GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' make release -j $(nproc)",
@@ -27,5 +27,17 @@
       ],
       "hide": false
     },
+   {
+      "label": "RS on ASH-datagen",
+      "type": "shell",
+      "command": "cd /mnt/local_ssd/spy; GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' make release -j $(nproc); cd ASH-datagen; ./launch_release.sh rs",
+      "group": {
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "hide": false
+    }
   ]
 }
