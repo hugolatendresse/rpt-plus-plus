@@ -16,6 +16,7 @@
 #   --generate      (Re)generate the data before running the query
 #   --perf          Run under perf stat
 #   --profile       Enable DuckDB JSON profiling output
+#   --debug         Use debug build (build/debug/duckdb) instead of release for the benchmark
 #   --no-taskset    Don't pin DuckDB to cores 4-59 via taskset (pinning is on by default)
 #
 # Examples:
@@ -32,6 +33,7 @@ GENERATE=false
 USE_PERF=false
 PROFILE=false
 USE_TASKSET=true
+BUILD_TYPE=release
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -42,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         --generate)  GENERATE=true;  shift ;;
         --perf)      USE_PERF=true;  shift ;;
         --profile)   PROFILE=true;   shift ;;
+        --debug)     BUILD_TYPE=debug;   shift ;;
         --no-taskset) USE_TASKSET=false; shift ;;
         -h|--help)
             sed -n '2,/^set /{ /^#/s/^# \?//p }' "$0"
@@ -110,9 +113,9 @@ fi
 if $USE_PERF; then
     CMD=(sudo perf stat \
         -e cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd,branch-instructions,branch-misses \
-        -- "${TASKSET_PREFIX[@]}" build/release/duckdb "$DB")
+        -- "${TASKSET_PREFIX[@]}" build/${BUILD_TYPE}/duckdb "$DB")
 else
-    CMD=("${TASKSET_PREFIX[@]}" build/release/duckdb "$DB")
+    CMD=("${TASKSET_PREFIX[@]}" build/${BUILD_TYPE}/duckdb "$DB")
 fi
 
 build_bench_sql() {
