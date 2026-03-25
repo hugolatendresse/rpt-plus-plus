@@ -16,6 +16,7 @@
 #   --generate      (Re)generate the data before running the query
 #   --perf          Run under perf stat
 #   --profile       Enable DuckDB JSON profiling output
+#   --no-taskset    Don't pin DuckDB to cores 4-59 via taskset (pinning is on by default)
 #
 # Examples:
 #   ./scripts/measure/launch.sh --case 3                  # 10 cold, interleaved, RPT+Forward+THC
@@ -30,6 +31,7 @@ RUNS=1
 GENERATE=false
 USE_PERF=false
 PROFILE=false
+USE_TASKSET=true
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -40,6 +42,7 @@ while [[ $# -gt 0 ]]; do
         --generate)  GENERATE=true;  shift ;;
         --perf)      USE_PERF=true;  shift ;;
         --profile)   PROFILE=true;   shift ;;
+        --no-taskset) USE_TASKSET=false; shift ;;
         -h|--help)
             sed -n '2,/^set /{ /^#/s/^# \?//p }' "$0"
             exit 0 ;;
@@ -99,12 +102,17 @@ PRAGMA profiling_coverage = 'SELECT';
 "
 fi
 
+TASKSET_PREFIX=()
+if $USE_TASKSET; then
+    TASKSET_PREFIX=(taskset -c 4-59)
+fi
+
 if $USE_PERF; then
     CMD=(sudo perf stat \
         -e cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd \
-        -- build/release/duckdb "$DB")
+        -- "${TASKSET_PREFIX[@]}" build/release/duckdb "$DB")
 else
-    CMD=(build/release/duckdb "$DB")
+    CMD=("${TASKSET_PREFIX[@]}" build/release/duckdb "$DB")
 fi
 
 build_bench_sql() {
@@ -130,5 +138,5 @@ build_bench_sql() {
     echo "SELECT printf('Average run time: %.3f s', (getvariable('t1') - getvariable('t0')) / ${RUNS}.0 / 1000.0) AS info;"
 }
 
-echo "=== Running query: ${DB_NAME} (case $CASE, $RUNS runs + warmup) ==="
+echo "=== Running query: ${DB_NAME} (Case #$CASE, warmup + $RUNS runs) ==="
 build_bench_sql | "${CMD[@]}"
