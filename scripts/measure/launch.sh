@@ -109,7 +109,7 @@ fi
 
 if $USE_PERF; then
     CMD=(sudo perf stat \
-        -e cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd \
+        -e cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd,branch-instructions,branch-misses \
         -- "${TASKSET_PREFIX[@]}" build/release/duckdb "$DB")
 else
     CMD=("${TASKSET_PREFIX[@]}" build/release/duckdb "$DB")
