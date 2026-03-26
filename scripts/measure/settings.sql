@@ -4,4 +4,3 @@ SET disabled_optimizers = 'compressed_materialization,join_order,build_side_prob
 SET thc_collect_phase_rows = 400_000;
 SET disable_perfect_hashing = true;
 SET pin_threads = 'on';
-

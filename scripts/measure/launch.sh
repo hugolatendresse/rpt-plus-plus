@@ -136,6 +136,7 @@ build_bench_sql() {
         echo "EXECUTE benchmark_query;"
     done
     echo ".timer off"
+    echo "PRAGMA enable_profiling = 'no_output';"
     echo "SET VARIABLE t1 = epoch_ms(now());"
     echo ""
     echo "SELECT printf('Average run time: %.3f s', (getvariable('t1') - getvariable('t0')) / ${RUNS}.0 / 1000.0) AS info;"
