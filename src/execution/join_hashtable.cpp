@@ -480,7 +480,9 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 	if (equality_types.size() == 1 && equality_types[0].IsIntegral()) {
 		ScopedHashJoinTimer tiered_hash_cache_timer(state.tiered_hash_cache_time_ns);
 		keys.data[0].Flatten(keys.size());
-
+        
+		// This switch statement populates `match_sel` and `state.cache_miss_sel` with indexes of keys that
+        // found and didn't find a match, respectively.
 		switch (equality_types[0].InternalType()) {
 		case PhysicalType::INT8: {
 			auto probe_keys = FlatVector::GetData<int8_t>(keys.data[0]);
@@ -1444,17 +1446,16 @@ void JoinHashTable::InitializeTieredHashCache() {
 		return;
 	}
 
-	const auto row_stride = (data_collection_row_size + 7) & ~idx_t(7);
-	const auto bytes_per_entry = sizeof(TieredHashCache::tag_t) + row_stride;
+	const auto entry_stride = (sizeof(TieredHashCache::tag_t) + data_collection_row_size + 7) & ~idx_t(7);
 	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Instantiating THC (cache_capacity=%lu, row_size=%lu, "
-	          "key_size=%lu, row_copy_offset=%lu, "
-	          "coverage=%.2f%%, tuple_size=%lu, pointer_offset=%lu, bytes_per_entry=%lu, total=%.1f MiB)\n",
-	          (unsigned long)cache_capacity, (unsigned long)data_collection_row_size, (unsigned long)key_size,
-	          (unsigned long)row_copy_offset, coverage_ratio * 100.0, (unsigned long)tuple_size,
-	          (unsigned long)pointer_offset, (unsigned long)bytes_per_entry,
-	          (double)(cache_capacity * bytes_per_entry) / (1024.0 * 1024.0));
-	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size, key_size,
-	                                               tiered_hash_cache_key_offset, row_copy_offset);
+	          "key_offset=%lu, row_copy_offset=%lu, "
+	          "coverage=%.2f%%, tuple_size=%lu, pointer_offset=%lu, entry_stride=%lu, total=%.1f MiB)\n",
+	          (unsigned long)cache_capacity, (unsigned long)data_collection_row_size,
+	          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)row_copy_offset,
+	          coverage_ratio * 100.0, (unsigned long)tuple_size, (unsigned long)pointer_offset,
+	          (unsigned long)entry_stride, (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
+	tiered_hash_cache =
+	    make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size, tiered_hash_cache_key_offset, row_copy_offset);
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,
@@ -2413,3 +2414,4 @@ void ProbeSpill::PrepareNextProbe() {
 }
 
 } // namespace duckdb
+
