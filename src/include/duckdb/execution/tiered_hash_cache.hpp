@@ -112,7 +112,7 @@ public:
 		}
 	}
 
-	//! Looks up based on tag and key.
+	//! Looks up based on tag and key (in a single phase).
 	//! Returns true matches only (no false positives like ProbeByHash).
 	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	//! @param miss_sel holds the densely packed indices of `probe_keys` that did not
@@ -194,7 +194,7 @@ public:
 
 			tag_t expected = 0; // We only insert if the current hash is null
 			// TODO double check the choice of CAS function and third argument below
-			if (tag_atomic->compare_exchange_strong(expected, hash, std::memory_order_acq_rel)) {
+			if (tag_atomic->compare_exchange_strong(expected, tag, std::memory_order_acq_rel)) {
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
 				insert_new.fetch_add(1, std::memory_order_relaxed);
 				return true;
