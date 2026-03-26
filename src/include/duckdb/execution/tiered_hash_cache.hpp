@@ -21,11 +21,11 @@ namespace duckdb {
 //! copied to the THC, and others will need to be accessed from data_collection.
 //! That is why we copy the next_pointer as part of the data_collection row.
 //! Row chains only happen for identical keys in data_collection.
-//! 
+//!
 //! Having unique keys guarantees no chaining (even upon 64-bit hash collisions).
 //! However, is there are hash collisions from different keys on the build side,
 //! only one entry will be added to the THC, and others will fall back to regular
-//! probing. 
+//! probing.
 //!
 //! Thread safety is simply based on compare-and-swap (check if entry is empty)
 class TieredHashCache {
@@ -38,15 +38,17 @@ public:
 	//! pathological linear-probing chains (the extreme case being an infinite loop).
 	static constexpr double MAX_LOAD_FACTOR = 0.9;
 
-	//! capacity_p is the number of slots to create
-	//! row_size_p is the number of bytes in each row of data_collection.
+	//! @param capacity_p is the number of slots to create
+	//! @param row_size_p is the number of bytes in each row of data_collection.
 	//!            This is smaller than the entry size of each row of our
 	//!            THC since the latter also includes a hash
+	//! @param key_offset_in_row_p byte offset of key within the row (after validity bytes)
 	//! row_copy_offset_p how many bytes to skip over in each data_collection row before starting copying into the fast
 	//! cache
-	TieredHashCache(idx_t capacity_p, idx_t row_size_p, idx_t row_copy_offset_p = 0)
-	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), row_copy_offset(row_copy_offset_p),
-	      entry_stride(ComputeEntryStride(row_size_p)), max_fill(static_cast<idx_t>(capacity_p * MAX_LOAD_FACTOR)) {
+	TieredHashCache(idx_t capacity_p, idx_t row_size_p, idx_t key_offset_in_row_p, idx_t row_copy_offset_p = 0)
+	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), key_offset_in_row(key_offset_in_row_p),
+	      row_copy_offset(row_copy_offset_p), entry_stride(ComputeEntryStride(row_size_p)),
+	      max_fill(static_cast<idx_t>(capacity_p * MAX_LOAD_FACTOR)) {
 		D_ASSERT(IsPowerOfTwo(capacity)); // Needed for bitmask logic
 		auto total_bytes = capacity * entry_stride;
 		// TODO should we use BPM? Or Arena?
@@ -112,10 +114,9 @@ public:
 	//! @param miss_sel holds the densely packed indices of `probe_keys` that did not
 	//!                 get a match in the THC
 	template <class T>
-	void ProbeAndMatch(const hash_t *hashes_dense, const T *probe_keys, idx_t key_offset, idx_t count,
-	                   const SelectionVector *row_sel, bool has_row_sel, data_ptr_t *result_ptrs,
-	                   SelectionVector &match_sel, idx_t &match_count, SelectionVector &miss_sel,
-	                   idx_t &miss_count) const {
+	void ProbeAndMatch(const hash_t *hashes_dense, const T *probe_keys, idx_t count, const SelectionVector *row_sel,
+	                   bool has_row_sel, data_ptr_t *result_ptrs, SelectionVector &match_sel, idx_t &match_count,
+	                   SelectionVector &miss_sel, idx_t &miss_count) const {
 		static constexpr idx_t SLOT_PREFETCH_DIST = 16;
 
 		match_count = 0;
@@ -147,7 +148,7 @@ public:
 				}
 				if (stored_hash == probe_hash) {
 					auto row_ptr = GetRowPtr(entry_ptr);
-					auto cache_key = Load<T>(row_ptr + key_offset);
+					auto cache_key = Load<T>(row_ptr + key_offset_in_row);
 					if (cache_key == probe_key) {
 						result_ptrs[row_index] = row_ptr;
 						match_sel.set_index(match_count++, row_index);
@@ -284,6 +285,7 @@ private:
 	idx_t capacity; // Number of entries the THC can fit
 	idx_t bitmask;
 	idx_t row_size;
+	idx_t key_offset_in_row;
 	idx_t row_copy_offset;
 	idx_t entry_stride;
 	idx_t max_fill; //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
