@@ -111,7 +111,7 @@ public:
 		}
 	}
 
-	//! Looks up based on tag and key in a single phase.
+	//! Looks up based on tag and key (in a single phase).
 	//! Returns true matches only (no false positives like ProbeByHash).
 	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	//! @param miss_sel holds the densely packed indices of `probe_keys` that did not
