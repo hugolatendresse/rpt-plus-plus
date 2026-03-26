@@ -1407,18 +1407,17 @@ void JoinHashTable::InitializeTieredHashCache() {
 		}
 	}
 
-	// THC stores one data_collection row per cache entry, including the next_pointer
-	// at the end of the row that acts as a chain pointer on the build side.
-	// It's found at pointer_offset on the build side and enables AdvancePointers to follow chains.
-	// Cache hits in THC completely bypass data_collection for key matching
-	// and payload gathering (GatherResult), but only for the first key match.
-	// For chain following (in case there are duplicate keys), need to go to data_collection.
-	// TODO consts below are hacks - generalize!!!
-	const idx_t data_collection_row_size =
-	    pointer_offset + sizeof(data_ptr_t);                    // TODO might be duplicative of logic in FashHashCache
-	const idx_t row_copy_offset = 0;                            // TODO hack?
-	tiered_hash_cache_key_offset = layout_ptr->GetOffsets()[0]; // key after validity bytes // TODO this is a hack!!!
-	const idx_t cache_capacity = TieredHashCache::ComputeCapacity(data_collection_row_size, thc_budget_bytes);
+	const idx_t data_collection_row_size = pointer_offset + sizeof(data_ptr_t);
+	const idx_t row_copy_offset = 0;
+	tiered_hash_cache_key_offset = layout_ptr->GetOffsets()[0];
+
+	idx_t key_size = 0;
+	for (const auto &type : equality_types) {
+		key_size += GetTypeIdSize(type.InternalType());
+	}
+
+	const idx_t cache_capacity =
+	    TieredHashCache::ComputeCapacity(data_collection_row_size, key_size, thc_budget_bytes);
 
 	// ---------------------------------------------------------------
 	// Coverage ratio check: skip THC if it can only cache a tiny
@@ -1447,16 +1446,17 @@ void JoinHashTable::InitializeTieredHashCache() {
 		return;
 	}
 
-	const auto entry_stride = (sizeof(TieredHashCache::tag_t) + data_collection_row_size + 7) & ~idx_t(7);
+	const auto row_stride = (data_collection_row_size + 7) & ~idx_t(7);
+	const auto entry_stride = sizeof(TieredHashCache::tag_t) + row_stride;
 	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Instantiating THC (cache_capacity=%lu, row_size=%lu, "
-	          "key_offset=%lu, row_copy_offset=%lu, "
-	          "coverage=%.2f%%, tuple_size=%lu, pointer_offset=%lu, entry_stride=%lu, total=%.1f MiB)\n",
-	          (unsigned long)cache_capacity, (unsigned long)data_collection_row_size,
-	          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)row_copy_offset,
-	          coverage_ratio * 100.0, (unsigned long)tuple_size, (unsigned long)pointer_offset,
-	          (unsigned long)entry_stride, (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
-	tiered_hash_cache =
-	    make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size, tiered_hash_cache_key_offset, row_copy_offset);
+	          "key_size=%lu, row_copy_offset=%lu, "
+	          "coverage=%.2f%%, tuple_size=%lu, pointer_offset=%lu, bytes_per_entry=%lu, total=%.1f MiB)\n",
+	          (unsigned long)cache_capacity, (unsigned long)data_collection_row_size, (unsigned long)key_size,
+	          (unsigned long)row_copy_offset, coverage_ratio * 100.0, (unsigned long)tuple_size,
+	          (unsigned long)pointer_offset, (unsigned long)entry_stride,
+	          (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
+	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size, key_size,
+	                                               tiered_hash_cache_key_offset, row_copy_offset);
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,
