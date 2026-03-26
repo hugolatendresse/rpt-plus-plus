@@ -478,7 +478,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 
 	bool used_probe_and_match = false;
 	if (equality_types.size() == 1 && equality_types[0].IsIntegral()) {
-		ScopedHashJoinTimer tiered_hash_cache_timer(state.tiered_hash_cache_time_ns);
+		ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 		keys.data[0].Flatten(keys.size());
         
 		// This switch statement populates `match_sel` and `state.cache_miss_sel` with indexes of keys that
@@ -555,7 +555,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		idx_t cache_candidates_count = 0;
 
 		{
-			ScopedHashJoinTimer tiered_hash_cache_timer(state.tiered_hash_cache_time_ns);
+			ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 			tiered_hash_cache->ProbeByHash(hashes_dense, count, sel, has_sel, state.cache_candidates_sel,
 			                               cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
 			                               state.cache_miss_sel, cache_miss_count);
@@ -565,7 +565,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 			idx_t cache_no_match_count = 0;
 			idx_t cache_match_count;
 			{
-				ScopedHashJoinTimer tiered_hash_cache_timer(state.tiered_hash_cache_time_ns);
+				ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 				cache_match_count = row_matcher_build.Match(
 				    keys, key_state.vector_data, state.cache_candidates_sel, cache_candidates_count, *layout_ptr,
 				    state.cache_rhs_row_locations, &state.keys_no_match_sel, cache_no_match_count);
