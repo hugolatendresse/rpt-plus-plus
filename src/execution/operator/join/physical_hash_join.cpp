@@ -31,7 +31,9 @@ namespace duckdb {
 static InsertionOrderPreservingMap<string>
 GetHashJoinTimingInfo(const uint64_t build_ns, const uint64_t probe_ns, const uint64_t execute_probe_ns,
                       const uint64_t external_probe_ns, const uint64_t execute_scan_next_ns,
-                      const uint64_t probe_for_pointers_ns, const uint64_t match_ns, const uint64_t tiered_hash_cache_ns) {
+                      const uint64_t probe_for_pointers_ns, const uint64_t match_ns,
+                      const uint64_t tiered_hash_cache_ns, const uint64_t thc_collect_ns,
+                      const uint64_t thc_insert_ns) {
 	InsertionOrderPreservingMap<string> result;
 	result["Build Time"] = StringUtil::Format("%.3f ms", static_cast<double>(build_ns) / 1000000.0);
 	result["Probe Time"] = StringUtil::Format("%.3f ms", static_cast<double>(probe_ns) / 1000000.0);
@@ -42,6 +44,8 @@ GetHashJoinTimingInfo(const uint64_t build_ns, const uint64_t probe_ns, const ui
 	result["Scan Structure Next Time (ExecuteInternal)"] =
 	    StringUtil::Format("%.3f ms", static_cast<double>(execute_scan_next_ns) / 1000000.0);
 	result["Tiered Hash Cache Time"] = StringUtil::Format("%.3f ms", static_cast<double>(tiered_hash_cache_ns) / 1000000.0);
+	result["THC Collect Time"] = StringUtil::Format("%.3f ms", static_cast<double>(thc_collect_ns) / 1000000.0);
+	result["THC Insert Time"] = StringUtil::Format("%.3f ms", static_cast<double>(thc_insert_ns) / 1000000.0);
 	result["ProbeForPointers Time"] =
 	    StringUtil::Format("%.3f ms", static_cast<double>(probe_for_pointers_ns) / 1000000.0);
 	result["Match Time"] = StringUtil::Format("%.3f ms", static_cast<double>(match_ns) / 1000000.0);
@@ -236,6 +240,10 @@ public:
 	//! Does NOT include the population of THC, nor THC misses
 	//! It is a subset of execute_probe_time
 	atomic<uint64_t> tiered_hash_cache_time_ns {0};
+	//! Total time spent in the COLLECT phase (probing + collecting entries, excluding insert)
+	atomic<uint64_t> thc_collect_time_ns {0};
+	//! Total time spent inserting collected entries into the THC
+	atomic<uint64_t> thc_insert_time_ns {0};
 	//! Total time spent in JoinHashTable::ProbeForPointers
 	atomic<uint64_t> probe_for_pointers_time_ns {0};
 	//! Total time spent in RowMatcher::Match from GetRowPointersInternal
@@ -668,12 +676,14 @@ void HashJoinGlobalSinkState::EmitProbeTiming(ExecutionContext &context) const {
 	auto external_probe_ns = external_probe_time_ns.load(std::memory_order_relaxed);
 	auto execute_scan_next_ns = execute_scan_next_time_ns.load(std::memory_order_relaxed);
 	auto tiered_hash_cache_ns = tiered_hash_cache_time_ns.load(std::memory_order_relaxed);
+	auto thc_collect_ns = thc_collect_time_ns.load(std::memory_order_relaxed);
+	auto thc_insert_ns = thc_insert_time_ns.load(std::memory_order_relaxed);
 	auto probe_for_pointers_ns = probe_for_pointers_time_ns.load(std::memory_order_relaxed);
 	auto match_ns = match_time_ns.load(std::memory_order_relaxed);
 	auto probe_ns = execute_probe_ns + external_probe_ns;
 	context.thread.profiler.AddExtraInfo(GetHashJoinTimingInfo(build_ns, probe_ns, execute_probe_ns, external_probe_ns,
 	                                                           execute_scan_next_ns, probe_for_pointers_ns, match_ns,
-	                                                           tiered_hash_cache_ns));
+	                                                           tiered_hash_cache_ns, thc_collect_ns, thc_insert_ns));
 }
 
 class HashJoinRepartitionTask : public ExecutorTask {
@@ -1006,6 +1016,8 @@ public:
 		probe_state.probe_for_pointers_time_ns = &probe_for_pointers_time_ns;
 		probe_state.match_time_ns = &match_time_ns;
 		probe_state.tiered_hash_cache_time_ns = &tiered_hash_cache_time_ns;
+		probe_state.thc_collect_time_ns = &thc_collect_time_ns;
+		probe_state.thc_insert_time_ns = &thc_insert_time_ns;
 	}
 
 	~HashJoinOperatorState() override {
@@ -1032,6 +1044,8 @@ public:
 	uint64_t execute_probe_time_ns = 0;
 	uint64_t execute_scan_next_time_ns = 0;
 	uint64_t tiered_hash_cache_time_ns = 0;
+	uint64_t thc_collect_time_ns = 0;
+	uint64_t thc_insert_time_ns = 0;
 	uint64_t probe_for_pointers_time_ns = 0;
 	uint64_t match_time_ns = 0;
 
@@ -1043,6 +1057,8 @@ public:
 		sink.execute_probe_time_ns.fetch_add(execute_probe_time_ns, std::memory_order_relaxed);
 		sink.execute_scan_next_time_ns.fetch_add(execute_scan_next_time_ns, std::memory_order_relaxed);
 		sink.tiered_hash_cache_time_ns.fetch_add(tiered_hash_cache_time_ns, std::memory_order_relaxed);
+		sink.thc_collect_time_ns.fetch_add(thc_collect_time_ns, std::memory_order_relaxed);
+		sink.thc_insert_time_ns.fetch_add(thc_insert_time_ns, std::memory_order_relaxed);
 		sink.probe_for_pointers_time_ns.fetch_add(probe_for_pointers_time_ns, std::memory_order_relaxed);
 		sink.match_time_ns.fetch_add(match_time_ns, std::memory_order_relaxed);
 		timings_flushed = true;
@@ -1263,6 +1279,8 @@ public:
 	unique_ptr<JoinHTScanState> full_outer_scan_state;
 	uint64_t external_probe_time_ns = 0;
 	uint64_t tiered_hash_cache_time_ns = 0;
+	uint64_t thc_collect_time_ns = 0;
+	uint64_t thc_insert_time_ns = 0;
 	uint64_t probe_for_pointers_time_ns = 0;
 	uint64_t match_time_ns = 0;
 
@@ -1462,6 +1480,8 @@ HashJoinLocalSourceState::HashJoinLocalSourceState(const PhysicalHashJoin &op, H
 	probe_state.probe_for_pointers_time_ns = &probe_for_pointers_time_ns;
 	probe_state.match_time_ns = &match_time_ns;
 	probe_state.tiered_hash_cache_time_ns = &tiered_hash_cache_time_ns;
+	probe_state.thc_collect_time_ns = &thc_collect_time_ns;
+	probe_state.thc_insert_time_ns = &thc_insert_time_ns;
 
 	for (auto &cond : op.conditions) {
 		lhs_join_key_executor.AddExpression(*cond.left);
@@ -1478,6 +1498,8 @@ void HashJoinLocalSourceState::FlushLocalTimings() {
 	}
 	sink.external_probe_time_ns.fetch_add(external_probe_time_ns, std::memory_order_relaxed);
 	sink.tiered_hash_cache_time_ns.fetch_add(tiered_hash_cache_time_ns, std::memory_order_relaxed);
+	sink.thc_collect_time_ns.fetch_add(thc_collect_time_ns, std::memory_order_relaxed);
+	sink.thc_insert_time_ns.fetch_add(thc_insert_time_ns, std::memory_order_relaxed);
 	sink.probe_for_pointers_time_ns.fetch_add(probe_for_pointers_time_ns, std::memory_order_relaxed);
 	sink.match_time_ns.fetch_add(match_time_ns, std::memory_order_relaxed);
 	timings_flushed = true;

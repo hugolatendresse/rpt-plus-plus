@@ -207,6 +207,8 @@ public:
 		uint64_t *probe_for_pointers_time_ns = nullptr;
 		uint64_t *match_time_ns = nullptr;
 		uint64_t *tiered_hash_cache_time_ns = nullptr;
+		uint64_t *thc_collect_time_ns = nullptr;
+		uint64_t *thc_insert_time_ns = nullptr;
 
 		//! Per-thread vectors for THC probing
 		Vector cache_rhs_row_locations;

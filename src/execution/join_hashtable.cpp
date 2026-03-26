@@ -715,6 +715,9 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// =================================================================
 	if (state.tiered_hash_cache_phase == TieredHashCachePhase::COLLECT) {
 
+		{
+		ScopedHashJoinTimer collect_timer(state.thc_collect_time_ns);
+
 		if (state.cycle_count == 0) {
 			// ----------------------------------------------------------
 			// First collect phase (cycle 0): THC is empty, use regular DuckDB probe.
@@ -813,6 +816,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			}
 		}
 
+		} // end collect_timer scope for THC collect time
+
 		// Track collection overhead
 		state.probe_rows_in_phase += input_count;
 		state.total_collect_phase_rows += input_count;
@@ -823,6 +828,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		// to READ_ONLY with the appropriate exponential backoff target.
 		// ----------------------------------------------------------
 		if (state.probe_rows_in_phase >= thc_collect_phase_rows) {
+			ScopedHashJoinTimer insert_timer(state.thc_insert_time_ns);
+			
 			// Insert all collected entries into the shared THC.
 			// The THC's CAS-based Insert is thread-safe and silently
 			// drops entries if the table is full or has hash collisions.
