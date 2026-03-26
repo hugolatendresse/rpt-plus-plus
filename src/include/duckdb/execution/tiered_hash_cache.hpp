@@ -16,9 +16,17 @@ namespace duckdb {
 //!   [Tag₀|Row₀] [Tag₁|Row₁] [Tag₂|Row₂] ...
 //!
 //! Each entry is a 16-bit hash tag followed by the full data_collection row.
-//! Using a 16-bit tag instead of a 64-bit hash shrinks each entry (e.g.
-//! from 40 to 32 bytes for a 25-byte row), which can double THC capacity
-//! within the same memory budget.
+//! Using a 16-bit tag instead of a 64-bit hash shrinks each entry.
+//!
+//! If the build side has duplicate keys, only the first of the chain will be
+//! copied to the THC, and others will need to be accessed from data_collection.
+//! That is why we copy the next_pointer as part of the data_collection row.
+//! Row chains only happen for identical keys in data_collection.
+//!
+//! Having unique keys guarantees no chaining (even upon 64-bit hash collisions).
+//! However, is there are hash collisions from different keys on the build side,
+//! only one entry will be added to the THC, and others will fall back to regular
+//! probing.
 //!
 //! ProbeAndMatch uses a two-phase algorithm:
 //!   Phase 1: scan entries for tag matches (tight comparison loop).
@@ -32,15 +40,18 @@ public:
 	static constexpr idx_t ACTIVATION_THRESHOLD = 10ULL * 1024 * 1024 / sizeof(uint64_t);
 	static constexpr double MAX_LOAD_FACTOR = 0.9;
 
-	//! @param capacity_p        number of slots (must be power of 2)
-	//! @param row_size_p        bytes per data_collection row to copy
+	//! @param capacity_p is the number of slots to create (must be a power of 2)
+	//! @param row_size_p is the number of bytes in each row of data_collection.
+	//!            This is smaller than the entry size of each row of our
+	//!            THC since the latter also includes a hash
 	//! @param key_offset_in_row_p byte offset of key within the row (after validity bytes)
-	//! @param row_copy_offset_p bytes to skip at the start of each source row
+	//! @param row_copy_offset_p how many bytes to skip over in each data_collection row before starting copying into
+	//! the fast cache
 	TieredHashCache(idx_t capacity_p, idx_t row_size_p, idx_t key_offset_in_row_p, idx_t row_copy_offset_p = 0)
-	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p),
-	      key_offset_in_row(key_offset_in_row_p), row_copy_offset(row_copy_offset_p),
-	      entry_stride(ComputeEntryStride(row_size_p)), max_fill(static_cast<idx_t>(capacity_p * MAX_LOAD_FACTOR)) {
-		D_ASSERT(IsPowerOfTwo(capacity));
+	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), key_offset_in_row(key_offset_in_row_p),
+	      row_copy_offset(row_copy_offset_p), entry_stride(ComputeEntryStride(row_size_p)),
+	      max_fill(static_cast<idx_t>(capacity_p * MAX_LOAD_FACTOR)) {
+		D_ASSERT(IsPowerOfTwo(capacity)); // Needed for bitmask logic
 		auto total_bytes = capacity * entry_stride;
 		data = make_unsafe_uniq_array_uninitialized<data_t>(total_bytes);
 		memset(data.get(), 0, total_bytes);
@@ -97,10 +108,9 @@ public:
 	//! Single-phase tag + key probe on the interleaved layout.
 	//! Tag and key are co-located in the same entry (same cache line).
 	template <class T>
-	void ProbeAndMatch(const hash_t *hashes_dense, const T *probe_keys, idx_t count,
-	                   const SelectionVector *row_sel, bool has_row_sel, data_ptr_t *result_ptrs,
-	                   SelectionVector &match_sel, idx_t &match_count, SelectionVector &miss_sel,
-	                   idx_t &miss_count) const {
+	void ProbeAndMatch(const hash_t *hashes_dense, const T *probe_keys, idx_t count, const SelectionVector *row_sel,
+	                   bool has_row_sel, data_ptr_t *result_ptrs, SelectionVector &match_sel, idx_t &match_count,
+	                   SelectionVector &miss_sel, idx_t &miss_count) const {
 		static constexpr idx_t SLOT_PREFETCH_DIST = 16;
 
 		match_count = 0;

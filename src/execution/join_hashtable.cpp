@@ -480,7 +480,9 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 	if (equality_types.size() == 1 && equality_types[0].IsIntegral()) {
 		ScopedHashJoinTimer tiered_hash_cache_timer(state.tiered_hash_cache_time_ns);
 		keys.data[0].Flatten(keys.size());
-
+        
+		// This switch statement populates `match_sel` and `state.cache_miss_sel` with indexes of keys that
+        // found and didn't find a match, respectively.
 		switch (equality_types[0].InternalType()) {
 		case PhysicalType::INT8: {
 			auto probe_keys = FlatVector::GetData<int8_t>(keys.data[0]);
@@ -2413,3 +2415,4 @@ void ProbeSpill::PrepareNextProbe() {
 }
 
 } // namespace duckdb
+
