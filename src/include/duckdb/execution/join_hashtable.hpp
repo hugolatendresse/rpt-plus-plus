@@ -206,7 +206,7 @@ public:
 		SelectionVector non_empty_sel;
 		uint64_t *probe_for_pointers_time_ns = nullptr;
 		uint64_t *match_time_ns = nullptr;
-		uint64_t *tiered_hash_cache_time_ns = nullptr;
+		uint64_t *thc_probe_time_ns = nullptr;
 		uint64_t *thc_collect_time_ns = nullptr;
 		uint64_t *thc_insert_time_ns = nullptr;
 
