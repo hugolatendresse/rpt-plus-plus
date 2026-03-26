@@ -13,10 +13,10 @@ namespace duckdb {
 
 //! TieredHashCache stores entries in a single interleaved array:
 //!
-//!   [Tag₀|Row₀] [Tag₁|Row₁] [Tag₂|Row₂] ...
-//!
-//! Each entry is a 16-bit hash tag followed by the full data_collection row.
+//! Each entry stores: [Tag (2 bytes)] [full_row from data_collection]
 //! Using a 16-bit tag instead of a 64-bit hash shrinks each entry.
+//! The full_row is a copy of the entire data_collection row, so cache hits
+//! bypass data_collection access for both key and payload
 //!
 //! If the build side has duplicate keys, only the first of the chain will be
 //! copied to the THC, and others will need to be accessed from data_collection.
@@ -37,7 +37,9 @@ class TieredHashCache {
 public:
 	using tag_t = uint16_t;
 
+	//! Only create the THC if the global hash table has at least that capacity
 	static constexpr idx_t ACTIVATION_THRESHOLD = 10ULL * 1024 * 1024 / sizeof(uint64_t);
+
 	static constexpr double MAX_LOAD_FACTOR = 0.9;
 
 	//! @param capacity_p is the number of slots to create (must be a power of 2)
@@ -57,8 +59,12 @@ public:
 		memset(data.get(), 0, total_bytes);
 	}
 
-	//! Hash-only probe using 16-bit tags. Returns a pointer to the cached row data
-	//! for tag matches. False positives are resolved by the caller via RowMatcher.
+	//! Find the cache entry whose tag matches an input hash.
+	//! Only compares 16-bit tags, which can lead to a false positive.
+	//! Returns a pointer to the cached row data (usable by RowMatcher and GatherResult).
+	//! On miss, doesn't go to data_collection, but records the row in cache_miss_sel (and cache_miss_count)
+	//! @param cache_miss_sel holds the densely packed indices of `hashes_dense` that did not
+	//!                       get a match in the THC.
 	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, bool has_row_sel,
 	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
 	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations, SelectionVector &cache_miss_sel,
@@ -105,8 +111,11 @@ public:
 		}
 	}
 
-	//! Single-phase tag + key probe on the interleaved layout.
-	//! Tag and key are co-located in the same entry (same cache line).
+	//! Looks up based on tag and key in a single phase.
+	//! Returns true matches only (no false positives like ProbeByHash).
+	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
+	//! @param miss_sel holds the densely packed indices of `probe_keys` that did not
+	//!                 get a match in the THC
 	template <class T>
 	void ProbeAndMatch(const hash_t *hashes_dense, const T *probe_keys, idx_t count, const SelectionVector *row_sel,
 	                   bool has_row_sel, data_ptr_t *result_ptrs, SelectionVector &match_sel, idx_t &match_count,
@@ -135,6 +144,7 @@ public:
 				auto entry_ptr = GetEntryPtr(slot);
 				const auto stored_tag = LoadTag(entry_ptr);
 				if (stored_tag == 0) {
+					// THC does not have a match
 					break;
 				}
 				if (stored_tag == probe_tag) {
@@ -168,13 +178,15 @@ public:
 			auto entry_ptr = GetEntryPtr(slot);
 			auto tag_atomic = reinterpret_cast<std::atomic<tag_t> *>(entry_ptr);
 
-			tag_t expected = 0;
+			tag_t expected = 0; // We only insert if the current hash is null
+			// TODO double check the choice of CAS function and third argument below
 			if (tag_atomic->compare_exchange_strong(expected, tag, std::memory_order_acq_rel)) {
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
 				insert_new.fetch_add(1, std::memory_order_relaxed);
 				return true;
 			}
 			if (expected == tag) {
+				// Don't try linear probing if the hashes perfect match. TODO could try linear probing here too
 				insert_dup.fetch_add(1, std::memory_order_relaxed);
 				return false;
 			}
@@ -220,7 +232,13 @@ public:
 	}
 
 private:
+	// We store the tags but not pointers
+	// That allows faster linear probing
+	// Pointers are not needed since we are copying the whole payload (TODO for now?)
 	static constexpr idx_t HEADER_SIZE = sizeof(tag_t);
+
+	//! Safety cap for linear probing in ProbeAndMatch.
+	//! If we exceed this many probes we treat the lookup as a cache miss.
 	static constexpr idx_t MAX_PROBE_DISTANCE = 10;
 
 	static idx_t ComputeEntryStride(idx_t row_size) {
@@ -229,27 +247,31 @@ private:
 		return stride;
 	}
 
-	//! Extract upper 16 bits of the hash as a tag. Maps 0 → 1 (0 = empty slot).
+	//! Extract upper 16 bits of the hash as a tag.
+	//! Maps 0 to 1 since 0 means empty slot.
 	static inline tag_t ComputeTag(hash_t h) {
 		auto tag = static_cast<tag_t>(h >> 48);
 		return tag == 0 ? 1 : tag;
 	}
 
+	// Get a pointer to the `slot`th entry in the THC
 	inline data_ptr_t GetEntryPtr(idx_t slot) const {
 		return data.get() + slot * entry_stride;
 	}
 
+	// Get the tag stored in an entry
 	static inline tag_t LoadTag(const data_ptr_t entry_ptr) {
-		tag_t t;
-		memcpy(&t, entry_ptr, sizeof(tag_t));
-		return t;
+		tag_t h;
+		memcpy(&h, entry_ptr, sizeof(tag_t)); // TODO can probably do this without memcpy... just derefence the value?
+		                                      // or mem-compare? or something?
+		return h;
 	}
 
 	static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
 		return entry_ptr + HEADER_SIZE;
 	}
 
-	idx_t capacity;
+	idx_t capacity; // Number of entries the THC can fit
 	idx_t bitmask;
 	idx_t row_size;
 	idx_t key_offset_in_row;
