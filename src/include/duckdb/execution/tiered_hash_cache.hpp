@@ -6,6 +6,7 @@
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/types/selection_vector.hpp"
 
+#include <atomic>
 #include <cstring>
 
 namespace duckdb {
@@ -13,7 +14,8 @@ namespace duckdb {
 //! TieredHashCache is a hash table that caches recently
 //! matched probe entries to accelerate repeated hash join lookups.
 //!
-//! Each entry stores: [hash (8 bytes)] [full_row from data_collection]
+//! Each entry stores: [Tag (2 bytes)] [full_row from data_collection]
+//! Using a 16-bit tag instead of a 64-bit hash shrinks each entry.
 //! The full_row is a copy of the entire data_collection row, so cache hits
 //! bypass data_collection access for both key and payload
 //!
@@ -30,6 +32,8 @@ namespace duckdb {
 //! Thread safety is simply based on compare-and-swap (check if entry is empty)
 class TieredHashCache {
 public:
+	using tag_t = uint16_t;
+
 	//! Only create the THC if the global hash table has at least that capacity
 	static constexpr idx_t ACTIVATION_THRESHOLD = 10ULL * 1024 * 1024 / sizeof(uint64_t);
 
@@ -38,13 +42,13 @@ public:
 	//! pathological linear-probing chains (the extreme case being an infinite loop).
 	static constexpr double MAX_LOAD_FACTOR = 0.9;
 
-	//! @param capacity_p is the number of slots to create
+	//! @param capacity_p is the number of slots to create (must be a power of 2)
 	//! @param row_size_p is the number of bytes in each row of data_collection.
 	//!            This is smaller than the entry size of each row of our
 	//!            THC since the latter also includes a hash
 	//! @param key_offset_in_row_p byte offset of key within the row (after validity bytes)
-	//! row_copy_offset_p how many bytes to skip over in each data_collection row before starting copying into the fast
-	//! cache
+	//! @param row_copy_offset_p how many bytes to skip over in each data_collection row before starting copying into
+	//! the fast cache
 	TieredHashCache(idx_t capacity_p, idx_t row_size_p, idx_t key_offset_in_row_p, idx_t row_copy_offset_p = 0)
 	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), key_offset_in_row(key_offset_in_row_p),
 	      row_copy_offset(row_copy_offset_p), entry_stride(ComputeEntryStride(row_size_p)),
@@ -56,8 +60,8 @@ public:
 		memset(data.get(), 0, total_bytes);
 	}
 
-	//! Find the cache entry whose hash matches an input hash.
-	//! Only compares hashes, which can lead to a false positive.
+	//! Find the cache entry whose tag matches an input hash.
+	//! Only compares 16-bit tags, which can lead to a false positive.
 	//! Returns a pointer to the cached row data (usable by RowMatcher and GatherResult).
 	//! On miss, doesn't go to data_collection, but records the row in cache_miss_sel (and cache_miss_count)
 	//! @param cache_miss_sel holds the densely packed indices of `hashes_dense` that did not
@@ -82,17 +86,17 @@ public:
 			}
 
 			const auto row_index = has_row_sel ? row_sel->get_index(i) : i;
-			const auto probe_hash = hashes_dense[i];
-			auto slot = probe_hash & bitmask;
+			const auto probe_tag = ComputeTag(hashes_dense[i]);
+			auto slot = hashes_dense[i] & bitmask;
 
 			bool found = false;
 			for (idx_t probes = 0; probes < MAX_PROBE_DISTANCE; probes++) {
 				auto entry_ptr = GetEntryPtr(slot);
-				const auto stored_hash = LoadHash(entry_ptr);
-				if (stored_hash == 0) {
+				const auto stored_tag = LoadTag(entry_ptr);
+				if (stored_tag == 0) {
 					break;
 				}
-				if (stored_hash == probe_hash) {
+				if (stored_tag == probe_tag) {
 					auto row_ptr = GetRowPtr(entry_ptr);
 					cache_result_ptrs[row_index] = row_ptr;
 					cache_rhs_locations[row_index] = row_ptr;
@@ -108,7 +112,7 @@ public:
 		}
 	}
 
-	//! Looks up based on hash and key.
+	//! Looks up based on tag and key.
 	//! Returns true matches only (no false positives like ProbeByHash).
 	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	//! @param miss_sel holds the densely packed indices of `probe_keys` that did not
@@ -134,19 +138,19 @@ public:
 			}
 
 			const auto row_index = has_row_sel ? row_sel->get_index(i) : i;
-			const auto probe_hash = hashes_dense[i];
+			const auto probe_tag = ComputeTag(hashes_dense[i]);
 			const auto probe_key = probe_keys[row_index];
-			auto slot = probe_hash & bitmask;
+			auto slot = hashes_dense[i] & bitmask;
 
 			bool found = false;
 			for (idx_t probes = 0; probes < MAX_PROBE_DISTANCE; probes++) {
 				auto entry_ptr = GetEntryPtr(slot);
-				const auto stored_hash = LoadHash(entry_ptr);
-				if (stored_hash == 0) {
+				const auto stored_tag = LoadTag(entry_ptr);
+				if (stored_tag == 0) {
 					// THC does not have a match
 					break;
 				}
-				if (stored_hash == probe_hash) {
+				if (stored_tag == probe_tag) {
 					auto row_ptr = GetRowPtr(entry_ptr);
 					auto cache_key = Load<T>(row_ptr + key_offset_in_row);
 					if (cache_key == probe_key) {
@@ -182,19 +186,20 @@ public:
 			return false; // TODO is there a way to communicate that to JoinHashTable to avoid having to try to insert
 			              // thousands of additional times?
 		}
+		const auto tag = ComputeTag(hash);
 		auto slot = hash & bitmask;
 		for (idx_t probes = 0; probes < MAX_PROBE_DISTANCE; probes++) {
 			auto entry_ptr = GetEntryPtr(slot);
-			auto hash_ptr = reinterpret_cast<std::atomic<hash_t> *>(entry_ptr);
+			auto tag_atomic = reinterpret_cast<std::atomic<tag_t> *>(entry_ptr);
 
-			hash_t expected = 0; // We only insert if the current hash is null
+			tag_t expected = 0; // We only insert if the current hash is null
 			// TODO double check the choice of CAS function and third argument below
-			if (hash_ptr->compare_exchange_strong(expected, hash, std::memory_order_acq_rel)) {
+			if (tag_atomic->compare_exchange_strong(expected, hash, std::memory_order_acq_rel)) {
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
 				insert_new.fetch_add(1, std::memory_order_relaxed);
 				return true;
 			}
-			if (expected == hash) {
+			if (expected == tag) {
 				// Don't try linear probing if the hashes perfect match. TODO could try linear probing here too
 				insert_dup.fetch_add(1, std::memory_order_relaxed);
 				return false;
@@ -222,7 +227,7 @@ public:
 	idx_t CountOccupiedEntries() const {
 		idx_t count = 0;
 		for (idx_t s = 0; s < capacity; s++) {
-			if (LoadHash(GetEntryPtr(s)) != 0) {
+			if (LoadTag(GetEntryPtr(s)) != 0) {
 				count++;
 			}
 		}
@@ -249,10 +254,14 @@ public:
 	}
 
 private:
-	// We store the hashes but not pointers
-	// Hashes allow faster linear probing
-	// Pointers are not needed since are copying the whole payload (TODO for now?)
-	static constexpr idx_t HEADER_SIZE = sizeof(hash_t);
+	// We store the tags but not pointers
+	// That allows faster linear probing
+	// Pointers are not needed since we are copying the whole payload (TODO for now?)
+	static constexpr idx_t HEADER_SIZE = sizeof(tag_t);
+
+	//! Safety cap for linear probing in ProbeAndMatch.
+	//! If we exceed this many probes we treat the lookup as a cache miss.
+	static constexpr idx_t MAX_PROBE_DISTANCE = 10;
 
 	static idx_t ComputeEntryStride(idx_t row_size) {
 		idx_t stride = (HEADER_SIZE + row_size + 7) & ~idx_t(7);
@@ -260,16 +269,23 @@ private:
 		return stride;
 	}
 
+	//! Extract upper 16 bits of the hash as a tag.
+	//! Maps 0 to 1 since 0 means empty slot.
+	static inline tag_t ComputeTag(hash_t h) {
+		auto tag = static_cast<tag_t>(h >> 48);
+		return tag == 0 ? 1 : tag;
+	}
+
 	// Get a pointer to the `slot`th entry in the THC
 	inline data_ptr_t GetEntryPtr(idx_t slot) const {
 		return data.get() + slot * entry_stride;
 	}
 
-	// Get the hash stored in an entry
-	static inline hash_t LoadHash(const data_ptr_t entry_ptr) {
-		hash_t h;
-		memcpy(&h, entry_ptr, sizeof(hash_t)); // TODO can probably do this without memcpy... just derefence the value?
-		                                       // or mem-compare? or something?
+	// Get the tag stored in an entry
+	static inline tag_t LoadTag(const data_ptr_t entry_ptr) {
+		tag_t h;
+		memcpy(&h, entry_ptr, sizeof(tag_t)); // TODO can probably do this without memcpy... just derefence the value?
+		                                      // or mem-compare? or something?
 		return h;
 	}
 
@@ -277,10 +293,6 @@ private:
 	static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
 		return entry_ptr + HEADER_SIZE;
 	}
-
-	//! Safety cap for linear probing in ProbeAndMatch.
-	//! If we exceed this many probes we treat the lookup as a cache miss.
-	static constexpr idx_t MAX_PROBE_DISTANCE = 10;
 
 	idx_t capacity; // Number of entries the THC can fit
 	idx_t bitmask;

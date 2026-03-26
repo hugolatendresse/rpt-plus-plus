@@ -1447,7 +1447,7 @@ void JoinHashTable::InitializeTieredHashCache() {
 		return;
 	}
 
-	const auto entry_stride = (sizeof(hash_t) + data_collection_row_size + 7) & ~idx_t(7);
+	const auto entry_stride = (sizeof(TieredHashCache::tag_t) + data_collection_row_size + 7) & ~idx_t(7);
 	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Instantiating THC (cache_capacity=%lu, row_size=%lu, "
 	          "key_offset=%lu, row_copy_offset=%lu, "
 	          "coverage=%.2f%%, tuple_size=%lu, pointer_offset=%lu, entry_stride=%lu, total=%.1f MiB)\n",
