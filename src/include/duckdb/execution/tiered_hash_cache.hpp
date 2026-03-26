@@ -20,6 +20,16 @@ namespace duckdb {
 //!                          (32 tags per 64-byte cache line)
 //!   row_data[capacity]   — full data_collection row copies
 //!
+//! If the build side has duplicate keys, only the first of the chain will be
+//! copied to the THC, and others will need to be accessed from data_collection.
+//! That is why we copy the next_pointer as part of the data_collection row.
+//! Row chains only happen for identical keys in data_collection.
+//!
+//! Having unique keys guarantees no chaining (even upon 64-bit hash collisions).
+//! However, is there are hash collisions from different keys on the build side,
+//! only one entry will be added to the THC, and others will fall back to regular
+//! probing.
+//!
 //! ProbeAndMatch uses a two-phase algorithm:
 //!   Phase 1: scan tag_data only (pure sequential, very cache-friendly)
 //!   Phase 2: batch-prefetch row_data and compare keys for tag matches
@@ -27,7 +37,6 @@ namespace duckdb {
 //! Thread safety is based on compare-and-swap on the tag field.
 class TieredHashCache {
 public:
-
 	using tag_t = uint16_t;
 
 	//! Only create the THC if the global hash table has at least that capacity
@@ -38,6 +47,13 @@ public:
 	//! pathological linear-probing chains (the extreme case being an infinite loop).
 	static constexpr double MAX_LOAD_FACTOR = 0.9;
 
+	//! @param capacity_p is the number of slots to create (must be a power of 2)
+	//! @param row_size_p is the number of bytes in each row of data_collection.
+	//!            This is smaller than the entry size of each row of our
+	//!            THC since the latter also includes a hash
+	//! @param key_offset_in_row_p byte offset of key within the row (after validity bytes)
+	//! @param row_copy_offset_p how many bytes to skip over in each data_collection row before starting copying into
+	//! the fast cache
 	TieredHashCache(idx_t capacity_p, idx_t row_size_p, idx_t key_size_p, idx_t key_offset_in_row_p,
 	                idx_t row_copy_offset_p = 0)
 	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p),
@@ -53,8 +69,8 @@ public:
 		memset(row_data.get(), 0, capacity * row_stride);
 	}
 
-	//! Find the cache entry whose hash matches an input hash.
-	//! Only compares hashes, which can lead to a false positive.
+	//! Find the cache entry whose tag matches an input hash.
+	//! Only compares 16-bit tags, which can lead to a false positive.
 	//! Returns a pointer to the cached row data (usable by RowMatcher and GatherResult).
 	//! On miss, doesn't go to data_collection, but records the row in cache_miss_sel (and cache_miss_count)
 	//! @param cache_miss_sel holds the densely packed indices of `hashes_dense` that did not
@@ -244,8 +260,23 @@ public:
 	}
 
 private:
+	// We store the tags but not pointers
+	// That allows faster linear probing
+	// Pointers are not needed since we are copying the whole payload (TODO for now?)
+	static constexpr idx_t HEADER_SIZE = sizeof(tag_t);
+
+	//! Safety cap for linear probing in ProbeAndMatch.
+	//! If we exceed this many probes we treat the lookup as a cache miss.
 	static constexpr idx_t MAX_PROBE_DISTANCE = 10;
 
+	static idx_t ComputeEntryStride(idx_t row_size) {
+		idx_t stride = (HEADER_SIZE + row_size + 7) & ~idx_t(7);
+		DEBUG_LOG("[THC] Stride is %lu bytes\n", stride);
+		return stride;
+	}
+
+	//! Extract upper 16 bits of the hash as a tag.
+	//! Maps 0 to 1 since 0 means empty slot.
 	static inline tag_t ComputeTag(hash_t h) {
 		auto tag = static_cast<tag_t>(h >> 48);
 		return tag == 0 ? 1 : tag;
