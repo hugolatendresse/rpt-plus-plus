@@ -639,7 +639,7 @@ struct ThcCollectBudgetFractionSetting {
 
 struct ThcMissThresholdSetting {
 	using RETURN_TYPE = double;
-	static constexpr const char *Name = "thc_miss_threshold";
+	static constexpr const char *Name = "thc_miss_below_which_skip_collect";
 	static constexpr const char *Description = "THC miss rate threshold below which collect phases are skipped (default: 0.10)";
 	static constexpr const char *InputType = "DOUBLE";
 	static void SetLocal(ClientContext &context, const Value &parameter);
