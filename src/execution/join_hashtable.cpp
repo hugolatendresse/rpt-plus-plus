@@ -9,6 +9,7 @@
 #include "duckdb/execution/scoped_hash_join_timer.hpp"
 #include "duckdb/main/client_config.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 
 namespace duckdb {
@@ -481,68 +482,50 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 		keys.data[0].Flatten(keys.size());
         
-		// This switch statement populates `match_sel` and `state.cache_miss_sel` with indexes of keys that
-        // found and didn't find a match, respectively.
+		// Dispatch ProbeAndMatch with compile-time HAS_ROW_SEL to eliminate the
+		// per-iteration branch on has_sel inside the hot probe loop.
+#define THC_PROBE_DISPATCH(T)                                                                                          \
+	do {                                                                                                               \
+		auto probe_keys = FlatVector::GetData<T>(keys.data[0]);                                                        \
+		if (has_sel) {                                                                                                  \
+			tiered_hash_cache->ProbeAndMatch<T, true>(hashes_dense, probe_keys, count, sel, pointers_result,           \
+			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count);  \
+		} else {                                                                                                        \
+			tiered_hash_cache->ProbeAndMatch<T, false>(hashes_dense, probe_keys, count, sel, pointers_result,          \
+			                                           match_sel, match_count, state.cache_miss_sel, cache_miss_count); \
+		}                                                                                                               \
+		used_probe_and_match = true;                                                                                    \
+	} while (0)
+
 		switch (equality_types[0].InternalType()) {
-		case PhysicalType::INT8: {
-			auto probe_keys = FlatVector::GetData<int8_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<int8_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
-			                                         match_sel, match_count, state.cache_miss_sel, cache_miss_count);
-			used_probe_and_match = true;
+		case PhysicalType::INT8:
+			THC_PROBE_DISPATCH(int8_t);
 			break;
-		}
-		case PhysicalType::INT16: {
-			auto probe_keys = FlatVector::GetData<int16_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<int16_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
-			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count);
-			used_probe_and_match = true;
+		case PhysicalType::INT16:
+			THC_PROBE_DISPATCH(int16_t);
 			break;
-		}
-		case PhysicalType::INT32: {
-			auto probe_keys = FlatVector::GetData<int32_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<int32_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
-			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count);
-			used_probe_and_match = true;
+		case PhysicalType::INT32:
+			THC_PROBE_DISPATCH(int32_t);
 			break;
-		}
-		case PhysicalType::INT64: {
-			auto probe_keys = FlatVector::GetData<int64_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<int64_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
-			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count);
-			used_probe_and_match = true;
+		case PhysicalType::INT64:
+			THC_PROBE_DISPATCH(int64_t);
 			break;
-		}
-		case PhysicalType::UINT8: {
-			auto probe_keys = FlatVector::GetData<uint8_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<uint8_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
-			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count);
-			used_probe_and_match = true;
+		case PhysicalType::UINT8:
+			THC_PROBE_DISPATCH(uint8_t);
 			break;
-		}
-		case PhysicalType::UINT16: {
-			auto probe_keys = FlatVector::GetData<uint16_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<uint16_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
-			                                           match_sel, match_count, state.cache_miss_sel, cache_miss_count);
-			used_probe_and_match = true;
+		case PhysicalType::UINT16:
+			THC_PROBE_DISPATCH(uint16_t);
 			break;
-		}
-		case PhysicalType::UINT32: {
-			auto probe_keys = FlatVector::GetData<uint32_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<uint32_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
-			                                           match_sel, match_count, state.cache_miss_sel, cache_miss_count);
-			used_probe_and_match = true;
+		case PhysicalType::UINT32:
+			THC_PROBE_DISPATCH(uint32_t);
 			break;
-		}
-		case PhysicalType::UINT64: {
-			auto probe_keys = FlatVector::GetData<uint64_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<uint64_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
-			                                           match_sel, match_count, state.cache_miss_sel, cache_miss_count);
-			used_probe_and_match = true;
+		case PhysicalType::UINT64:
+			THC_PROBE_DISPATCH(uint64_t);
 			break;
-		}
 		default:
 			break;
 		}
+#undef THC_PROBE_DISPATCH
 	}
 
 	// ---- Step 3: Fallback for complex keys (ProbeByHash path) ----
@@ -556,9 +539,15 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 
 		{
 			ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
-			tiered_hash_cache->ProbeByHash(hashes_dense, count, sel, has_sel, state.cache_candidates_sel,
-			                               cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
-			                               state.cache_miss_sel, cache_miss_count);
+			if (has_sel) {
+				tiered_hash_cache->ProbeByHash<true>(hashes_dense, count, sel, state.cache_candidates_sel,
+				                                     cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
+				                                     state.cache_miss_sel, cache_miss_count);
+			} else {
+				tiered_hash_cache->ProbeByHash<false>(hashes_dense, count, sel, state.cache_candidates_sel,
+				                                      cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
+				                                      state.cache_miss_sel, cache_miss_count);
+			}
 		}
 
 		if (cache_candidates_count > 0) {
@@ -830,13 +819,21 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		if (state.probe_rows_in_phase >= thc_collect_phase_rows) {
 			ScopedHashJoinTimer insert_timer(state.thc_insert_time_ns);
 			
-			// Insert all collected entries into the shared THC.
-			// The THC's CAS-based Insert is thread-safe and silently
-			// drops entries if the table is full or has hash collisions.
 			idx_t new_entries_this_phase = 0;
-			for (auto &entry : state.collected_entries) {
-				if (tiered_hash_cache->Insert(entry.hash, entry.row_ptr)) {
-					new_entries_this_phase++;
+			if (!tiered_hash_cache->IsFull()) {
+				if (thc_single_threaded) {
+					for (auto &entry : state.collected_entries) {
+						if (tiered_hash_cache->InsertUnsafe(entry.hash, entry.row_ptr)) {
+							new_entries_this_phase++;
+						}
+					}
+					tiered_hash_cache->SyncCountersFromUnsafe();
+				} else {
+					for (auto &entry : state.collected_entries) {
+						if (tiered_hash_cache->Insert(entry.hash, entry.row_ptr)) {
+							new_entries_this_phase++;
+						}
+					}
 				}
 			}
 			state.total_new_entries += new_entries_this_phase;
@@ -1464,6 +1461,7 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          (unsigned long)entry_stride, (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
 	tiered_hash_cache =
 	    make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size, tiered_hash_cache_key_offset, row_copy_offset);
+	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,

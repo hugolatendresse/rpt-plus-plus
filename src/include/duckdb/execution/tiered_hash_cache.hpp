@@ -52,7 +52,7 @@ public:
 	TieredHashCache(idx_t capacity_p, idx_t row_size_p, idx_t key_offset_in_row_p, idx_t row_copy_offset_p = 0)
 	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), key_offset_in_row(key_offset_in_row_p),
 	      row_copy_offset(row_copy_offset_p), entry_stride(ComputeEntryStride(row_size_p)),
-	      max_fill(static_cast<idx_t>(capacity_p * MAX_LOAD_FACTOR)) {
+	      max_fill(static_cast<idx_t>(capacity_p * MAX_LOAD_FACTOR)), unsafe_fill_count(0) {
 		D_ASSERT(IsPowerOfTwo(capacity)); // Needed for bitmask logic
 		auto total_bytes = capacity * entry_stride;
 		// TODO should we use BPM? Or Arena?
@@ -66,7 +66,9 @@ public:
 	//! On miss, doesn't go to data_collection, but records the row in cache_miss_sel (and cache_miss_count)
 	//! @param cache_miss_sel holds the densely packed indices of `hashes_dense` that did not
 	//!                       get a match in the THC.
-	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, bool has_row_sel,
+	//! @tparam HAS_ROW_SEL compile-time constant eliminating the per-iteration has_row_sel branch
+	template <bool HAS_ROW_SEL>
+	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel,
 	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
 	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations, SelectionVector &cache_miss_sel,
 	                 idx_t &cache_miss_count) const {
@@ -85,7 +87,7 @@ public:
 				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
 			}
 
-			const auto row_index = has_row_sel ? row_sel->get_index(i) : i;
+			const auto row_index = HAS_ROW_SEL ? row_sel->get_index(i) : i;
 			const auto probe_tag = ComputeTag(hashes_dense[i]);
 			auto slot = hashes_dense[i] & bitmask;
 
@@ -117,17 +119,16 @@ public:
 	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	//! @param miss_sel holds the densely packed indices of `probe_keys` that did not
 	//!                 get a match in the THC
-	template <class T>
+	//! @tparam HAS_ROW_SEL compile-time constant eliminating the per-iteration has_row_sel branch
+	template <class T, bool HAS_ROW_SEL>
 	void ProbeAndMatch(const hash_t *hashes_dense, const T *probe_keys, idx_t count, const SelectionVector *row_sel,
-	                   bool has_row_sel, data_ptr_t *result_ptrs, SelectionVector &match_sel, idx_t &match_count,
+	                   data_ptr_t *result_ptrs, SelectionVector &match_sel, idx_t &match_count,
 	                   SelectionVector &miss_sel, idx_t &miss_count) const {
 		static constexpr idx_t SLOT_PREFETCH_DIST = 16;
 
 		match_count = 0;
 		miss_count = 0;
 
-		// Constantly prefetch 16 probes ahead
-		// TODO measure if that actually helps
 		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
 			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
 		}
@@ -137,7 +138,7 @@ public:
 				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
 			}
 
-			const auto row_index = has_row_sel ? row_sel->get_index(i) : i;
+			const auto row_index = HAS_ROW_SEL ? row_sel->get_index(i) : i;
 			const auto probe_tag = ComputeTag(hashes_dense[i]);
 			const auto probe_key = probe_keys[row_index];
 			auto slot = hashes_dense[i] & bitmask;
@@ -147,7 +148,6 @@ public:
 				auto entry_ptr = GetEntryPtr(slot);
 				const auto stored_tag = LoadTag(entry_ptr);
 				if (stored_tag == 0) {
-					// THC does not have a match
 					break;
 				}
 				if (stored_tag == probe_tag) {
@@ -160,7 +160,7 @@ public:
 						break;
 					}
 				}
-				slot = (slot + 1) & bitmask; // linear probe if didn't find
+				slot = (slot + 1) & bitmask;
 			}
 			if (!found) {
 				miss_sel.set_index(miss_count++, row_index);
@@ -177,14 +177,12 @@ public:
 	//! Inserts an entry, including the row.
 	//! Returns true if a genuinely new entry was inserted, false otherwise
 	//! (duplicate hash, table full, or probe distance exceeded).
-	//! TODO is there a way to vectorize this?
 	bool Insert(hash_t hash, const_data_ptr_t row_data_ptr) {
 		// Refuse to insert once we've reached the maximum load factor.
 		// Without this guard the unbounded linear-probing loop below can
 		// spin forever when the table is (nearly) full.
 		if (insert_new.load(std::memory_order_relaxed) >= max_fill) {
-			return false; // TODO is there a way to communicate that to JoinHashTable to avoid having to try to insert
-			              // thousands of additional times?
+			return false;
 		}
 		const auto tag = ComputeTag(hash);
 		auto slot = hash & bitmask;
@@ -192,24 +190,52 @@ public:
 			auto entry_ptr = GetEntryPtr(slot);
 			auto tag_atomic = reinterpret_cast<std::atomic<tag_t> *>(entry_ptr);
 
-			tag_t expected = 0; // We only insert if the current hash is null
-			// TODO double check the choice of CAS function and third argument below
+			tag_t expected = 0;
 			if (tag_atomic->compare_exchange_strong(expected, tag, std::memory_order_acq_rel)) {
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
 				insert_new.fetch_add(1, std::memory_order_relaxed);
 				return true;
 			}
 			if (expected == tag) {
-				// Don't try linear probing if the hashes perfect match. TODO could try linear probing here too
 				insert_dup.fetch_add(1, std::memory_order_relaxed);
 				return false;
 			}
 
-			slot = (slot + 1) & bitmask; // linear probe is the hashes don't fully match
+			slot = (slot + 1) & bitmask;
 		}
-		// Exceeded MAX_PROBE_DISTANCE -> silently drop the entry. It will be a miss later.
-		// TODO should we completely stop populating the THC if we reach here?
 		return false;
+	}
+
+	//! Non-atomic insert for single-threaded use. Avoids CAS overhead (~10-20ns/insert on ARM).
+	//! The caller MUST guarantee no concurrent writers.
+	bool InsertUnsafe(hash_t hash, const_data_ptr_t row_data_ptr) {
+		if (unsafe_fill_count >= max_fill) {
+			return false;
+		}
+		const auto tag = ComputeTag(hash);
+		auto slot = hash & bitmask;
+		for (idx_t probes = 0; probes < MAX_PROBE_DISTANCE; probes++) {
+			auto entry_ptr = GetEntryPtr(slot);
+			tag_t stored = LoadTag(entry_ptr);
+			if (stored == 0) {
+				memcpy(entry_ptr, &tag, sizeof(tag_t));
+				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
+				unsafe_fill_count++;
+				return true;
+			}
+			if (stored == tag) {
+				return false;
+			}
+			slot = (slot + 1) & bitmask;
+		}
+		return false;
+	}
+
+	//! Sync the atomic insert_new counter from the non-atomic unsafe_fill_count.
+	//! Must be called after a batch of InsertUnsafe calls so that IsFull() and
+	//! debug logging see the correct fill level.
+	void SyncCountersFromUnsafe() {
+		insert_new.store(unsafe_fill_count, std::memory_order_relaxed);
 	}
 
 	idx_t GetCapacity() const {
@@ -284,8 +310,7 @@ private:
 	// Get the tag stored in an entry
 	static inline tag_t LoadTag(const data_ptr_t entry_ptr) {
 		tag_t h;
-		memcpy(&h, entry_ptr, sizeof(tag_t)); // TODO can probably do this without memcpy... just derefence the value?
-		                                      // or mem-compare? or something?
+		memcpy(&h, entry_ptr, sizeof(tag_t));
 		return h;
 	}
 
@@ -300,7 +325,8 @@ private:
 	idx_t key_offset_in_row;
 	idx_t row_copy_offset;
 	idx_t entry_stride;
-	idx_t max_fill; //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
+	idx_t max_fill;              //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
+	idx_t unsafe_fill_count;     //! Non-atomic fill counter for InsertUnsafe
 	unsafe_unique_array<data_t> data;
 };
 
