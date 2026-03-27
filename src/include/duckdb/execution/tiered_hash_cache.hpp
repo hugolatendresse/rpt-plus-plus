@@ -55,9 +55,9 @@ public:
 	      max_fill(static_cast<idx_t>(capacity_p * MAX_LOAD_FACTOR)), unsafe_fill_count(0) {
 		D_ASSERT(IsPowerOfTwo(capacity)); // Needed for bitmask logic
 		auto total_bytes = capacity * entry_stride;
-		// TODO should we use BPM? Or Arena?
 		data = make_unsafe_uniq_array_uninitialized<data_t>(total_bytes);
-		memset(data.get(), 0, total_bytes);
+		base_ptr = data.get();
+		memset(base_ptr, 0, total_bytes);
 	}
 
 	//! Find the cache entry whose tag matches an input hash.
@@ -79,22 +79,38 @@ public:
 		cache_miss_count = 0;
 
 		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
-			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
+			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 3);
 		}
 
 		for (idx_t i = 0; i < count; i++) {
 			if (i + SLOT_PREFETCH_DIST < count) {
-				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
+				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 3);
 			}
 
 			const auto row_index = HAS_ROW_SEL ? row_sel->get_index(i) : i;
 			const auto probe_tag = ComputeTag(hashes_dense[i]);
 			auto slot = hashes_dense[i] & bitmask;
 
+			auto entry_ptr = GetEntryPtr(slot);
+			auto stored_tag = LoadTag(entry_ptr);
+
+			if (__builtin_expect(stored_tag == probe_tag, 1)) {
+				auto row_ptr = GetRowPtr(entry_ptr);
+				cache_result_ptrs[row_index] = row_ptr;
+				cache_rhs_locations[row_index] = row_ptr;
+				cache_candidates_sel.set_index(cache_candidates_count++, row_index);
+				continue;
+			}
+			if (stored_tag == 0) {
+				cache_miss_sel.set_index(cache_miss_count++, row_index);
+				continue;
+			}
+
 			bool found = false;
-			for (idx_t probes = 0; probes < MAX_PROBE_DISTANCE; probes++) {
-				auto entry_ptr = GetEntryPtr(slot);
-				const auto stored_tag = LoadTag(entry_ptr);
+			for (idx_t probes = 1; probes < MAX_PROBE_DISTANCE; probes++) {
+				slot = (slot + 1) & bitmask;
+				entry_ptr = GetEntryPtr(slot);
+				stored_tag = LoadTag(entry_ptr);
 				if (stored_tag == 0) {
 					break;
 				}
@@ -106,7 +122,6 @@ public:
 					found = true;
 					break;
 				}
-				slot = (slot + 1) & bitmask;
 			}
 			if (!found) {
 				cache_miss_sel.set_index(cache_miss_count++, row_index);
@@ -130,12 +145,12 @@ public:
 		miss_count = 0;
 
 		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
-			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
+			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 3);
 		}
 
 		for (idx_t i = 0; i < count; i++) {
 			if (i + SLOT_PREFETCH_DIST < count) {
-				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
+				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 3);
 			}
 
 			const auto row_index = HAS_ROW_SEL ? row_sel->get_index(i) : i;
@@ -143,24 +158,38 @@ public:
 			const auto probe_key = probe_keys[row_index];
 			auto slot = hashes_dense[i] & bitmask;
 
+			auto entry_ptr = GetEntryPtr(slot);
+			auto stored_tag = LoadTag(entry_ptr);
+
+			if (__builtin_expect(stored_tag == probe_tag, 1)) {
+				auto row_ptr = GetRowPtr(entry_ptr);
+				if (__builtin_expect(Load<T>(row_ptr + key_offset_in_row) == probe_key, 1)) {
+					result_ptrs[row_index] = row_ptr;
+					match_sel.set_index(match_count++, row_index);
+					continue;
+				}
+			} else if (stored_tag == 0) {
+				miss_sel.set_index(miss_count++, row_index);
+				continue;
+			}
+
 			bool found = false;
-			for (idx_t probes = 0; probes < MAX_PROBE_DISTANCE; probes++) {
-				auto entry_ptr = GetEntryPtr(slot);
-				const auto stored_tag = LoadTag(entry_ptr);
+			for (idx_t probes = 1; probes < MAX_PROBE_DISTANCE; probes++) {
+				slot = (slot + 1) & bitmask;
+				entry_ptr = GetEntryPtr(slot);
+				stored_tag = LoadTag(entry_ptr);
 				if (stored_tag == 0) {
 					break;
 				}
 				if (stored_tag == probe_tag) {
 					auto row_ptr = GetRowPtr(entry_ptr);
-					auto cache_key = Load<T>(row_ptr + key_offset_in_row);
-					if (cache_key == probe_key) {
+					if (Load<T>(row_ptr + key_offset_in_row) == probe_key) {
 						result_ptrs[row_index] = row_ptr;
 						match_sel.set_index(match_count++, row_index);
 						found = true;
 						break;
 					}
 				}
-				slot = (slot + 1) & bitmask;
 			}
 			if (!found) {
 				miss_sel.set_index(miss_count++, row_index);
@@ -295,27 +324,22 @@ private:
 		return stride;
 	}
 
-	//! Extract upper 16 bits of the hash as a tag.
-	//! Maps 0 to 1 since 0 means empty slot.
-	static inline tag_t ComputeTag(hash_t h) {
+	__attribute__((always_inline)) static inline tag_t ComputeTag(hash_t h) {
 		auto tag = static_cast<tag_t>(h >> 48);
 		return tag == 0 ? 1 : tag;
 	}
 
-	// Get a pointer to the `slot`th entry in the THC
-	inline data_ptr_t GetEntryPtr(idx_t slot) const {
-		return data.get() + slot * entry_stride;
+	__attribute__((always_inline)) inline data_ptr_t GetEntryPtr(idx_t slot) const {
+		return base_ptr + slot * entry_stride;
 	}
 
-	// Get the tag stored in an entry
-	static inline tag_t LoadTag(const data_ptr_t entry_ptr) {
+	__attribute__((always_inline)) static inline tag_t LoadTag(const data_ptr_t entry_ptr) {
 		tag_t h;
 		memcpy(&h, entry_ptr, sizeof(tag_t));
 		return h;
 	}
 
-	//! Pointer to the cached row data within an entry (the first byte after the hash)
-	static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
+	__attribute__((always_inline)) static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
 		return entry_ptr + HEADER_SIZE;
 	}
 
@@ -328,6 +352,7 @@ private:
 	idx_t max_fill;              //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
 	idx_t unsafe_fill_count;     //! Non-atomic fill counter for InsertUnsafe
 	unsafe_unique_array<data_t> data;
+	data_ptr_t base_ptr;         //! Cached raw pointer from data.get() for hot-path access
 };
 
 } // namespace duckdb
