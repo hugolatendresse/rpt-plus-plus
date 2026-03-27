@@ -486,56 +486,56 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		switch (equality_types[0].InternalType()) {
 		case PhysicalType::INT8: {
 			auto probe_keys = FlatVector::GetData<int8_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<int8_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
+			tiered_hash_cache->ProbeAndMatchDispatch<int8_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
 			                                         match_sel, match_count, state.cache_miss_sel, cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::INT16: {
 			auto probe_keys = FlatVector::GetData<int16_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<int16_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
+			tiered_hash_cache->ProbeAndMatchDispatch<int16_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
 			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::INT32: {
 			auto probe_keys = FlatVector::GetData<int32_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<int32_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
+			tiered_hash_cache->ProbeAndMatchDispatch<int32_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
 			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::INT64: {
 			auto probe_keys = FlatVector::GetData<int64_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<int64_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
+			tiered_hash_cache->ProbeAndMatchDispatch<int64_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
 			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT8: {
 			auto probe_keys = FlatVector::GetData<uint8_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<uint8_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
+			tiered_hash_cache->ProbeAndMatchDispatch<uint8_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
 			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT16: {
 			auto probe_keys = FlatVector::GetData<uint16_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<uint16_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
+			tiered_hash_cache->ProbeAndMatchDispatch<uint16_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
 			                                           match_sel, match_count, state.cache_miss_sel, cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT32: {
 			auto probe_keys = FlatVector::GetData<uint32_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<uint32_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
+			tiered_hash_cache->ProbeAndMatchDispatch<uint32_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
 			                                           match_sel, match_count, state.cache_miss_sel, cache_miss_count);
 			used_probe_and_match = true;
 			break;
 		}
 		case PhysicalType::UINT64: {
 			auto probe_keys = FlatVector::GetData<uint64_t>(keys.data[0]);
-			tiered_hash_cache->ProbeAndMatch<uint64_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
+			tiered_hash_cache->ProbeAndMatchDispatch<uint64_t>(hashes_dense, probe_keys, count, sel, has_sel, pointers_result,
 			                                           match_sel, match_count, state.cache_miss_sel, cache_miss_count);
 			used_probe_and_match = true;
 			break;
@@ -556,7 +556,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 
 		{
 			ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
-			tiered_hash_cache->ProbeByHash(hashes_dense, count, sel, has_sel, state.cache_candidates_sel,
+			tiered_hash_cache->ProbeByHashDispatch(hashes_dense, count, sel, has_sel, state.cache_candidates_sel,
 			                               cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
 			                               state.cache_miss_sel, cache_miss_count);
 		}
@@ -854,6 +854,10 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			          state.total_probe_rows > 0 ? 100.0 * static_cast<double>(state.total_collect_phase_rows) /
 			                                           static_cast<double>(state.total_probe_rows)
 			                                     : 0.0);
+
+			if (tiered_hash_cache->IsFull()) {
+				tiered_hash_cache->ActivateBloom();
+			}
 
 			// Free the collection buffer
 			state.collected_entries.clear();
