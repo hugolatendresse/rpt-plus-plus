@@ -58,6 +58,21 @@ public:
 		// TODO should we use BPM? Or Arena?
 		data = make_unsafe_uniq_array_uninitialized<data_t>(total_bytes);
 		memset(data.get(), 0, total_bytes);
+
+		auto bloom_bytes = capacity / 8;
+		bloom = make_unsafe_uniq_array_uninitialized<data_t>(bloom_bytes);
+		memset(bloom.get(), 0, bloom_bytes);
+	}
+
+	//! Activate the Bloom filter for subsequent probes.
+	//! Call when the THC is full — long probe chains make the BF worthwhile.
+	void ActivateBloom() {
+		bloom_active.store(true, std::memory_order_release);
+	}
+
+	//! Whether the Bloom filter is currently active.
+	bool IsBloomActive() const {
+		return bloom_active.load(std::memory_order_relaxed);
 	}
 
 	//! Find the cache entry whose tag matches an input hash.
@@ -66,6 +81,8 @@ public:
 	//! On miss, doesn't go to data_collection, but records the row in cache_miss_sel (and cache_miss_count)
 	//! @param cache_miss_sel holds the densely packed indices of `hashes_dense` that did not
 	//!                       get a match in the THC.
+	//! @tparam UseBloom when true, a Bloom filter pre-check skips definite misses
+	template <bool UseBloom = false>
 	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, bool has_row_sel,
 	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
 	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations, SelectionVector &cache_miss_sel,
@@ -77,15 +94,29 @@ public:
 		cache_miss_count = 0;
 
 		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
+			if constexpr (UseBloom) {
+				PrefetchBloom(hashes_dense[p]);
+			}
 			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
 		}
 
 		for (idx_t i = 0; i < count; i++) {
 			if (i + SLOT_PREFETCH_DIST < count) {
+				if constexpr (UseBloom) {
+					PrefetchBloom(hashes_dense[i + SLOT_PREFETCH_DIST]);
+				}
 				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
 			}
 
 			const auto row_index = has_row_sel ? row_sel->get_index(i) : i;
+
+			if constexpr (UseBloom) {
+				if (!BloomMayContain(hashes_dense[i])) {
+					cache_miss_sel.set_index(cache_miss_count++, row_index);
+					continue;
+				}
+			}
+
 			const auto probe_tag = ComputeTag(hashes_dense[i]);
 			auto slot = hashes_dense[i] & bitmask;
 
@@ -117,7 +148,8 @@ public:
 	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	//! @param miss_sel holds the densely packed indices of `probe_keys` that did not
 	//!                 get a match in the THC
-	template <class T>
+	//! @tparam UseBloom when true, a Bloom filter pre-check skips definite misses
+	template <bool UseBloom = false, class T>
 	void ProbeAndMatch(const hash_t *hashes_dense, const T *probe_keys, idx_t count, const SelectionVector *row_sel,
 	                   bool has_row_sel, data_ptr_t *result_ptrs, SelectionVector &match_sel, idx_t &match_count,
 	                   SelectionVector &miss_sel, idx_t &miss_count) const {
@@ -129,15 +161,29 @@ public:
 		// Constantly prefetch 16 probes ahead
 		// TODO measure if that actually helps
 		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
+			if constexpr (UseBloom) {
+				PrefetchBloom(hashes_dense[p]);
+			}
 			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
 		}
 
 		for (idx_t i = 0; i < count; i++) {
 			if (i + SLOT_PREFETCH_DIST < count) {
+				if constexpr (UseBloom) {
+					PrefetchBloom(hashes_dense[i + SLOT_PREFETCH_DIST]);
+				}
 				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
 			}
 
 			const auto row_index = has_row_sel ? row_sel->get_index(i) : i;
+
+			if constexpr (UseBloom) {
+				if (!BloomMayContain(hashes_dense[i])) {
+					miss_sel.set_index(miss_count++, row_index);
+					continue;
+				}
+			}
+
 			const auto probe_tag = ComputeTag(hashes_dense[i]);
 			const auto probe_key = probe_keys[row_index];
 			auto slot = hashes_dense[i] & bitmask;
@@ -165,6 +211,37 @@ public:
 			if (!found) {
 				miss_sel.set_index(miss_count++, row_index);
 			}
+		}
+	}
+
+	//! Dispatchers — check bloom_active once per call, then delegate to the
+	//! correct template specialization.  Zero per-probe overhead on either path.
+	void ProbeByHashDispatch(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, bool has_row_sel,
+	                         SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
+	                         data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations,
+	                         SelectionVector &cache_miss_sel, idx_t &cache_miss_count) const {
+		if (bloom_active.load(std::memory_order_relaxed)) {
+			ProbeByHash<true>(hashes_dense, count, row_sel, has_row_sel, cache_candidates_sel,
+			                  cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
+			                  cache_miss_sel, cache_miss_count);
+		} else {
+			ProbeByHash<false>(hashes_dense, count, row_sel, has_row_sel, cache_candidates_sel,
+			                   cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
+			                   cache_miss_sel, cache_miss_count);
+		}
+	}
+
+	template <class T>
+	void ProbeAndMatchDispatch(const hash_t *hashes_dense, const T *probe_keys, idx_t count,
+	                           const SelectionVector *row_sel, bool has_row_sel, data_ptr_t *result_ptrs,
+	                           SelectionVector &match_sel, idx_t &match_count, SelectionVector &miss_sel,
+	                           idx_t &miss_count) const {
+		if (bloom_active.load(std::memory_order_relaxed)) {
+			ProbeAndMatch<true>(hashes_dense, probe_keys, count, row_sel, has_row_sel, result_ptrs, match_sel,
+			                    match_count, miss_sel, miss_count);
+		} else {
+			ProbeAndMatch<false>(hashes_dense, probe_keys, count, row_sel, has_row_sel, result_ptrs, match_sel,
+			                     match_count, miss_sel, miss_count);
 		}
 	}
 
@@ -196,6 +273,7 @@ public:
 			// TODO double check the choice of CAS function and third argument below
 			if (tag_atomic->compare_exchange_strong(expected, tag, std::memory_order_acq_rel)) {
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
+				BloomSet(hash);
 				insert_new.fetch_add(1, std::memory_order_relaxed);
 				return true;
 			}
@@ -263,6 +341,29 @@ private:
 	//! If we exceed this many probes we treat the lookup as a cache miss.
 	static constexpr idx_t MAX_PROBE_DISTANCE = 10;
 
+	//! Set the Bloom filter bit for a given hash (k=1).
+	//! Called from Insert() after a successful CAS.  Uses atomic OR
+	//! so concurrent writers don't lose bits.
+	inline void BloomSet(hash_t h) {
+		const auto bit = static_cast<idx_t>(h) & bitmask;
+		auto &byte = *reinterpret_cast<std::atomic<uint8_t> *>(&bloom[bit >> 3]);
+		byte.fetch_or(static_cast<uint8_t>(1u << (bit & 7)), std::memory_order_relaxed);
+	}
+
+	//! Check whether a hash might be present in the THC.
+	//! False → the hash is definitely absent (skip the linear probe).
+	//! True  → the hash may be present (proceed with the linear probe).
+	inline bool BloomMayContain(hash_t h) const {
+		const auto bit = static_cast<idx_t>(h) & bitmask;
+		return bloom[bit >> 3] & (1u << (bit & 7));
+	}
+
+	//! Prefetch the Bloom filter byte for hash h.
+	inline void PrefetchBloom(hash_t h) const {
+		const auto bit = static_cast<idx_t>(h) & bitmask;
+		__builtin_prefetch(&bloom[bit >> 3], 0, 0);
+	}
+
 	static idx_t ComputeEntryStride(idx_t row_size) {
 		idx_t stride = (HEADER_SIZE + row_size + 7) & ~idx_t(7);
 		DEBUG_LOG("[THC] Stride is %lu bytes\n", stride);
@@ -302,6 +403,8 @@ private:
 	idx_t entry_stride;
 	idx_t max_fill; //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
 	unsafe_unique_array<data_t> data;
+	unsafe_unique_array<data_t> bloom;          //! Bloom filter bit array (capacity / 8 bytes)
+	std::atomic<bool> bloom_active {false};     //! Only check BF when the THC is full
 };
 
 } // namespace duckdb
