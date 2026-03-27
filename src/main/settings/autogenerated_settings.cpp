@@ -656,16 +656,16 @@ Value ThcCollectBudgetFractionSetting::GetSetting(const ClientContext &context) 
 //===----------------------------------------------------------------------===//
 void ThcMissThresholdSetting::SetLocal(ClientContext &context, const Value &input) {
 	auto &config = ClientConfig::GetConfig(context);
-	config.thc_miss_threshold = input.GetValue<double>();
+	config.thc_miss_below_which_skip_collect = input.GetValue<double>();
 }
 
 void ThcMissThresholdSetting::ResetLocal(ClientContext &context) {
-	ClientConfig::GetConfig(context).thc_miss_threshold = ClientConfig().thc_miss_threshold;
+	ClientConfig::GetConfig(context).thc_miss_below_which_skip_collect = ClientConfig().thc_miss_below_which_skip_collect;
 }
 
 Value ThcMissThresholdSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
-	return Value::DOUBLE(config.thc_miss_threshold);
+	return Value::DOUBLE(config.thc_miss_below_which_skip_collect);
 }
 
 //===----------------------------------------------------------------------===//
