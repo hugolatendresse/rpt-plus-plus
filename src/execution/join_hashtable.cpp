@@ -481,20 +481,21 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 	if (equality_types.size() == 1 && equality_types[0].IsIntegral()) {
 		ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 		keys.data[0].Flatten(keys.size());
-        
+
 		// Dispatch ProbeAndMatch with compile-time HAS_ROW_SEL to eliminate the
 		// per-iteration branch on has_sel inside the hot probe loop.
 #define THC_PROBE_DISPATCH(T)                                                                                          \
 	do {                                                                                                               \
 		auto probe_keys = FlatVector::GetData<T>(keys.data[0]);                                                        \
-		if (has_sel) {                                                                                                  \
+		if (has_sel) {                                                                                                 \
 			tiered_hash_cache->ProbeAndMatch<T, true>(hashes_dense, probe_keys, count, sel, pointers_result,           \
-			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count);  \
-		} else {                                                                                                        \
+			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count); \
+		} else {                                                                                                       \
 			tiered_hash_cache->ProbeAndMatch<T, false>(hashes_dense, probe_keys, count, sel, pointers_result,          \
-			                                           match_sel, match_count, state.cache_miss_sel, cache_miss_count); \
-		}                                                                                                               \
-		used_probe_and_match = true;                                                                                    \
+			                                           match_sel, match_count, state.cache_miss_sel,                   \
+			                                           cache_miss_count);                                              \
+		}                                                                                                              \
+		used_probe_and_match = true;                                                                                   \
 	} while (0)
 
 		switch (equality_types[0].InternalType()) {
@@ -705,105 +706,105 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	if (state.tiered_hash_cache_phase == TieredHashCachePhase::COLLECT) {
 
 		{
-		ScopedHashJoinTimer collect_timer(state.thc_collect_time_ns);
+			ScopedHashJoinTimer collect_timer(state.thc_collect_time_ns);
 
-		if (state.cycle_count == 0) {
-			// ----------------------------------------------------------
-			// First collect phase (cycle 0): THC is empty, use regular DuckDB probe.
-			// Save hashes before GetRowPointersInternal modifies them,
-			// then collect all matched rows into collected_entries.
-			// ----------------------------------------------------------
+			if (state.cycle_count == 0) {
+				// ----------------------------------------------------------
+				// First collect phase (cycle 0): THC is empty, use regular DuckDB probe.
+				// Save hashes before GetRowPointersInternal modifies them,
+				// then collect all matched rows into collected_entries.
+				// ----------------------------------------------------------
 
-			// Save original hashes before GetRowPointersInternal modifies them
-			hash_t saved_hashes[STANDARD_VECTOR_SIZE];
-			if (!has_sel) {
-				hashes_v.Flatten(input_count);
-				memcpy(saved_hashes, FlatVector::GetData<hash_t>(hashes_v), input_count * sizeof(hash_t));
-			} else {
-				UnifiedVectorFormat hashes_unified;
-				hashes_v.ToUnifiedFormat(input_count, hashes_unified);
-				auto hashes_src = UnifiedVectorFormat::GetData<hash_t>(hashes_unified);
-				for (idx_t i = 0; i < input_count; i++) {
-					const auto row_index = sel->get_index(i);
-					const auto uvf_index = hashes_unified.sel->get_index(row_index);
-					saved_hashes[row_index] = hashes_src[uvf_index];
+				// Save original hashes before GetRowPointersInternal modifies them
+				hash_t saved_hashes[STANDARD_VECTOR_SIZE];
+				if (!has_sel) {
+					hashes_v.Flatten(input_count);
+					memcpy(saved_hashes, FlatVector::GetData<hash_t>(hashes_v), input_count * sizeof(hash_t));
+				} else {
+					UnifiedVectorFormat hashes_unified;
+					hashes_v.ToUnifiedFormat(input_count, hashes_unified);
+					auto hashes_src = UnifiedVectorFormat::GetData<hash_t>(hashes_unified);
+					for (idx_t i = 0; i < input_count; i++) {
+						const auto row_index = sel->get_index(i);
+						const auto uvf_index = hashes_unified.sel->get_index(row_index);
+						saved_hashes[row_index] = hashes_src[uvf_index];
+					}
 				}
-			}
 
-			// Run the regular DuckDB probe (no THC involvement)
-			if (UseSalt()) {
-				GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
-				                             pointers_result_v, match_sel, has_sel);
-			} else {
-				GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries,
-				                              pointers_result_v, match_sel, has_sel);
-			}
-
-			// Collect every matched row as a collected entry so that the first
-			// THC population covers the broadest possible set of hot keys.
-			auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
-			for (idx_t i = 0; i < count; i++) {
-				const auto row_index = match_sel.get_index(i);
-				const auto hash = saved_hashes[row_index];
-				if (hash != 0) {
-					state.collected_entries.push_back({hash, pointers_result[row_index]});
+				// Run the regular DuckDB probe (no THC involvement)
+				if (UseSalt()) {
+					GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
+					                             pointers_result_v, match_sel, has_sel);
+				} else {
+					GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries,
+					                              pointers_result_v, match_sel, has_sel);
 				}
-			}
 
-		} else {
-			// ----------------------------------------------------------
-			// Subsequent collect phase (cycle > 0): THC already has entries.
-			// Probe THC first, fall back to regular HT for misses.
-			// Only collect THC-miss matches into collected_entries so we
-			// insert exactly the "new hot" keys that the THC is missing.
-			// ----------------------------------------------------------
-
-			// The THC probe + regular fallback path is shared with READ_ONLY.
-			// We call the same logic, then additionally collect miss-matched rows.
-			idx_t match_count = 0;
-			idx_t cache_miss_count = 0;
-			ProbeTHCAndFallback(keys, key_state, state, hashes_v, sel, count, has_sel, pointers_result_v, match_sel,
-			                    match_count, cache_miss_count);
-			count = match_count;
-
-			// Collect the THC-miss rows that found a match in the regular HT.
-			// These are exactly the rows that the THC should learn about.
-			//
-			// BUG FIX: Previously read from state.hashes_dense_v via thc_miss_dense_index,
-			// but GetRowPointersInternal (called inside ProbeTHCAndFallback step 4)
-			// overwrites hashes_dense_v during its own densification and collision
-			// resolution. Reading it afterward returns garbage hashes, causing THC
-			// entries to be inserted with wrong keys and become unreachable.
-			//
-			// Fix: read hashes directly from hashes_v, which is preserved by
-			// ProbeTHCAndFallback (only Flatten or ToUnifiedFormat, no data mutation).
-			auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
-			if (!has_sel) {
-				// hashes_v was Flattened in ProbeTHCAndFallback step 1.
-				// Row index == flat index, so direct indexing is correct.
-				auto hashes_flat = FlatVector::GetData<hash_t>(hashes_v);
-				for (idx_t i = 0; i < state.thc_miss_match_count; i++) {
-					const auto row_index = state.thc_miss_match_sel.get_index(i);
-					const auto hash = hashes_flat[row_index];
+				// Collect every matched row as a collected entry so that the first
+				// THC population covers the broadest possible set of hot keys.
+				auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
+				for (idx_t i = 0; i < count; i++) {
+					const auto row_index = match_sel.get_index(i);
+					const auto hash = saved_hashes[row_index];
 					if (hash != 0) {
 						state.collected_entries.push_back({hash, pointers_result[row_index]});
 					}
 				}
+
 			} else {
-				// hashes_v is in its original format; use UnifiedVectorFormat.
-				UnifiedVectorFormat hashes_uf;
-				hashes_v.ToUnifiedFormat(input_count, hashes_uf);
-				auto hashes_src = UnifiedVectorFormat::GetData<hash_t>(hashes_uf);
-				for (idx_t i = 0; i < state.thc_miss_match_count; i++) {
-					const auto row_index = state.thc_miss_match_sel.get_index(i);
-					const auto uvf_index = hashes_uf.sel->get_index(row_index);
-					const auto hash = hashes_src[uvf_index];
-					if (hash != 0) {
-						state.collected_entries.push_back({hash, pointers_result[row_index]});
+				// ----------------------------------------------------------
+				// Subsequent collect phase (cycle > 0): THC already has entries.
+				// Probe THC first, fall back to regular HT for misses.
+				// Only collect THC-miss matches into collected_entries so we
+				// insert exactly the "new hot" keys that the THC is missing.
+				// ----------------------------------------------------------
+
+				// The THC probe + regular fallback path is shared with READ_ONLY.
+				// We call the same logic, then additionally collect miss-matched rows.
+				idx_t match_count = 0;
+				idx_t cache_miss_count = 0;
+				ProbeTHCAndFallback(keys, key_state, state, hashes_v, sel, count, has_sel, pointers_result_v, match_sel,
+				                    match_count, cache_miss_count);
+				count = match_count;
+
+				// Collect the THC-miss rows that found a match in the regular HT.
+				// These are exactly the rows that the THC should learn about.
+				//
+				// BUG FIX: Previously read from state.hashes_dense_v via thc_miss_dense_index,
+				// but GetRowPointersInternal (called inside ProbeTHCAndFallback step 4)
+				// overwrites hashes_dense_v during its own densification and collision
+				// resolution. Reading it afterward returns garbage hashes, causing THC
+				// entries to be inserted with wrong keys and become unreachable.
+				//
+				// Fix: read hashes directly from hashes_v, which is preserved by
+				// ProbeTHCAndFallback (only Flatten or ToUnifiedFormat, no data mutation).
+				auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
+				if (!has_sel) {
+					// hashes_v was Flattened in ProbeTHCAndFallback step 1.
+					// Row index == flat index, so direct indexing is correct.
+					auto hashes_flat = FlatVector::GetData<hash_t>(hashes_v);
+					for (idx_t i = 0; i < state.thc_miss_match_count; i++) {
+						const auto row_index = state.thc_miss_match_sel.get_index(i);
+						const auto hash = hashes_flat[row_index];
+						if (hash != 0) {
+							state.collected_entries.push_back({hash, pointers_result[row_index]});
+						}
+					}
+				} else {
+					// hashes_v is in its original format; use UnifiedVectorFormat.
+					UnifiedVectorFormat hashes_uf;
+					hashes_v.ToUnifiedFormat(input_count, hashes_uf);
+					auto hashes_src = UnifiedVectorFormat::GetData<hash_t>(hashes_uf);
+					for (idx_t i = 0; i < state.thc_miss_match_count; i++) {
+						const auto row_index = state.thc_miss_match_sel.get_index(i);
+						const auto uvf_index = hashes_uf.sel->get_index(row_index);
+						const auto hash = hashes_src[uvf_index];
+						if (hash != 0) {
+							state.collected_entries.push_back({hash, pointers_result[row_index]});
+						}
 					}
 				}
 			}
-		}
 
 		} // end collect_timer scope for THC collect time
 
@@ -818,7 +819,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		// ----------------------------------------------------------
 		if (state.probe_rows_in_phase >= thc_collect_phase_rows) {
 			ScopedHashJoinTimer insert_timer(state.thc_insert_time_ns);
-			
+
 			idx_t new_entries_this_phase = 0;
 			if (!tiered_hash_cache->IsFull()) {
 				if (thc_single_threaded) {
@@ -916,9 +917,19 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		// All three guards must pass to enter COLLECT
 		const bool should_collect = (miss_rate >= thc_miss_below_which_skip_collect) && budget_ok && !thc_full;
 
+#ifdef DEBUG
 		DEBUG_LOG("[Checkpoint] checkpoint=%lu, ro_rows=%lu, miss_rate=%.2f%%, budget_ok=%d, thc_full=%d -> %s\n",
 		          (unsigned long)state.checkpoint_count, (unsigned long)state.read_only_rows_processed,
 		          miss_rate * 100.0, (int)budget_ok, (int)thc_full, should_collect ? "COLLECT" : "SKIP");
+
+		if (miss_rate < thc_miss_below_which_skip_collect) {
+			DEBUG_LOG("Skipping because miss rate is too low\n");
+		} else if (!budget_ok) {
+			DEBUG_LOG("Skipping because %d collection rows is more than budget of %d\n", (int)state.total_collect_phase_rows + (int) thc_collect_phase_rows, static_cast<int>(static_cast<double>(state.total_probe_rows) * thc_collect_budget_fraction));
+		} else {
+			DEBUG_LOG("Skipping because thc is full\n");
+		}
+#endif
 
 		// ---- Abandonment check ----
 		// If the miss rate is very high (above THC_ABANDON_MISS_THRESHOLD),
@@ -1456,11 +1467,11 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          "key_offset=%lu, row_copy_offset=%lu, "
 	          "coverage=%.2f%%, tuple_size=%lu, pointer_offset=%lu, entry_stride=%lu, total=%.1f MiB)\n",
 	          (unsigned long)cache_capacity, (unsigned long)data_collection_row_size,
-	          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)row_copy_offset,
-	          coverage_ratio * 100.0, (unsigned long)tuple_size, (unsigned long)pointer_offset,
-	          (unsigned long)entry_stride, (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
-	tiered_hash_cache =
-	    make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size, tiered_hash_cache_key_offset, row_copy_offset);
+	          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)row_copy_offset, coverage_ratio * 100.0,
+	          (unsigned long)tuple_size, (unsigned long)pointer_offset, (unsigned long)entry_stride,
+	          (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
+	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size,
+	                                               tiered_hash_cache_key_offset, row_copy_offset);
 	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
 }
 
@@ -2420,4 +2431,3 @@ void ProbeSpill::PrepareNextProbe() {
 }
 
 } // namespace duckdb
-
