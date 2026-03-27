@@ -502,7 +502,7 @@ private:
 	//! Maximum fraction of probe rows that can be spent in collect phases.
 	double thc_collect_budget_fraction;
 	//! Miss rate threshold for skipping collect phases.
-	double thc_miss_threshold;
+	double thc_miss_below_which_skip_collect;
 	//! Minimum HT capacity to activate the THC.
 	idx_t thc_activation_threshold;
 

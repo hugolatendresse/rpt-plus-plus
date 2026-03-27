@@ -49,7 +49,7 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
 	thc_collect_phase_rows = config.thc_collect_phase_rows;
 	thc_first_read_only_phase_rows = config.thc_first_read_only_phase_rows;
 	thc_collect_budget_fraction = config.thc_collect_budget_fraction;
-	thc_miss_threshold = config.thc_miss_threshold;
+	thc_miss_below_which_skip_collect = config.thc_miss_below_which_skip_collect;
 	thc_activation_threshold = config.thc_activation_threshold;
 	for (idx_t i = 0; i < conditions.size(); ++i) {
 		auto &condition = conditions[i];
@@ -693,7 +693,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	//   READ_ONLY: Probe the THC, fall back for misses, track miss rate.
 	//              When read_only_rows_processed >= read_only_rows_target
 	//              (a "checkpoint"), evaluate three guards:
-	//                1) miss_rate >= thc_miss_threshold (configurable, default 10%)
+	//                1) miss_rate >= thc_miss_below_which_skip_collect (configurable, default 10%)
 	//                2) budget_ok: another collect phase won't exceed 2% overhead
 	//                3) !thc_full: the THC isn't saturated
 	//              If all three pass → enter COLLECT. Otherwise → stay in
@@ -917,7 +917,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		const bool thc_full = tiered_hash_cache->IsFull();
 
 		// All three guards must pass to enter COLLECT
-		const bool should_collect = (miss_rate >= thc_miss_threshold) && budget_ok && !thc_full;
+		const bool should_collect = (miss_rate >= thc_miss_below_which_skip_collect) && budget_ok && !thc_full;
 
 		DEBUG_LOG("[Checkpoint] checkpoint=%lu, ro_rows=%lu, miss_rate=%.2f%%, budget_ok=%d, thc_full=%d -> %s\n",
 		          (unsigned long)state.checkpoint_count, (unsigned long)state.read_only_rows_processed,
