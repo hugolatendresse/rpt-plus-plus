@@ -1,0 +1,6 @@
+# Generated data
+/output_join_benchmark/
+.DS_Store
+*.db
+*.duckdb
+
