@@ -9,6 +9,7 @@
 #include "duckdb/execution/scoped_hash_join_timer.hpp"
 #include "duckdb/main/client_config.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 
 namespace duckdb {
@@ -837,7 +838,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				// TODO make sure inserting collected entries gets unrolled by compilation
 				if (thc_single_threaded) {
 					for (auto &entry : state.collected_entries) {
-						// TODO return 0 or 1 from THC instead of having a if condition here? 
+						// TODO return 0 or 1 from THC instead of having a if condition here?
 						if (tiered_hash_cache->InsertUnsafe(entry.hash, entry.row_ptr)) {
 							new_entries_this_phase++;
 						}
@@ -1479,6 +1480,8 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
 	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size,
 	                                               tiered_hash_cache_key_offset, row_copy_offset);
+
+	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,
