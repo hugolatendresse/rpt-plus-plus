@@ -80,7 +80,7 @@ public:
 		}
 
 		for (idx_t i = 0; i < count; i++) {
-			if (i + SLOT_PREFETCH_DIST < count) {
+			if (__builtin_expect(i + SLOT_PREFETCH_DIST < count, 1)) {
 				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
 			}
 
@@ -91,14 +91,14 @@ public:
 			auto entry_ptr = GetEntryPtr(slot);
 			auto stored_tag = LoadTag(entry_ptr);
 
-			if (stored_tag == probe_tag) {
+			if (__builtin_expect(stored_tag == probe_tag, 0)) {
 				auto row_ptr = GetRowPtr(entry_ptr);
 				cache_result_ptrs[row_index] = row_ptr;
 				cache_rhs_locations[row_index] = row_ptr;
 				cache_candidates_sel.set_index(cache_candidates_count++, row_index);
 				continue;
 			}
-			if (stored_tag == 0) {
+			if (__builtin_expect(stored_tag == 0, 0)) {
 				cache_miss_sel.set_index(cache_miss_count++, row_index);
 				continue;
 			}
@@ -108,15 +108,16 @@ public:
 				slot = (slot + 1) & bitmask;
 				entry_ptr = GetEntryPtr(slot);
 				stored_tag = LoadTag(entry_ptr);
-				if (stored_tag == 0) {
-					break;
-				}
-				if (stored_tag == probe_tag) {
+				if (__builtin_expect(stored_tag == probe_tag, 0)) {
 					auto row_ptr = GetRowPtr(entry_ptr);
 					cache_result_ptrs[row_index] = row_ptr;
 					cache_rhs_locations[row_index] = row_ptr;
 					cache_candidates_sel.set_index(cache_candidates_count++, row_index);
 					found = true;
+					break;
+				}
+				
+				if (__builtin_expect(stored_tag == 0, 0)) {
 					break;
 				}
 			}
@@ -148,7 +149,7 @@ public:
 		}
 
 		for (idx_t i = 0; i < count; i++) {
-			if (i + SLOT_PREFETCH_DIST < count) {
+			if (__builtin_expect(i + SLOT_PREFETCH_DIST < count, 1)) {
 				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
 			}
 
@@ -160,14 +161,14 @@ public:
 			auto entry_ptr = GetEntryPtr(slot);
 			auto stored_tag = LoadTag(entry_ptr);
 
-			if (stored_tag == probe_tag) {
+			if (__builtin_expect(stored_tag == probe_tag, 0)) {
 				auto row_ptr = GetRowPtr(entry_ptr);
-				if (Load<T>(row_ptr + key_offset_in_row) == probe_key) {
+				if (__builtin_expect(Load<T>(row_ptr + key_offset_in_row) == probe_key, 1)) {
 					result_ptrs[row_index] = row_ptr;
 					match_sel.set_index(match_count++, row_index);
 					continue;
 				}
-			} else if (stored_tag == 0) {
+			} else if (__builtin_expect(stored_tag == 0, 0)) {
 				miss_sel.set_index(miss_count++, row_index);
 				continue;
 			}
@@ -177,14 +178,14 @@ public:
 				slot = (slot + 1) & bitmask; // linear probing
 				entry_ptr = GetEntryPtr(slot);
 				stored_tag = LoadTag(entry_ptr);
-				if (stored_tag == 0) {
+				if (__builtin_expect(stored_tag == 0, 0)) {
 					// THC does not have a match
 					break;
 				}
-				if (stored_tag == probe_tag) {
+				if (__builtin_expect(stored_tag == probe_tag, 0)) {
 					auto row_ptr = GetRowPtr(entry_ptr);
 					auto cache_key = Load<T>(row_ptr + key_offset_in_row);
-					if (cache_key == probe_key) {
+					if (__builtin_expect(cache_key == probe_key, 1)) {
 						result_ptrs[row_index] = row_ptr;
 						match_sel.set_index(match_count++, row_index);
 						found = true;
@@ -212,7 +213,7 @@ public:
 		// Refuse to insert once we've reached the maximum load factor.
 		// Without this guard the unbounded linear-probing loop below can
 		// spin forever when the table is (nearly) full.
-		if (new_inserts_count.load(std::memory_order_relaxed) >= max_fill) {
+		if (__builtin_expect(new_inserts_count.load(std::memory_order_relaxed) >= max_fill, 0)) {
 			return false; // TODO is there a way to communicate that to JoinHashTable to avoid having to try to insert
 			              // thousands of additional times?
 		}
@@ -224,13 +225,13 @@ public:
 
 			tag_t expected = 0; // We only insert if the current hash is null
 			// TODO double check the choice of CAS function and third argument below
-			if (tag_atomic->compare_exchange_strong(expected, tag, std::memory_order_acq_rel)) {
+			if (__builtin_expect(tag_atomic->compare_exchange_strong(expected, tag, std::memory_order_acq_rel), 0)) {
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
 				new_inserts_count.fetch_add(1, std::memory_order_relaxed);
 				return true;
 			}
-			if (expected == tag) {
-				// Don't try linear probing if the hashes perfect match. TODO could try linear probing here too
+			if (__builtin_expect(expected == tag, 0)) {
+				// Don't try linear probing if the hashes perfectly match. TODO could try linear probing here too
 				dup_inserts_count.fetch_add(1, std::memory_order_relaxed);
 				return false;
 			}
@@ -245,7 +246,7 @@ public:
 	//! Non-atomic insert for single-threaded use. Avoids CAS overhead.
 	//! The caller MUST guarantee no concurrent writers.
 	bool InsertUnsafe(hash_t hash, const_data_ptr_t row_data_ptr) {
-		if (unsafe_fill_count >= max_fill) {
+		if (__builtin_expect(unsafe_fill_count >= max_fill, 0)) {
 			return false;
 		}
 		const auto tag = ComputeTag(hash);
@@ -253,13 +254,13 @@ public:
 		for (idx_t probes = 0; probes < MAX_PROBE_DISTANCE; probes++) {
 			auto entry_ptr = GetEntryPtr(slot);
 			tag_t stored = LoadTag(entry_ptr);
-			if (stored == 0) {
+			if (__builtin_expect(stored == 0, 0)) {
 				memcpy(entry_ptr, &tag, sizeof(tag_t));
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
 				unsafe_fill_count++;
 				return true;
 			}
-			if (stored == tag) {
+			if (__builtin_expect(stored == tag, 0)) {
 				return false;
 			}
 			slot = (slot + 1) & bitmask;
