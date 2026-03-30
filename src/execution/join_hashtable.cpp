@@ -9,6 +9,7 @@
 #include "duckdb/execution/scoped_hash_join_timer.hpp"
 #include "duckdb/main/client_config.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 
 namespace duckdb {
@@ -550,12 +551,10 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		{
 			ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 			if (has_sel) {
-
 				tiered_hash_cache->ProbeByHash<true>(hashes_dense, count, sel, state.cache_candidates_sel,
 				                                     cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
 				                                     state.cache_miss_sel, cache_miss_count);
 			} else {
-
 				tiered_hash_cache->ProbeByHash<false>(hashes_dense, count, sel, state.cache_candidates_sel,
 				                                      cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
 				                                      state.cache_miss_sel, cache_miss_count);
@@ -835,22 +834,37 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			// The THC's CAS-based Insert is thread-safe and silently
 			// drops entries if the table is full or has hash collisions.
 			idx_t new_entries_this_phase = 0;
-			for (auto &entry : state.collected_entries) {
-				if (tiered_hash_cache->Insert(entry.hash, entry.row_ptr)) {
-					new_entries_this_phase++;
+			if (!tiered_hash_cache->IsFull()) {
+				// TODO make sure inserting collected entries gets unrolled by compilation
+				if (thc_single_threaded) {
+					for (auto &entry : state.collected_entries) {
+						// TODO return 0 or 1 from THC instead of having a if condition here?
+						if (tiered_hash_cache->InsertUnsafe(entry.hash, entry.row_ptr)) {
+							new_entries_this_phase++;
+						}
+					}
+					tiered_hash_cache->SyncCountersFromUnsafe();
+				} else {
+					// Concurrent insertions case
+					for (auto &entry : state.collected_entries) {
+						if (tiered_hash_cache->Insert(entry.hash, entry.row_ptr)) {
+							new_entries_this_phase++;
+						}
+					}
 				}
 			}
+
 			state.total_new_entries += new_entries_this_phase;
 
 			DEBUG_LOG("[Collect->Read-Only] cycle=%lu, probe_rows_in_phase=%lu, buffered=%lu, "
-			          "new_entries_this_phase=%lu, cache_fill=%lu/%lu, insert_new=%lu, insert_dup=%lu, "
+			          "new_entries_this_phase=%lu, cache_fill=%lu/%lu, new_inserts_count=%lu, dup_inserts_count=%lu, "
 			          "total_collect_phase_rows=%lu, total_probe=%lu (%.2f%%)\n",
 			          (unsigned long)state.cycle_count, (unsigned long)state.probe_rows_in_phase,
 			          (unsigned long)state.collected_entries.size(), (unsigned long)new_entries_this_phase,
-			          (unsigned long)tiered_hash_cache->insert_new.load(),
+			          (unsigned long)tiered_hash_cache->new_inserts_count.load(),
 			          (unsigned long)tiered_hash_cache->GetCapacity(),
-			          (unsigned long)tiered_hash_cache->insert_new.load(),
-			          (unsigned long)tiered_hash_cache->insert_dup.load(),
+			          (unsigned long)tiered_hash_cache->new_inserts_count.load(),
+			          (unsigned long)tiered_hash_cache->dup_inserts_count.load(),
 			          (unsigned long)state.total_collect_phase_rows, (unsigned long)state.total_probe_rows,
 			          state.total_probe_rows > 0 ? 100.0 * static_cast<double>(state.total_collect_phase_rows) /
 			                                           static_cast<double>(state.total_probe_rows)
@@ -915,6 +929,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		    static_cast<idx_t>(static_cast<double>(state.total_probe_rows) * thc_collect_budget_fraction);
 
 		// Check whether the THC has room for new entries
+		// TODO we should simplify the logic once we're full (no need to recheck every time)
 		const bool thc_full = tiered_hash_cache->IsFull();
 
 		// All three guards must pass to enter COLLECT
@@ -1465,6 +1480,8 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
 	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size,
 	                                               tiered_hash_cache_key_offset, row_copy_offset);
+
+	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,
