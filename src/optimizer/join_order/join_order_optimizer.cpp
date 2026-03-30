@@ -44,7 +44,15 @@ unique_ptr<LogicalOperator> JoinOrderOptimizer::Optimize(unique_ptr<LogicalOpera
 
 		// Initialize the leaf/single node plans
 		plan_enumerator.InitLeafPlans();
+#if defined(ExactLeftDeep)
+		plan_enumerator.SolveJoinOrderLeftDeep();
+#elif defined(RandomBushy)
+		plan_enumerator.SolveJoinOrderRandom();
+#elif defined(RandomLeftDeep)
+		plan_enumerator.SolveJoinOrderLeftDeepRandom();
+#else
 		plan_enumerator.SolveJoinOrder();
+#endif
 		// now reconstruct a logical plan from the query graph plan
 		query_graph_manager.plans = &plan_enumerator.GetPlans();
 

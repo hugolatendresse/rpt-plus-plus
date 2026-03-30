@@ -5,6 +5,12 @@
 #include "duckdb/optimizer/join_order/query_graph_manager.hpp"
 
 #include <cmath>
+#if defined(RandomBushy) || defined(RandomLeftDeep)
+#include <random>
+#endif
+
+//SPY: See these commits for when this file diverged RPT->DPT:
+//     JoinNode->DPJoinNode: https://github.com/duckdb/duckdb/commit/1f829be0640d9ec086a67185cf521d93a91a6890
 
 namespace duckdb {
 
@@ -465,6 +471,190 @@ void PlanEnumerator::InitLeafPlans() {
 		cost_model.cardinality_estimator.InitCardinalityEstimatorProps(&relation_set, stats);
 	}
 }
+#if defined(ExactLeftDeep)
+void PlanEnumerator::SolveJoinOrderLeftDeep() {
+	vector<vector<JoinRelationSet*>> join_rels(query_graph_manager.relation_manager.NumRelations());
+	for (int i = 0; i < query_graph_manager.relation_manager.NumRelations(); i++) {
+		join_rels[0].push_back(&query_graph_manager.set_manager.GetJoinRelation(i));
+	}
+	for (int join_size = 1; join_size < query_graph_manager.relation_manager.NumRelations(); join_size++) {
+		for (int left_idx = 0; left_idx < join_rels[join_size - 1].size(); left_idx++) {
+			auto &left = join_rels[join_size - 1][left_idx];
+			for (int right_idx = 0; right_idx < join_rels[0].size(); right_idx++) {
+				auto &right = join_rels[0][right_idx];
+				if (!JoinRelationSet::IsSubset(*left, *right)) {
+					auto connection = query_graph.GetConnections(*left, *right);
+					if (!connection.empty()) {
+						auto &new_set = query_graph_manager.set_manager.Union(*left, *right);
+						bool add2join_rels = false;
+						if(plans.find(new_set) == plans.end()) {
+							add2join_rels = true;
+						}
+						auto &node = EmitPair(*left, *right, connection);
+						if (add2join_rels) {
+							join_rels[join_size].push_back(&node.set);
+						}
+						//SPY: REMOVED DOES NOT EXIST UpdateDPTree(node);
+					}
+				}
+			}
+		}
+	}
+	// now the optimal join path should have been found
+	// get it from the node
+	unordered_set<idx_t> bindings;
+	for (idx_t i = 0; i < query_graph_manager.relation_manager.NumRelations(); i++) {
+		bindings.insert(i);
+	}
+	auto &total_relation = query_graph_manager.set_manager.GetJoinRelation(bindings);
+	auto final_plan = plans.find(total_relation);
+	//SPY: REMOVED RETURN TYPE CHANGED return std::move(final_plan->second);
+}
+#elif defined(RandomBushy)
+void PlanEnumerator::SolveJoinOrderRandom() {
+	std::random_device rd;
+	std::mt19937 g(rd());
+	vector<reference<JoinRelationSet>> join_relations; // T in the paper
+	for (idx_t i = 0; i < query_graph_manager.relation_manager.NumRelations(); i++) {
+		join_relations.push_back(query_graph_manager.set_manager.GetJoinRelation(i));
+	}
+	while (join_relations.size() > 1) {
+		idx_t best_left = 0, best_right = 0;
+		optional_ptr<DPJoinNode> best_connection;
+		int cnt = 0;
+		while (true) {
+			if(cnt > 10000) {
+				//SPY: REMOVED DEBUG std::cout << "random generate failed" << std::endl;
+				return SolveJoinOrder();
+			}
+			std::uniform_int_distribution<int> dist(0, join_relations.size() - 1);
+			int i = dist(g);
+			int j;
+			do {
+				j = dist(g);
+			} while (j == i);
+			auto left = join_relations[i];
+			auto right = join_relations[j];
+			// check if we can connect these two relations
+			auto connection = query_graph.GetConnections(left, right);
+			if (!connection.empty()) {
+				auto &node = EmitPair(left, right, connection);
+				//SPY: REMOVED DOES NOT EXIST UpdateDPTree(node);
+				best_connection = &node;
+				best_left = i;
+				best_right = j;
+				break;
+			}
+			cnt++;
+		}
+		if (!best_connection) {
+			throw InvalidInputException("Query requires a cross-product");
+		}
+		if (best_right > best_left) {
+			join_relations.erase(join_relations.begin() + best_right);
+			join_relations.erase(join_relations.begin() + best_left);
+		} else {
+			join_relations.erase(join_relations.begin() + best_left);
+			join_relations.erase(join_relations.begin() + best_right);
+		}
+		join_relations.push_back(best_connection->set);
+
+	}
+	// now the optimal join path should have been found
+	// get it from the node
+	unordered_set<idx_t> bindings;
+	for (idx_t i = 0; i < query_graph_manager.relation_manager.NumRelations(); i++) {
+		bindings.insert(i);
+	}
+	auto &total_relation = query_graph_manager.set_manager.GetJoinRelation(bindings);
+	auto final_plan = plans.find(total_relation);
+	//SPY: REMOVED RETURN TYPE CHANGED return std::move(final_plan->second);
+}
+#elif defined(RandomLeftDeep)
+void PlanEnumerator::SolveJoinOrderLeftDeepRandom() {
+	std::random_device rd;
+	std::mt19937 g(rd());
+	vector<reference<JoinRelationSet>> join_relations; // T in the paper
+	for (idx_t i = 0; i < query_graph_manager.relation_manager.NumRelations(); i++) {
+		join_relations.push_back(query_graph_manager.set_manager.GetJoinRelation(i));
+	}
+	optional_ptr<DPJoinNode> best_left_tree = nullptr;
+	while (join_relations.size() > 0) {
+		idx_t best_left = 0, best_right = 0;
+		optional_ptr<DPJoinNode> best_connection;
+		int cnt = 0;
+		while (true) {
+			if(cnt > 10000) {
+				//SPY: REMOVED DEBUG std::cout << "random generate failed" << std::endl;
+				return SolveJoinOrder();
+			}
+			std::uniform_int_distribution<int> dist(0, join_relations.size() - 1);
+			if (best_left_tree == nullptr) {
+				// double max = 0;
+				// int i = -1;
+				// for(int k = 0; k < join_relations.size(); k++) {
+				// 	auto card = cost_model.cardinality_estimator.EstimateCardinalityWithSet<double>(join_relations[k]);
+				// 	if (card > max) {
+				// 		i = k;
+				// 		max = card;
+				// 	}
+				// }
+				int i = dist(g);
+				int j;
+				do {
+					j = dist(g);
+				} while (j == i);
+				auto left = join_relations[i];
+				auto right = join_relations[j];
+				// check if we can connect these two relations
+				auto connection = query_graph.GetConnections(left, right);
+				if (!connection.empty()) {
+					auto &node = EmitPair(left, right, connection);
+					//SPY: REMOVED DOES NOT EXIST UpdateDPTree(node);
+					best_connection = &node;
+					best_left = i;
+					best_right = j;
+					if (best_right > best_left) {
+						join_relations.erase(join_relations.begin() + best_right);
+						join_relations.erase(join_relations.begin() + best_left);
+					} else {
+						join_relations.erase(join_relations.begin() + best_left);
+						join_relations.erase(join_relations.begin() + best_right);
+					}
+					break;
+				}
+			} else {
+				int i = dist(g);
+				auto right = join_relations[i];
+				// check if we can connect these two relations
+				auto connection = query_graph.GetConnections(best_left_tree->set, right);
+				if (!connection.empty()) {
+					auto &node = EmitPair(best_left_tree->set, right, connection);
+					//SPY: REMOVED DOES NOT EXIST UpdateDPTree(node);
+					best_connection = &node;
+					best_right = i;
+					join_relations.erase(join_relations.begin() + best_right);
+					break;
+				}
+			}
+			cnt++;
+		}
+		if (!best_connection) {
+			throw InvalidInputException("Query requires a cross-product");
+		}
+		best_left_tree = best_connection;
+	}
+	// now the optimal join path should have been found
+	// get it from the node
+	unordered_set<idx_t> bindings;
+	for (idx_t i = 0; i < query_graph_manager.relation_manager.NumRelations(); i++) {
+		bindings.insert(i);
+	}
+	auto &total_relation = query_graph_manager.set_manager.GetJoinRelation(bindings);
+	auto final_plan = plans.find(total_relation);
+	//SPY: REMOVED RETURN TYPE CHANGED return std::move(final_plan->second);
+}
+#endif
 
 // the plan enumeration is a straight implementation of the paper "Dynamic Programming Strikes Back" by Guido
 // Moerkotte and Thomas Neumannn, see that paper for additional info/documentation bonus slides:

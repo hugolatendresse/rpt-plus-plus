@@ -36,6 +36,13 @@ public:
 	static constexpr idx_t THRESHOLD_TO_SWAP_TO_APPROXIMATE = 12;
 
 	//! Perform the join order solving
+#if defined(ExactLeftDeep)
+	void SolveJoinOrderLeftDeep();
+#elif defined(RandomBushy)
+	void SolveJoinOrderRandom();
+#elif defined(RandomLeftDeep)
+	void SolveJoinOrderLeftDeepRandom();
+#endif
 	void SolveJoinOrder();
 	void InitLeafPlans();
 
