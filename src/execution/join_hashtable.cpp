@@ -550,12 +550,10 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		{
 			ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 			if (has_sel) {
-
 				tiered_hash_cache->ProbeByHash<true>(hashes_dense, count, sel, state.cache_candidates_sel,
 				                                     cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
 				                                     state.cache_miss_sel, cache_miss_count);
 			} else {
-
 				tiered_hash_cache->ProbeByHash<false>(hashes_dense, count, sel, state.cache_candidates_sel,
 				                                      cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
 				                                      state.cache_miss_sel, cache_miss_count);
