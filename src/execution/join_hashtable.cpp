@@ -481,6 +481,8 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 		keys.data[0].Flatten(keys.size());
 
+// Dispatch ProbeAndMatch with compile-time HAS_ROW_SEL to eliminate the
+// per-iteration branch on has_sel inside the hot probe loop.
 #define THC_PROBE_AND_MATCH_DISPATCH(T)                                                                                \
 	do {                                                                                                               \
 		auto probe_keys = FlatVector::GetData<T>(keys.data[0]);                                                        \
@@ -533,6 +535,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		default:
 			break;
 		}
+#undef THC_PROBE_AND_MATCH_DISPATCH
 	}
 
 	// ---- Step 3: Fallback for complex keys (ProbeByHash path) ----
