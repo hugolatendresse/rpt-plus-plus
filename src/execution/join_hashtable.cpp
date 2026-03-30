@@ -834,7 +834,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			// The THC's CAS-based Insert is thread-safe and silently
 			// drops entries if the table is full or has hash collisions.
 			idx_t new_entries_this_phase = 0;
-			if (!tiered_hash_cache->IsFull()) {
+			if (!tiered_hash_cache->IsFull()) { // TODO should aim for 7/8 full, then read-only forever
+				// TODO make sure inserting collected entries gets unrolled by compilation
 				if (thc_single_threaded) {
 					for (auto &entry : state.collected_entries) {
 						if (tiered_hash_cache->InsertUnsafe(entry.hash, entry.row_ptr)) {
@@ -853,14 +854,14 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			state.total_new_entries += new_entries_this_phase;
 
 			DEBUG_LOG("[Collect->Read-Only] cycle=%lu, probe_rows_in_phase=%lu, buffered=%lu, "
-			          "new_entries_this_phase=%lu, cache_fill=%lu/%lu, insert_new=%lu, insert_dup=%lu, "
+			          "new_entries_this_phase=%lu, cache_fill=%lu/%lu, insert_new=%lu, dup_inserts_count=%lu, "
 			          "total_collect_phase_rows=%lu, total_probe=%lu (%.2f%%)\n",
 			          (unsigned long)state.cycle_count, (unsigned long)state.probe_rows_in_phase,
 			          (unsigned long)state.collected_entries.size(), (unsigned long)new_entries_this_phase,
-			          (unsigned long)tiered_hash_cache->insert_new.load(),
+			          (unsigned long)tiered_hash_cache->new_inserts_count.load(),
 			          (unsigned long)tiered_hash_cache->GetCapacity(),
-			          (unsigned long)tiered_hash_cache->insert_new.load(),
-			          (unsigned long)tiered_hash_cache->insert_dup.load(),
+			          (unsigned long)tiered_hash_cache->new_inserts_count.load(),
+			          (unsigned long)tiered_hash_cache->dup_inserts_count.load(),
 			          (unsigned long)state.total_collect_phase_rows, (unsigned long)state.total_probe_rows,
 			          state.total_probe_rows > 0 ? 100.0 * static_cast<double>(state.total_collect_phase_rows) /
 			                                           static_cast<double>(state.total_probe_rows)
