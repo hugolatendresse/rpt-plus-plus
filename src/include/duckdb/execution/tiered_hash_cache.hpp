@@ -67,7 +67,7 @@ public:
 	//! @param cache_miss_sel holds the densely packed indices of `hashes_dense` that did not
 	//!                       get a match in the THC.
 	template <bool HAS_ROW_SEL>
-	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, 
+	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel,
 	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
 	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations, SelectionVector &cache_miss_sel,
 	                 idx_t &cache_miss_count) const {
@@ -90,8 +90,24 @@ public:
 			const auto probe_tag = ComputeTag(hashes_dense[i]);
 			auto slot = hashes_dense[i] & bitmask;
 
+			auto entry_ptr = GetEntryPtr(slot);
+			auto stored_tag = LoadTag(entry_ptr);
+
+			if (stored_tag == probe_tag) {
+				auto row_ptr = GetRowPtr(entry_ptr);
+				cache_result_ptrs[row_index] = row_ptr;
+				cache_rhs_locations[row_index] = row_ptr;
+				cache_candidates_sel.set_index(cache_candidates_count++, row_index);
+				continue;
+			}
+			if (stored_tag == 0) {
+				cache_miss_sel.set_index(cache_miss_count++, row_index);
+				continue;
+			}
+
 			bool found = false;
-			for (idx_t probes = 0; probes < MAX_PROBE_DISTANCE; probes++) {
+			for (idx_t probes = 1; probes < MAX_PROBE_DISTANCE; probes++) {
+				slot = (slot + 1) & bitmask;
 				auto entry_ptr = GetEntryPtr(slot);
 				const auto stored_tag = LoadTag(entry_ptr);
 				if (stored_tag == 0) {
@@ -105,7 +121,6 @@ public:
 					found = true;
 					break;
 				}
-				slot = (slot + 1) & bitmask;
 			}
 			if (!found) {
 				cache_miss_sel.set_index(cache_miss_count++, row_index);
@@ -118,9 +133,10 @@ public:
 	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	//! @param miss_sel holds the densely packed indices of `probe_keys` that did not
 	//!                 get a match in the THC
+	//! @tparam HAS_ROW_SEL compile-time constant eliminating the per-iteration has_row_sel branch
 	template <class T, bool HAS_ROW_SEL>
 	void ProbeAndMatch(const hash_t *hashes_dense, const T *probe_keys, idx_t count, const SelectionVector *row_sel,
-	                    data_ptr_t *result_ptrs, SelectionVector &match_sel, idx_t &match_count,
+	                   data_ptr_t *result_ptrs, SelectionVector &match_sel, idx_t &match_count,
 	                   SelectionVector &miss_sel, idx_t &miss_count) const {
 		static constexpr idx_t SLOT_PREFETCH_DIST = 16;
 
@@ -128,7 +144,7 @@ public:
 		miss_count = 0;
 
 		// Constantly prefetch 16 probes ahead
-		// TODO measure if that actually helps
+		// TODO test again which value works best
 		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
 			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
 		}
@@ -143,10 +159,26 @@ public:
 			const auto probe_key = probe_keys[row_index];
 			auto slot = hashes_dense[i] & bitmask;
 
+			auto entry_ptr = GetEntryPtr(slot);
+			auto stored_tag = LoadTag(entry_ptr);
+
+			if (stored_tag == probe_tag) {
+				auto row_ptr = GetRowPtr(entry_ptr);
+				if (Load<T>(row_ptr + key_offset_in_row) == probe_key) {
+					result_ptrs[row_index] = row_ptr;
+					match_sel.set_index(match_count++, row_index);
+					continue;
+				}
+			} else if (stored_tag == 0) {
+				miss_sel.set_index(miss_count++, row_index);
+				continue;
+			}
+
 			bool found = false;
-			for (idx_t probes = 0; probes < MAX_PROBE_DISTANCE; probes++) {
-				auto entry_ptr = GetEntryPtr(slot);
-				const auto stored_tag = LoadTag(entry_ptr);
+			for (idx_t probes = 1; probes < MAX_PROBE_DISTANCE; probes++) {
+				slot = (slot + 1) & bitmask; // linear probing
+				entry_ptr = GetEntryPtr(slot);
+				stored_tag = LoadTag(entry_ptr);
 				if (stored_tag == 0) {
 					// THC does not have a match
 					break;
@@ -161,7 +193,6 @@ public:
 						break;
 					}
 				}
-				slot = (slot + 1) & bitmask; // linear probe if didn't find
 			}
 			if (!found) {
 				miss_sel.set_index(miss_count++, row_index);
