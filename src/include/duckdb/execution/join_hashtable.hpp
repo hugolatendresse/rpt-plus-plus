@@ -507,7 +507,7 @@ private:
 	idx_t thc_activation_threshold;
 	//! True when only one thread is active, enabling non-atomic InsertUnsafe.
 	bool thc_single_threaded = false;
-
+	
 	//! Copying not allowed
 	JoinHashTable(const JoinHashTable &) = delete;
 

@@ -834,16 +834,18 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			// The THC's CAS-based Insert is thread-safe and silently
 			// drops entries if the table is full or has hash collisions.
 			idx_t new_entries_this_phase = 0;
-			if (!tiered_hash_cache->IsFull()) { // TODO should aim for 7/8 full, then read-only forever
+			if (!tiered_hash_cache->IsFull()) {
 				// TODO make sure inserting collected entries gets unrolled by compilation
 				if (thc_single_threaded) {
 					for (auto &entry : state.collected_entries) {
+						// TODO return 0 or 1 from THC instead of having a if condition here? 
 						if (tiered_hash_cache->InsertUnsafe(entry.hash, entry.row_ptr)) {
 							new_entries_this_phase++;
 						}
 					}
 					tiered_hash_cache->SyncCountersFromUnsafe();
 				} else {
+					// Concurrent insertions case
 					for (auto &entry : state.collected_entries) {
 						if (tiered_hash_cache->Insert(entry.hash, entry.row_ptr)) {
 							new_entries_this_phase++;
@@ -851,10 +853,11 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 					}
 				}
 			}
+
 			state.total_new_entries += new_entries_this_phase;
 
 			DEBUG_LOG("[Collect->Read-Only] cycle=%lu, probe_rows_in_phase=%lu, buffered=%lu, "
-			          "new_entries_this_phase=%lu, cache_fill=%lu/%lu, insert_new=%lu, dup_inserts_count=%lu, "
+			          "new_entries_this_phase=%lu, cache_fill=%lu/%lu, new_inserts_count=%lu, dup_inserts_count=%lu, "
 			          "total_collect_phase_rows=%lu, total_probe=%lu (%.2f%%)\n",
 			          (unsigned long)state.cycle_count, (unsigned long)state.probe_rows_in_phase,
 			          (unsigned long)state.collected_entries.size(), (unsigned long)new_entries_this_phase,
@@ -926,6 +929,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		    static_cast<idx_t>(static_cast<double>(state.total_probe_rows) * thc_collect_budget_fraction);
 
 		// Check whether the THC has room for new entries
+		// TODO we should simplify the logic once we're full (no need to recheck every time)
 		const bool thc_full = tiered_hash_cache->IsFull();
 
 		// All three guards must pass to enter COLLECT

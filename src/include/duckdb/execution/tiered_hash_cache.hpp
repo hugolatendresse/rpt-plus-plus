@@ -34,13 +34,10 @@ class TieredHashCache {
 public:
 	using tag_t = uint16_t;
 
-	//! Only create the THC if the global hash table has at least that capacity
-	static constexpr idx_t ACTIVATION_THRESHOLD = 10ULL * 1024 * 1024 / sizeof(uint64_t);
-
 	//! Maximum fraction of capacity that may be filled
 	//! Beyond this load factor, Insert silently drops new entries to avoid
 	//! pathological linear-probing chains (the extreme case being an infinite loop).
-	static constexpr double MAX_LOAD_FACTOR = 0.875;
+	static constexpr double MAX_LOAD_FACTOR = 0.875; // TODO this should be a config parameter
 
 	//! @param capacity_p is the number of slots to create (must be a power of 2)
 	//! @param row_size_p is the number of bytes in each row of data_collection.
@@ -213,7 +210,8 @@ public:
 		// Without this guard the unbounded linear-probing loop below can
 		// spin forever when the table is (nearly) full.
 		if (new_inserts_count.load(std::memory_order_relaxed) >= max_fill) {
-			return false;
+			return false; // TODO is there a way to communicate that to JoinHashTable to avoid having to try to insert
+			              // thousands of additional times?
 		}
 		const auto tag = ComputeTag(hash);
 		auto slot = hash & bitmask;
@@ -228,6 +226,7 @@ public:
 				return true;
 			}
 			if (expected == tag) {
+				// Don't try linear probing if the hashes perfect match. TODO could try linear probing here too
 				dup_inserts_count.fetch_add(1, std::memory_order_relaxed);
 				return false;
 			}
@@ -237,7 +236,7 @@ public:
 		return false;
 	}
 
-	//! Non-atomic insert for single-threaded use. Avoids CAS overhead (~10-20ns/insert on ARM).
+	//! Non-atomic insert for single-threaded use. Avoids CAS overhead.
 	//! The caller MUST guarantee no concurrent writers.
 	bool InsertUnsafe(hash_t hash, const_data_ptr_t row_data_ptr) {
 		if (unsafe_fill_count >= max_fill) {
@@ -262,10 +261,10 @@ public:
 		return false;
 	}
 
-	//! Sync the atomic `new_inserts_count` counter from the non-atomic unsafe_fill_count.
+	//! Sync the atomic `new_inserts_count` counter from the non-atomic `unsafe_fill_count`.
 	//! Must be called after a batch of InsertUnsafe calls so that IsFull() and
 	//! debug logging see the correct fill level.
-	//! Exists so that the unsafe path is compatible with the rest of the THC, which
+	//! Exists so that the unsafe insertion path is compatible with the rest of the THC, which
 	//! expects the atomic `new_inserts_count` to be updated.
 	void SyncCountersFromUnsafe() {
 		new_inserts_count.store(unsafe_fill_count, std::memory_order_relaxed);
@@ -354,7 +353,7 @@ private:
 	idx_t row_copy_offset;
 	idx_t entry_stride;
 	idx_t max_fill;          //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
-	idx_t unsafe_fill_count; //! Non-atomic fill counter for InsertUnsafe
+	idx_t unsafe_fill_count; //! Non-atomic counter for InsertSafe
 	unsafe_unique_array<data_t> data;
 	data_ptr_t base_ptr; //! Cached raw pointer from data.get() for hot-path access
 };
