@@ -144,6 +144,8 @@ public:
 		match_count = 0;
 		miss_count = 0;
 
+		// Constantly prefetch 16 probes ahead
+		// TODO test again which value works best
 		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
 			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 3);
 		}
@@ -175,7 +177,7 @@ public:
 
 			bool found = false;
 			for (idx_t probes = 1; probes < MAX_PROBE_DISTANCE; probes++) {
-				slot = (slot + 1) & bitmask;
+				slot = (slot + 1) & bitmask; // linear probing
 				entry_ptr = GetEntryPtr(slot);
 				stored_tag = LoadTag(entry_ptr);
 				if (stored_tag == 0) {
@@ -349,10 +351,10 @@ private:
 	idx_t key_offset_in_row;
 	idx_t row_copy_offset;
 	idx_t entry_stride;
-	idx_t max_fill;              //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
-	idx_t unsafe_fill_count;     //! Non-atomic fill counter for InsertUnsafe
+	idx_t max_fill;          //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
+	idx_t unsafe_fill_count; //! Non-atomic fill counter for InsertUnsafe
 	unsafe_unique_array<data_t> data;
-	data_ptr_t base_ptr;         //! Cached raw pointer from data.get() for hot-path access
+	data_ptr_t base_ptr; //! Cached raw pointer from data.get() for hot-path access
 };
 
 } // namespace duckdb

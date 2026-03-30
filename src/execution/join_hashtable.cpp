@@ -482,8 +482,8 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 		keys.data[0].Flatten(keys.size());
 
-		// Dispatch ProbeAndMatch with compile-time HAS_ROW_SEL to eliminate the
-		// per-iteration branch on has_sel inside the hot probe loop.
+// Dispatch ProbeAndMatch with compile-time HAS_ROW_SEL to eliminate the
+// per-iteration branch on has_sel inside the hot probe loop.
 #define THC_PROBE_AND_MATCH_DISPATCH(T)                                                                                \
 	do {                                                                                                               \
 		auto probe_keys = FlatVector::GetData<T>(keys.data[0]);                                                        \
@@ -1475,7 +1475,8 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
 	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size,
 	                                               tiered_hash_cache_key_offset, row_copy_offset);
-	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1); // TODO do we really want that??????
+	thc_single_threaded =
+	    (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1); // TODO do we really want that??????
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,
