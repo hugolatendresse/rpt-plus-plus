@@ -66,7 +66,8 @@ public:
 	//! On miss, doesn't go to data_collection, but records the row in cache_miss_sel (and cache_miss_count)
 	//! @param cache_miss_sel holds the densely packed indices of `hashes_dense` that did not
 	//!                       get a match in the THC.
-	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, bool has_row_sel,
+	template <bool HAS_ROW_SEL>
+	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel, 
 	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
 	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations, SelectionVector &cache_miss_sel,
 	                 idx_t &cache_miss_count) const {
@@ -85,7 +86,7 @@ public:
 				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
 			}
 
-			const auto row_index = has_row_sel ? row_sel->get_index(i) : i;
+			const auto row_index = HAS_ROW_SEL ? row_sel->get_index(i) : i;
 			const auto probe_tag = ComputeTag(hashes_dense[i]);
 			auto slot = hashes_dense[i] & bitmask;
 
@@ -117,9 +118,9 @@ public:
 	//! On match, result_ptrs points to the cached full row (usable by GatherResult).
 	//! @param miss_sel holds the densely packed indices of `probe_keys` that did not
 	//!                 get a match in the THC
-	template <class T>
+	template <class T, bool HAS_ROW_SEL>
 	void ProbeAndMatch(const hash_t *hashes_dense, const T *probe_keys, idx_t count, const SelectionVector *row_sel,
-	                   bool has_row_sel, data_ptr_t *result_ptrs, SelectionVector &match_sel, idx_t &match_count,
+	                    data_ptr_t *result_ptrs, SelectionVector &match_sel, idx_t &match_count,
 	                   SelectionVector &miss_sel, idx_t &miss_count) const {
 		static constexpr idx_t SLOT_PREFETCH_DIST = 16;
 
@@ -137,7 +138,7 @@ public:
 				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
 			}
 
-			const auto row_index = has_row_sel ? row_sel->get_index(i) : i;
+			const auto row_index = HAS_ROW_SEL ? row_sel->get_index(i) : i;
 			const auto probe_tag = ComputeTag(hashes_dense[i]);
 			const auto probe_key = probe_keys[row_index];
 			auto slot = hashes_dense[i] & bitmask;
