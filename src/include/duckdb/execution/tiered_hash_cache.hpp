@@ -34,13 +34,10 @@ class TieredHashCache {
 public:
 	using tag_t = uint16_t;
 
-	//! Only create the THC if the global hash table has at least that capacity
-	static constexpr idx_t ACTIVATION_THRESHOLD = 10ULL * 1024 * 1024 / sizeof(uint64_t);
-
 	//! Maximum fraction of capacity that may be filled
 	//! Beyond this load factor, Insert silently drops new entries to avoid
 	//! pathological linear-probing chains (the extreme case being an infinite loop).
-	static constexpr double MAX_LOAD_FACTOR = 0.9;
+	static constexpr double MAX_LOAD_FACTOR = 0.9; // TODO this should be a config parameter
 
 	//! @param capacity_p is the number of slots to create (must be a power of 2)
 	//! @param row_size_p is the number of bytes in each row of data_collection.
@@ -52,7 +49,7 @@ public:
 	TieredHashCache(idx_t capacity_p, idx_t row_size_p, idx_t key_offset_in_row_p, idx_t row_copy_offset_p = 0)
 	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), key_offset_in_row(key_offset_in_row_p),
 	      row_copy_offset(row_copy_offset_p), entry_stride(ComputeEntryStride(row_size_p)),
-	      max_fill(static_cast<idx_t>(capacity_p * MAX_LOAD_FACTOR)) {
+	      max_fill(static_cast<idx_t>(capacity_p * MAX_LOAD_FACTOR)), unsafe_fill_count(0) {
 		D_ASSERT(IsPowerOfTwo(capacity)); // Needed for bitmask logic
 		auto total_bytes = capacity * entry_stride;
 		// TODO should we use BPM? Or Arena?
@@ -66,6 +63,7 @@ public:
 	//! On miss, doesn't go to data_collection, but records the row in cache_miss_sel (and cache_miss_count)
 	//! @param cache_miss_sel holds the densely packed indices of `hashes_dense` that did not
 	//!                       get a match in the THC.
+	//! @tparam HAS_ROW_SEL compile-time constant eliminating the per-iteration has_row_sel branch
 	template <bool HAS_ROW_SEL>
 	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel,
 	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
@@ -108,8 +106,8 @@ public:
 			bool found = false;
 			for (idx_t probes = 1; probes < MAX_PROBE_DISTANCE; probes++) {
 				slot = (slot + 1) & bitmask;
-				auto entry_ptr = GetEntryPtr(slot);
-				const auto stored_tag = LoadTag(entry_ptr);
+				entry_ptr = GetEntryPtr(slot);
+				stored_tag = LoadTag(entry_ptr);
 				if (stored_tag == 0) {
 					break;
 				}
@@ -201,10 +199,10 @@ public:
 	}
 
 	//! Counts how many times an Insert calls actually inserts a new cache entry
-	std::atomic<idx_t> insert_new {0};
+	std::atomic<idx_t> new_inserts_count {0};
 
 	//! Counts how many times Insert does NOT insert an entry because its hash is already in the table
-	std::atomic<idx_t> insert_dup {0};
+	std::atomic<idx_t> dup_inserts_count {0};
 
 	//! Inserts an entry, including the row.
 	//! Returns true if a genuinely new entry was inserted, false otherwise
@@ -214,7 +212,7 @@ public:
 		// Refuse to insert once we've reached the maximum load factor.
 		// Without this guard the unbounded linear-probing loop below can
 		// spin forever when the table is (nearly) full.
-		if (insert_new.load(std::memory_order_relaxed) >= max_fill) {
+		if (new_inserts_count.load(std::memory_order_relaxed) >= max_fill) {
 			return false; // TODO is there a way to communicate that to JoinHashTable to avoid having to try to insert
 			              // thousands of additional times?
 		}
@@ -228,12 +226,12 @@ public:
 			// TODO double check the choice of CAS function and third argument below
 			if (tag_atomic->compare_exchange_strong(expected, tag, std::memory_order_acq_rel)) {
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
-				insert_new.fetch_add(1, std::memory_order_relaxed);
+				new_inserts_count.fetch_add(1, std::memory_order_relaxed);
 				return true;
 			}
 			if (expected == tag) {
 				// Don't try linear probing if the hashes perfect match. TODO could try linear probing here too
-				insert_dup.fetch_add(1, std::memory_order_relaxed);
+				dup_inserts_count.fetch_add(1, std::memory_order_relaxed);
 				return false;
 			}
 
@@ -242,6 +240,40 @@ public:
 		// Exceeded MAX_PROBE_DISTANCE -> silently drop the entry. It will be a miss later.
 		// TODO should we completely stop populating the THC if we reach here?
 		return false;
+	}
+
+	//! Non-atomic insert for single-threaded use. Avoids CAS overhead.
+	//! The caller MUST guarantee no concurrent writers.
+	bool InsertUnsafe(hash_t hash, const_data_ptr_t row_data_ptr) {
+		if (unsafe_fill_count >= max_fill) {
+			return false;
+		}
+		const auto tag = ComputeTag(hash);
+		auto slot = hash & bitmask;
+		for (idx_t probes = 0; probes < MAX_PROBE_DISTANCE; probes++) {
+			auto entry_ptr = GetEntryPtr(slot);
+			tag_t stored = LoadTag(entry_ptr);
+			if (stored == 0) {
+				memcpy(entry_ptr, &tag, sizeof(tag_t));
+				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
+				unsafe_fill_count++;
+				return true;
+			}
+			if (stored == tag) {
+				return false;
+			}
+			slot = (slot + 1) & bitmask;
+		}
+		return false;
+	}
+
+	//! Sync the atomic `new_inserts_count` counter from the non-atomic `unsafe_fill_count`.
+	//! Must be called after a batch of InsertUnsafe calls so that IsFull() and
+	//! debug logging see the correct fill level.
+	//! Exists so that the unsafe insertion path is compatible with the rest of the THC, which
+	//! expects the atomic `new_inserts_count` to be updated.
+	void SyncCountersFromUnsafe() {
+		new_inserts_count.store(unsafe_fill_count, std::memory_order_relaxed);
 	}
 
 	idx_t GetCapacity() const {
@@ -253,7 +285,7 @@ public:
 	//! Used by the adaptive logic to skip collection phases
 	//! when the cache is saturated and no new entries can be added.
 	bool IsFull() const {
-		return insert_new.load(std::memory_order_relaxed) >= max_fill;
+		return new_inserts_count.load(std::memory_order_relaxed) >= max_fill;
 	}
 
 	idx_t CountOccupiedEntries() const {
@@ -332,7 +364,8 @@ private:
 	idx_t key_offset_in_row;
 	idx_t row_copy_offset;
 	idx_t entry_stride;
-	idx_t max_fill; //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
+	idx_t max_fill;          //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
+	idx_t unsafe_fill_count; //! Non-atomic counter for InsertSafe
 	unsafe_unique_array<data_t> data;
 };
 
