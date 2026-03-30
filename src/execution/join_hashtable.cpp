@@ -481,7 +481,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 	if (equality_types.size() == 1 && equality_types[0].IsIntegral()) {
 		ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 		keys.data[0].Flatten(keys.size());
-        
+
 		// Dispatch ProbeAndMatch with compile-time HAS_ROW_SEL to eliminate the
 		// per-iteration branch on has_sel inside the hot probe loop.
 
@@ -499,8 +499,8 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		used_probe_and_match = true;                                                                                   \
 	} while (0)
 
-	    // This switch statement populates `match_sel` and `state.cache_miss_sel` with indexes of keys that
-	    // found and didn't find a match, respectively.
+		// This switch statement populates `match_sel` and `state.cache_miss_sel` with indexes of keys that
+		// found and didn't find a match, respectively.
 		switch (equality_types[0].InternalType()) {
 		case PhysicalType::INT8: {
 			THC_PROBE_AND_MATCH_DISPATCH(int8_t);
@@ -533,6 +533,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		case PhysicalType::UINT64: {
 			THC_PROBE_AND_MATCH_DISPATCH(uint64_t);
 			break;
+		}
 		default:
 			break;
 		}
@@ -1470,11 +1471,11 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          "key_offset=%lu, row_copy_offset=%lu, "
 	          "coverage=%.2f%%, tuple_size=%lu, pointer_offset=%lu, entry_stride=%lu, total=%.1f MiB)\n",
 	          (unsigned long)cache_capacity, (unsigned long)data_collection_row_size,
-	          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)row_copy_offset,
-	          coverage_ratio * 100.0, (unsigned long)tuple_size, (unsigned long)pointer_offset,
-	          (unsigned long)entry_stride, (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
-	tiered_hash_cache =
-	    make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size, tiered_hash_cache_key_offset, row_copy_offset);
+	          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)row_copy_offset, coverage_ratio * 100.0,
+	          (unsigned long)tuple_size, (unsigned long)pointer_offset, (unsigned long)entry_stride,
+	          (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
+	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size,
+	                                               tiered_hash_cache_key_offset, row_copy_offset);
 	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
 }
 
