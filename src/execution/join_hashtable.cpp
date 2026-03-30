@@ -484,48 +484,59 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
         
 		// Dispatch ProbeAndMatch with compile-time HAS_ROW_SEL to eliminate the
 		// per-iteration branch on has_sel inside the hot probe loop.
-#define THC_PROBE_DISPATCH(T)                                                                                          \
+
+#define THC_PROBE_AND_MATCH_DISPATCH(T)                                                                                \
 	do {                                                                                                               \
 		auto probe_keys = FlatVector::GetData<T>(keys.data[0]);                                                        \
-		if (has_sel) {                                                                                                  \
+		if (has_sel) {                                                                                                 \
 			tiered_hash_cache->ProbeAndMatch<T, true>(hashes_dense, probe_keys, count, sel, pointers_result,           \
-			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count);  \
-		} else {                                                                                                        \
+			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count); \
+		} else {                                                                                                       \
 			tiered_hash_cache->ProbeAndMatch<T, false>(hashes_dense, probe_keys, count, sel, pointers_result,          \
-			                                           match_sel, match_count, state.cache_miss_sel, cache_miss_count); \
-		}                                                                                                               \
-		used_probe_and_match = true;                                                                                    \
+			                                           match_sel, match_count, state.cache_miss_sel,                   \
+			                                           cache_miss_count);                                              \
+		}                                                                                                              \
+		used_probe_and_match = true;                                                                                   \
 	} while (0)
 
+	    // This switch statement populates `match_sel` and `state.cache_miss_sel` with indexes of keys that
+	    // found and didn't find a match, respectively.
 		switch (equality_types[0].InternalType()) {
-		case PhysicalType::INT8:
-			THC_PROBE_DISPATCH(int8_t);
+		case PhysicalType::INT8: {
+			THC_PROBE_AND_MATCH_DISPATCH(int8_t);
 			break;
-		case PhysicalType::INT16:
-			THC_PROBE_DISPATCH(int16_t);
+		}
+		case PhysicalType::INT16: {
+			THC_PROBE_AND_MATCH_DISPATCH(int16_t);
 			break;
-		case PhysicalType::INT32:
-			THC_PROBE_DISPATCH(int32_t);
+		}
+		case PhysicalType::INT32: {
+			THC_PROBE_AND_MATCH_DISPATCH(int32_t);
 			break;
-		case PhysicalType::INT64:
-			THC_PROBE_DISPATCH(int64_t);
+		}
+		case PhysicalType::INT64: {
+			THC_PROBE_AND_MATCH_DISPATCH(int64_t);
 			break;
-		case PhysicalType::UINT8:
-			THC_PROBE_DISPATCH(uint8_t);
+		}
+		case PhysicalType::UINT8: {
+			THC_PROBE_AND_MATCH_DISPATCH(uint8_t);
 			break;
-		case PhysicalType::UINT16:
-			THC_PROBE_DISPATCH(uint16_t);
+		}
+		case PhysicalType::UINT16: {
+			THC_PROBE_AND_MATCH_DISPATCH(uint16_t);
 			break;
-		case PhysicalType::UINT32:
-			THC_PROBE_DISPATCH(uint32_t);
+		}
+		case PhysicalType::UINT32: {
+			THC_PROBE_AND_MATCH_DISPATCH(uint32_t);
 			break;
-		case PhysicalType::UINT64:
-			THC_PROBE_DISPATCH(uint64_t);
+		}
+		case PhysicalType::UINT64: {
+			THC_PROBE_AND_MATCH_DISPATCH(uint64_t);
 			break;
 		default:
 			break;
 		}
-#undef THC_PROBE_DISPATCH
+#undef THC_PROBE_AND_MATCH_DISPATCH
 	}
 
 	// ---- Step 3: Fallback for complex keys (ProbeByHash path) ----
@@ -705,105 +716,105 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	if (state.tiered_hash_cache_phase == TieredHashCachePhase::COLLECT) {
 
 		{
-		ScopedHashJoinTimer collect_timer(state.thc_collect_time_ns);
+			ScopedHashJoinTimer collect_timer(state.thc_collect_time_ns);
 
-		if (state.cycle_count == 0) {
-			// ----------------------------------------------------------
-			// First collect phase (cycle 0): THC is empty, use regular DuckDB probe.
-			// Save hashes before GetRowPointersInternal modifies them,
-			// then collect all matched rows into collected_entries.
-			// ----------------------------------------------------------
+			if (state.cycle_count == 0) {
+				// ----------------------------------------------------------
+				// First collect phase (cycle 0): THC is empty, use regular DuckDB probe.
+				// Save hashes before GetRowPointersInternal modifies them,
+				// then collect all matched rows into collected_entries.
+				// ----------------------------------------------------------
 
-			// Save original hashes before GetRowPointersInternal modifies them
-			hash_t saved_hashes[STANDARD_VECTOR_SIZE];
-			if (!has_sel) {
-				hashes_v.Flatten(input_count);
-				memcpy(saved_hashes, FlatVector::GetData<hash_t>(hashes_v), input_count * sizeof(hash_t));
-			} else {
-				UnifiedVectorFormat hashes_unified;
-				hashes_v.ToUnifiedFormat(input_count, hashes_unified);
-				auto hashes_src = UnifiedVectorFormat::GetData<hash_t>(hashes_unified);
-				for (idx_t i = 0; i < input_count; i++) {
-					const auto row_index = sel->get_index(i);
-					const auto uvf_index = hashes_unified.sel->get_index(row_index);
-					saved_hashes[row_index] = hashes_src[uvf_index];
+				// Save original hashes before GetRowPointersInternal modifies them
+				hash_t saved_hashes[STANDARD_VECTOR_SIZE];
+				if (!has_sel) {
+					hashes_v.Flatten(input_count);
+					memcpy(saved_hashes, FlatVector::GetData<hash_t>(hashes_v), input_count * sizeof(hash_t));
+				} else {
+					UnifiedVectorFormat hashes_unified;
+					hashes_v.ToUnifiedFormat(input_count, hashes_unified);
+					auto hashes_src = UnifiedVectorFormat::GetData<hash_t>(hashes_unified);
+					for (idx_t i = 0; i < input_count; i++) {
+						const auto row_index = sel->get_index(i);
+						const auto uvf_index = hashes_unified.sel->get_index(row_index);
+						saved_hashes[row_index] = hashes_src[uvf_index];
+					}
 				}
-			}
 
-			// Run the regular DuckDB probe (no THC involvement)
-			if (UseSalt()) {
-				GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
-				                             pointers_result_v, match_sel, has_sel);
-			} else {
-				GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries,
-				                              pointers_result_v, match_sel, has_sel);
-			}
-
-			// Collect every matched row as a collected entry so that the first
-			// THC population covers the broadest possible set of hot keys.
-			auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
-			for (idx_t i = 0; i < count; i++) {
-				const auto row_index = match_sel.get_index(i);
-				const auto hash = saved_hashes[row_index];
-				if (hash != 0) {
-					state.collected_entries.push_back({hash, pointers_result[row_index]});
+				// Run the regular DuckDB probe (no THC involvement)
+				if (UseSalt()) {
+					GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
+					                             pointers_result_v, match_sel, has_sel);
+				} else {
+					GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries,
+					                              pointers_result_v, match_sel, has_sel);
 				}
-			}
 
-		} else {
-			// ----------------------------------------------------------
-			// Subsequent collect phase (cycle > 0): THC already has entries.
-			// Probe THC first, fall back to regular HT for misses.
-			// Only collect THC-miss matches into collected_entries so we
-			// insert exactly the "new hot" keys that the THC is missing.
-			// ----------------------------------------------------------
-
-			// The THC probe + regular fallback path is shared with READ_ONLY.
-			// We call the same logic, then additionally collect miss-matched rows.
-			idx_t match_count = 0;
-			idx_t cache_miss_count = 0;
-			ProbeTHCAndFallback(keys, key_state, state, hashes_v, sel, count, has_sel, pointers_result_v, match_sel,
-			                    match_count, cache_miss_count);
-			count = match_count;
-
-			// Collect the THC-miss rows that found a match in the regular HT.
-			// These are exactly the rows that the THC should learn about.
-			//
-			// BUG FIX: Previously read from state.hashes_dense_v via thc_miss_dense_index,
-			// but GetRowPointersInternal (called inside ProbeTHCAndFallback step 4)
-			// overwrites hashes_dense_v during its own densification and collision
-			// resolution. Reading it afterward returns garbage hashes, causing THC
-			// entries to be inserted with wrong keys and become unreachable.
-			//
-			// Fix: read hashes directly from hashes_v, which is preserved by
-			// ProbeTHCAndFallback (only Flatten or ToUnifiedFormat, no data mutation).
-			auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
-			if (!has_sel) {
-				// hashes_v was Flattened in ProbeTHCAndFallback step 1.
-				// Row index == flat index, so direct indexing is correct.
-				auto hashes_flat = FlatVector::GetData<hash_t>(hashes_v);
-				for (idx_t i = 0; i < state.thc_miss_match_count; i++) {
-					const auto row_index = state.thc_miss_match_sel.get_index(i);
-					const auto hash = hashes_flat[row_index];
+				// Collect every matched row as a collected entry so that the first
+				// THC population covers the broadest possible set of hot keys.
+				auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
+				for (idx_t i = 0; i < count; i++) {
+					const auto row_index = match_sel.get_index(i);
+					const auto hash = saved_hashes[row_index];
 					if (hash != 0) {
 						state.collected_entries.push_back({hash, pointers_result[row_index]});
 					}
 				}
+
 			} else {
-				// hashes_v is in its original format; use UnifiedVectorFormat.
-				UnifiedVectorFormat hashes_uf;
-				hashes_v.ToUnifiedFormat(input_count, hashes_uf);
-				auto hashes_src = UnifiedVectorFormat::GetData<hash_t>(hashes_uf);
-				for (idx_t i = 0; i < state.thc_miss_match_count; i++) {
-					const auto row_index = state.thc_miss_match_sel.get_index(i);
-					const auto uvf_index = hashes_uf.sel->get_index(row_index);
-					const auto hash = hashes_src[uvf_index];
-					if (hash != 0) {
-						state.collected_entries.push_back({hash, pointers_result[row_index]});
+				// ----------------------------------------------------------
+				// Subsequent collect phase (cycle > 0): THC already has entries.
+				// Probe THC first, fall back to regular HT for misses.
+				// Only collect THC-miss matches into collected_entries so we
+				// insert exactly the "new hot" keys that the THC is missing.
+				// ----------------------------------------------------------
+
+				// The THC probe + regular fallback path is shared with READ_ONLY.
+				// We call the same logic, then additionally collect miss-matched rows.
+				idx_t match_count = 0;
+				idx_t cache_miss_count = 0;
+				ProbeTHCAndFallback(keys, key_state, state, hashes_v, sel, count, has_sel, pointers_result_v, match_sel,
+				                    match_count, cache_miss_count);
+				count = match_count;
+
+				// Collect the THC-miss rows that found a match in the regular HT.
+				// These are exactly the rows that the THC should learn about.
+				//
+				// BUG FIX: Previously read from state.hashes_dense_v via thc_miss_dense_index,
+				// but GetRowPointersInternal (called inside ProbeTHCAndFallback step 4)
+				// overwrites hashes_dense_v during its own densification and collision
+				// resolution. Reading it afterward returns garbage hashes, causing THC
+				// entries to be inserted with wrong keys and become unreachable.
+				//
+				// Fix: read hashes directly from hashes_v, which is preserved by
+				// ProbeTHCAndFallback (only Flatten or ToUnifiedFormat, no data mutation).
+				auto pointers_result = FlatVector::GetData<data_ptr_t>(pointers_result_v);
+				if (!has_sel) {
+					// hashes_v was Flattened in ProbeTHCAndFallback step 1.
+					// Row index == flat index, so direct indexing is correct.
+					auto hashes_flat = FlatVector::GetData<hash_t>(hashes_v);
+					for (idx_t i = 0; i < state.thc_miss_match_count; i++) {
+						const auto row_index = state.thc_miss_match_sel.get_index(i);
+						const auto hash = hashes_flat[row_index];
+						if (hash != 0) {
+							state.collected_entries.push_back({hash, pointers_result[row_index]});
+						}
+					}
+				} else {
+					// hashes_v is in its original format; use UnifiedVectorFormat.
+					UnifiedVectorFormat hashes_uf;
+					hashes_v.ToUnifiedFormat(input_count, hashes_uf);
+					auto hashes_src = UnifiedVectorFormat::GetData<hash_t>(hashes_uf);
+					for (idx_t i = 0; i < state.thc_miss_match_count; i++) {
+						const auto row_index = state.thc_miss_match_sel.get_index(i);
+						const auto uvf_index = hashes_uf.sel->get_index(row_index);
+						const auto hash = hashes_src[uvf_index];
+						if (hash != 0) {
+							state.collected_entries.push_back({hash, pointers_result[row_index]});
+						}
 					}
 				}
 			}
-		}
 
 		} // end collect_timer scope for THC collect time
 
@@ -818,7 +829,10 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		// ----------------------------------------------------------
 		if (state.probe_rows_in_phase >= thc_collect_phase_rows) {
 			ScopedHashJoinTimer insert_timer(state.thc_insert_time_ns);
-			
+
+			// Insert all collected entries into the shared THC.
+			// The THC's CAS-based Insert is thread-safe and silently
+			// drops entries if the table is full or has hash collisions.
 			idx_t new_entries_this_phase = 0;
 			if (!tiered_hash_cache->IsFull()) {
 				if (thc_single_threaded) {
@@ -2420,4 +2434,3 @@ void ProbeSpill::PrepareNextProbe() {
 }
 
 } // namespace duckdb
-
