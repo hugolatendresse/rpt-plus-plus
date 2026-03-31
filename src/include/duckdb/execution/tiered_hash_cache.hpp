@@ -331,21 +331,26 @@ private:
 		return stride;
 	}
 
+	//! Extract upper 16 bits of the hash as a tag.
+	//! Maps 0 to 1 since 0 means empty slot.
 	__attribute__((always_inline)) static inline tag_t ComputeTag(hash_t h) {
 		auto tag = static_cast<tag_t>(h >> 48);
 		return tag == 0 ? 1 : tag;
 	}
 
+	//! Get a pointer to the `slot`th entry in the THC
 	__attribute__((always_inline)) inline data_ptr_t GetEntryPtr(idx_t slot) const {
 		return base_ptr + slot * entry_stride;
 	}
 
+	//! Get the tag stored in an entry
 	__attribute__((always_inline)) static inline tag_t LoadTag(const data_ptr_t entry_ptr) {
 		tag_t h;
 		memcpy(&h, entry_ptr, sizeof(tag_t));
 		return h;
 	}
 
+	//! Pointer to the cached row data within an entry (the first byte after the hash)
 	__attribute__((always_inline)) static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
 		return entry_ptr + HEADER_SIZE;
 	}
@@ -358,8 +363,8 @@ private:
 	idx_t entry_stride;
 	idx_t max_fill;          //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
 	idx_t unsafe_fill_count; //! Non-atomic counter for InsertSafe
-	unsafe_unique_array<data_t> data;
-	data_ptr_t base_ptr; //! Cached raw pointer from data.get() for hot-path access
+	unsafe_unique_array<data_t> data; // TODO does that get freed() automatically when hash join is done? 
+	data_ptr_t base_ptr; //! Cached raw pointer for data.get()
 };
 
 } // namespace duckdb
