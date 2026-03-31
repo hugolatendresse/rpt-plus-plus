@@ -532,6 +532,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		case PhysicalType::UINT64: {
 			THC_PROBE_AND_MATCH_DISPATCH(uint64_t);
 			break;
+		}
 		default:
 			break;
 		}
@@ -942,7 +943,9 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		if (miss_rate < thc_miss_below_which_skip_collect) {
 			DEBUG_LOG("Skipping because miss rate is too low\n");
 		} else if (!budget_ok) {
-			DEBUG_LOG("Skipping because %d collection rows is more than budget of %d\n", (int)state.total_collect_phase_rows + (int) thc_collect_phase_rows, static_cast<int>(static_cast<double>(state.total_probe_rows) * thc_collect_budget_fraction));
+			DEBUG_LOG("Skipping because %d collection rows is more than budget of %d\n",
+			          (int)state.total_collect_phase_rows + (int)thc_collect_phase_rows,
+			          static_cast<int>(static_cast<double>(state.total_probe_rows) * thc_collect_budget_fraction));
 		} else {
 			DEBUG_LOG("Skipping because thc is full\n");
 		}
