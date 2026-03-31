@@ -54,7 +54,8 @@ public:
 		auto total_bytes = capacity * entry_stride;
 		// TODO should we use BPM? Or Arena?
 		data = make_unsafe_uniq_array_uninitialized<data_t>(total_bytes);
-		memset(data.get(), 0, total_bytes);
+		base_ptr = data.get();
+		memset(base_ptr, 0, total_bytes);
 	}
 
 	//! Find the cache entry whose tag matches an input hash.
@@ -343,7 +344,7 @@ private:
 
 	// Get a pointer to the `slot`th entry in the THC
 	inline data_ptr_t GetEntryPtr(idx_t slot) const {
-		return data.get() + slot * entry_stride;
+		return base_ptr + slot * entry_stride;
 	}
 
 	// Get the tag stored in an entry
@@ -367,7 +368,8 @@ private:
 	idx_t entry_stride;
 	idx_t max_fill;          //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
 	idx_t unsafe_fill_count; //! Non-atomic counter for InsertSafe
-	unsafe_unique_array<data_t> data;
+	unsafe_unique_array<data_t> data; // TODO free() that eventually
+	data_ptr_t base_ptr; //! Cached raw pointer for data.get()
 };
 
 } // namespace duckdb
