@@ -52,6 +52,7 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
 	thc_collect_budget_fraction = config.thc_collect_budget_fraction;
 	thc_miss_below_which_skip_collect = config.thc_miss_below_which_skip_collect;
 	thc_activation_threshold = config.thc_activation_threshold;
+	thc_max_load_factor = config.thc_max_load_factor;
 	for (idx_t i = 0; i < conditions.size(); ++i) {
 		auto &condition = conditions[i];
 		D_ASSERT(condition.left->return_type == condition.right->return_type);
@@ -615,7 +616,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		// is wasted — the data is never read.
 		// TODO pass this as a parameter instead of calculating it
 		const bool collecting =
-		    (state.tiered_hash_cache_phase == TieredHashCachePhase::COLLECT && state.cycle_count > 0);
+		    (state.thc_collection_enabled && state.tiered_hash_cache_phase == TieredHashCachePhase::COLLECT && state.cycle_count > 0);
 
 		for (idx_t i = 0; i < regular_count; i++) {
 			const auto row_index = regular_match_sel.get_index(i);
@@ -852,6 +853,9 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 						}
 					}
 				}
+			} else {
+				// The THC is full -> we read-only until the end of the probe phase. 
+				state.thc_collection_enabled = false;
 			}
 
 			state.total_new_entries += new_entries_this_phase;
@@ -877,12 +881,15 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			// Transition to READ_ONLY with exponentially growing target.
 			// The first READ_ONLY segment uses READ_ONLY_BASE_ROWS.
 			// Each subsequent segment doubles in length.
-			state.tiered_hash_cache_phase = TieredHashCachePhase::READ_ONLY;
-			state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
-			state.read_only_rows_processed = 0;
-			state.ro_miss_count = 0;
-			state.ro_total_count = 0;
-			state.cycle_count++;
+			// thc_first_read_only_phase_rows == 0 means skip READ_ONLY (stay in collect)
+			if (thc_first_read_only_phase_rows > 0) {   
+				state.tiered_hash_cache_phase = TieredHashCachePhase::READ_ONLY;
+				state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
+				state.read_only_rows_processed = 0;
+					state.ro_miss_count = 0;
+				state.ro_total_count = 0;
+				state.cycle_count++;
+			}
 		}
 		return;
 	}
@@ -1478,8 +1485,9 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)row_copy_offset, coverage_ratio * 100.0,
 	          (unsigned long)tuple_size, (unsigned long)pointer_offset, (unsigned long)entry_stride,
 	          (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
-	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size,
-	                                               tiered_hash_cache_key_offset, row_copy_offset);
+	tiered_hash_cache =
+	    make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size, tiered_hash_cache_key_offset,
+	                                row_copy_offset, thc_max_load_factor);
 
 	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
 }

@@ -660,7 +660,8 @@ void ThcMissThresholdSetting::SetLocal(ClientContext &context, const Value &inpu
 }
 
 void ThcMissThresholdSetting::ResetLocal(ClientContext &context) {
-	ClientConfig::GetConfig(context).thc_miss_below_which_skip_collect = ClientConfig().thc_miss_below_which_skip_collect;
+	ClientConfig::GetConfig(context).thc_miss_below_which_skip_collect =
+	    ClientConfig().thc_miss_below_which_skip_collect;
 }
 
 Value ThcMissThresholdSetting::GetSetting(const ClientContext &context) {
@@ -683,6 +684,23 @@ void ThcActivationThresholdSetting::ResetLocal(ClientContext &context) {
 Value ThcActivationThresholdSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
 	return Value::BIGINT(static_cast<int64_t>(config.thc_activation_threshold));
+}
+
+//===----------------------------------------------------------------------===//
+// THC Max Load Factor
+//===----------------------------------------------------------------------===//
+void ThcMaxLoadFactorSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_max_load_factor = input.GetValue<double>();
+}
+
+void ThcMaxLoadFactorSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_max_load_factor = ClientConfig().thc_max_load_factor;
+}
+
+Value ThcMaxLoadFactorSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::DOUBLE(config.thc_max_load_factor);
 }
 
 //===----------------------------------------------------------------------===//

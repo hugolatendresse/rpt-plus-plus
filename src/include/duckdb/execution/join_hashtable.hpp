@@ -282,6 +282,10 @@ public:
 		//! (summed across all collect phases).
 		idx_t total_new_entries = 0;
 
+		//! We only collect (and populate) the THC is this is true. By default it is true,
+		//! and the algorithm can set to false if we don't want to collect/populate anymore.  
+		bool thc_collection_enabled = true;
+
 		//! --- Scratch space for collecting THC-miss matches during collect phase (cycle > 0) ---
 		//! After ProbeTHCAndFallback runs, these record which miss-fallback rows actually
 		//! found a match in the regular HT, so we can insert them into the THC.
@@ -505,6 +509,8 @@ private:
 	double thc_miss_below_which_skip_collect;
 	//! Minimum HT capacity to activate the THC.
 	idx_t thc_activation_threshold;
+	//! Maximum THC load factor; inserts stop beyond this fill ratio.
+	double thc_max_load_factor;
 	//! True when only one thread is active, enabling non-atomic InsertUnsafe.
 	bool thc_single_threaded = false;
 	
