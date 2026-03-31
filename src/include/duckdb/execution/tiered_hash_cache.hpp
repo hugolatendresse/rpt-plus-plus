@@ -34,13 +34,10 @@ class TieredHashCache {
 public:
 	using tag_t = uint16_t;
 
-	//! Only create the THC if the global hash table has at least that capacity
-	static constexpr idx_t ACTIVATION_THRESHOLD = 10ULL * 1024 * 1024 / sizeof(uint64_t);
-
 	//! Maximum fraction of capacity that may be filled
 	//! Beyond this load factor, Insert silently drops new entries to avoid
 	//! pathological linear-probing chains (the extreme case being an infinite loop).
-	static constexpr double MAX_LOAD_FACTOR = 0.9;
+	static constexpr double MAX_LOAD_FACTOR = 0.875; // TODO this should be a config parameter
 
 	//! @param capacity_p is the number of slots to create (must be a power of 2)
 	//! @param row_size_p is the number of bytes in each row of data_collection.
@@ -83,7 +80,7 @@ public:
 		}
 
 		for (idx_t i = 0; i < count; i++) {
-			if (i + SLOT_PREFETCH_DIST < count) {
+			if (__builtin_expect(i + SLOT_PREFETCH_DIST < count, 1)) {
 				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 3);
 			}
 
@@ -101,7 +98,7 @@ public:
 				cache_candidates_sel.set_index(cache_candidates_count++, row_index);
 				continue;
 			}
-			if (stored_tag == 0) {
+			if (__builtin_expect(stored_tag == 0, 0)) {
 				cache_miss_sel.set_index(cache_miss_count++, row_index);
 				continue;
 			}
@@ -111,15 +108,16 @@ public:
 				slot = (slot + 1) & bitmask;
 				entry_ptr = GetEntryPtr(slot);
 				stored_tag = LoadTag(entry_ptr);
-				if (stored_tag == 0) {
-					break;
-				}
-				if (stored_tag == probe_tag) {
+				if (__builtin_expect(stored_tag == probe_tag, 0)) {
 					auto row_ptr = GetRowPtr(entry_ptr);
 					cache_result_ptrs[row_index] = row_ptr;
 					cache_rhs_locations[row_index] = row_ptr;
 					cache_candidates_sel.set_index(cache_candidates_count++, row_index);
 					found = true;
+					break;
+				}
+				
+				if (__builtin_expect(stored_tag == 0, 0)) {
 					break;
 				}
 			}
@@ -144,12 +142,14 @@ public:
 		match_count = 0;
 		miss_count = 0;
 
+		// Constantly prefetch 16 probes ahead
+		// TODO test again which value works best
 		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
 			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 3);
 		}
 
 		for (idx_t i = 0; i < count; i++) {
-			if (i + SLOT_PREFETCH_DIST < count) {
+			if (__builtin_expect(i + SLOT_PREFETCH_DIST < count, 1)) {
 				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 3);
 			}
 
@@ -168,22 +168,24 @@ public:
 					match_sel.set_index(match_count++, row_index);
 					continue;
 				}
-			} else if (stored_tag == 0) {
+			} else if (__builtin_expect(stored_tag == 0, 0)) {
 				miss_sel.set_index(miss_count++, row_index);
 				continue;
 			}
 
 			bool found = false;
 			for (idx_t probes = 1; probes < MAX_PROBE_DISTANCE; probes++) {
-				slot = (slot + 1) & bitmask;
+				slot = (slot + 1) & bitmask; // linear probing
 				entry_ptr = GetEntryPtr(slot);
 				stored_tag = LoadTag(entry_ptr);
-				if (stored_tag == 0) {
+				if (__builtin_expect(stored_tag == 0, 0)) {
+					// THC does not have a match
 					break;
 				}
-				if (stored_tag == probe_tag) {
+				if (__builtin_expect(stored_tag == probe_tag, 0)) {
 					auto row_ptr = GetRowPtr(entry_ptr);
-					if (Load<T>(row_ptr + key_offset_in_row) == probe_key) {
+					auto cache_key = Load<T>(row_ptr + key_offset_in_row);
+					if (__builtin_expect(cache_key == probe_key, 1)) {
 						result_ptrs[row_index] = row_ptr;
 						match_sel.set_index(match_count++, row_index);
 						found = true;
@@ -198,10 +200,10 @@ public:
 	}
 
 	//! Counts how many times an Insert calls actually inserts a new cache entry
-	std::atomic<idx_t> insert_new {0};
+	std::atomic<idx_t> new_inserts_count {0};
 
 	//! Counts how many times Insert does NOT insert an entry because its hash is already in the table
-	std::atomic<idx_t> insert_dup {0};
+	std::atomic<idx_t> dup_inserts_count {0};
 
 	//! Inserts an entry, including the row.
 	//! Returns true if a genuinely new entry was inserted, false otherwise
@@ -210,8 +212,9 @@ public:
 		// Refuse to insert once we've reached the maximum load factor.
 		// Without this guard the unbounded linear-probing loop below can
 		// spin forever when the table is (nearly) full.
-		if (insert_new.load(std::memory_order_relaxed) >= max_fill) {
-			return false;
+		if (__builtin_expect(new_inserts_count.load(std::memory_order_relaxed) >= max_fill, 0)) {
+			return false; // TODO is there a way to communicate that to JoinHashTable to avoid having to try to insert
+			              // thousands of additional times?
 		}
 		const auto tag = ComputeTag(hash);
 		auto slot = hash & bitmask;
@@ -219,14 +222,16 @@ public:
 			auto entry_ptr = GetEntryPtr(slot);
 			auto tag_atomic = reinterpret_cast<std::atomic<tag_t> *>(entry_ptr);
 
-			tag_t expected = 0;
-			if (tag_atomic->compare_exchange_strong(expected, tag, std::memory_order_acq_rel)) {
+			tag_t expected = 0; // We only insert if the current hash is null
+			// TODO double check the choice of CAS function and third argument below
+			if (__builtin_expect(tag_atomic->compare_exchange_strong(expected, tag, std::memory_order_acq_rel), 0)) {
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
-				insert_new.fetch_add(1, std::memory_order_relaxed);
+				new_inserts_count.fetch_add(1, std::memory_order_relaxed);
 				return true;
 			}
-			if (expected == tag) {
-				insert_dup.fetch_add(1, std::memory_order_relaxed);
+			if (__builtin_expect(expected == tag, 0)) {
+				// Don't try linear probing if the hashes perfectly match. TODO could try linear probing here too
+				dup_inserts_count.fetch_add(1, std::memory_order_relaxed);
 				return false;
 			}
 
@@ -235,10 +240,10 @@ public:
 		return false;
 	}
 
-	//! Non-atomic insert for single-threaded use. Avoids CAS overhead (~10-20ns/insert on ARM).
+	//! Non-atomic insert for single-threaded use. Avoids CAS overhead.
 	//! The caller MUST guarantee no concurrent writers.
 	bool InsertUnsafe(hash_t hash, const_data_ptr_t row_data_ptr) {
-		if (unsafe_fill_count >= max_fill) {
+		if (__builtin_expect(unsafe_fill_count >= max_fill, 0)) {
 			return false;
 		}
 		const auto tag = ComputeTag(hash);
@@ -246,13 +251,13 @@ public:
 		for (idx_t probes = 0; probes < MAX_PROBE_DISTANCE; probes++) {
 			auto entry_ptr = GetEntryPtr(slot);
 			tag_t stored = LoadTag(entry_ptr);
-			if (stored == 0) {
+			if (__builtin_expect(stored == 0, 0)) {
 				memcpy(entry_ptr, &tag, sizeof(tag_t));
 				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
 				unsafe_fill_count++;
 				return true;
 			}
-			if (stored == tag) {
+			if (__builtin_expect(stored == tag, 0)) {
 				return false;
 			}
 			slot = (slot + 1) & bitmask;
@@ -260,11 +265,13 @@ public:
 		return false;
 	}
 
-	//! Sync the atomic insert_new counter from the non-atomic unsafe_fill_count.
+	//! Sync the atomic `new_inserts_count` counter from the non-atomic `unsafe_fill_count`.
 	//! Must be called after a batch of InsertUnsafe calls so that IsFull() and
 	//! debug logging see the correct fill level.
+	//! Exists so that the unsafe insertion path is compatible with the rest of the THC, which
+	//! expects the atomic `new_inserts_count` to be updated.
 	void SyncCountersFromUnsafe() {
-		insert_new.store(unsafe_fill_count, std::memory_order_relaxed);
+		new_inserts_count.store(unsafe_fill_count, std::memory_order_relaxed);
 	}
 
 	idx_t GetCapacity() const {
@@ -276,7 +283,7 @@ public:
 	//! Used by the adaptive logic to skip collection phases
 	//! when the cache is saturated and no new entries can be added.
 	bool IsFull() const {
-		return insert_new.load(std::memory_order_relaxed) >= max_fill;
+		return new_inserts_count.load(std::memory_order_relaxed) >= max_fill;
 	}
 
 	idx_t CountOccupiedEntries() const {
@@ -324,21 +331,26 @@ private:
 		return stride;
 	}
 
+	//! Extract upper 16 bits of the hash as a tag.
+	//! Maps 0 to 1 since 0 means empty slot.
 	__attribute__((always_inline)) static inline tag_t ComputeTag(hash_t h) {
 		auto tag = static_cast<tag_t>(h >> 48);
 		return tag == 0 ? 1 : tag;
 	}
 
+	//! Get a pointer to the `slot`th entry in the THC
 	__attribute__((always_inline)) inline data_ptr_t GetEntryPtr(idx_t slot) const {
 		return base_ptr + slot * entry_stride;
 	}
 
+	//! Get the tag stored in an entry
 	__attribute__((always_inline)) static inline tag_t LoadTag(const data_ptr_t entry_ptr) {
 		tag_t h;
 		memcpy(&h, entry_ptr, sizeof(tag_t));
 		return h;
 	}
 
+	//! Pointer to the cached row data within an entry (the first byte after the hash)
 	__attribute__((always_inline)) static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
 		return entry_ptr + HEADER_SIZE;
 	}
@@ -349,10 +361,10 @@ private:
 	idx_t key_offset_in_row;
 	idx_t row_copy_offset;
 	idx_t entry_stride;
-	idx_t max_fill;              //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
-	idx_t unsafe_fill_count;     //! Non-atomic fill counter for InsertUnsafe
-	unsafe_unique_array<data_t> data;
-	data_ptr_t base_ptr;         //! Cached raw pointer from data.get() for hot-path access
+	idx_t max_fill;          //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
+	idx_t unsafe_fill_count; //! Non-atomic counter for InsertSafe
+	unsafe_unique_array<data_t> data; // TODO does that get freed() automatically when hash join is done? 
+	data_ptr_t base_ptr; //! Cached raw pointer for data.get()
 };
 
 } // namespace duckdb

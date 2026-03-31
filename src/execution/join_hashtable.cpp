@@ -482,9 +482,9 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 		keys.data[0].Flatten(keys.size());
 
-		// Dispatch ProbeAndMatch with compile-time HAS_ROW_SEL to eliminate the
-		// per-iteration branch on has_sel inside the hot probe loop.
-#define THC_PROBE_DISPATCH(T)                                                                                          \
+// Dispatch ProbeAndMatch with compile-time HAS_ROW_SEL to eliminate the
+// per-iteration branch on has_sel inside the hot probe loop.
+#define THC_PROBE_AND_MATCH_DISPATCH(T)                                                                                \
 	do {                                                                                                               \
 		auto probe_keys = FlatVector::GetData<T>(keys.data[0]);                                                        \
 		if (has_sel) {                                                                                                 \
@@ -498,35 +498,44 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		used_probe_and_match = true;                                                                                   \
 	} while (0)
 
+		// This switch statement populates `match_sel` and `state.cache_miss_sel` with indexes of keys that
+		// found and didn't find a match, respectively.
 		switch (equality_types[0].InternalType()) {
-		case PhysicalType::INT8:
-			THC_PROBE_DISPATCH(int8_t);
+		case PhysicalType::INT8: {
+			THC_PROBE_AND_MATCH_DISPATCH(int8_t);
 			break;
-		case PhysicalType::INT16:
-			THC_PROBE_DISPATCH(int16_t);
+		}
+		case PhysicalType::INT16: {
+			THC_PROBE_AND_MATCH_DISPATCH(int16_t);
 			break;
-		case PhysicalType::INT32:
-			THC_PROBE_DISPATCH(int32_t);
+		}
+		case PhysicalType::INT32: {
+			THC_PROBE_AND_MATCH_DISPATCH(int32_t);
 			break;
-		case PhysicalType::INT64:
-			THC_PROBE_DISPATCH(int64_t);
+		}
+		case PhysicalType::INT64: {
+			THC_PROBE_AND_MATCH_DISPATCH(int64_t);
 			break;
-		case PhysicalType::UINT8:
-			THC_PROBE_DISPATCH(uint8_t);
+		}
+		case PhysicalType::UINT8: {
+			THC_PROBE_AND_MATCH_DISPATCH(uint8_t);
 			break;
-		case PhysicalType::UINT16:
-			THC_PROBE_DISPATCH(uint16_t);
+		}
+		case PhysicalType::UINT16: {
+			THC_PROBE_AND_MATCH_DISPATCH(uint16_t);
 			break;
-		case PhysicalType::UINT32:
-			THC_PROBE_DISPATCH(uint32_t);
+		}
+		case PhysicalType::UINT32: {
+			THC_PROBE_AND_MATCH_DISPATCH(uint32_t);
 			break;
-		case PhysicalType::UINT64:
-			THC_PROBE_DISPATCH(uint64_t);
+		}
+		case PhysicalType::UINT64: {
+			THC_PROBE_AND_MATCH_DISPATCH(uint64_t);
 			break;
 		default:
 			break;
 		}
-#undef THC_PROBE_DISPATCH
+#undef THC_PROBE_AND_MATCH_DISPATCH
 	}
 
 	// ---- Step 3: Fallback for complex keys (ProbeByHash path) ----
@@ -820,16 +829,22 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		if (state.probe_rows_in_phase >= thc_collect_phase_rows) {
 			ScopedHashJoinTimer insert_timer(state.thc_insert_time_ns);
 
+			// Insert all collected entries into the shared THC.
+			// The THC's CAS-based Insert is thread-safe and silently
+			// drops entries if the table is full or has hash collisions.
 			idx_t new_entries_this_phase = 0;
 			if (!tiered_hash_cache->IsFull()) {
+				// TODO make sure inserting collected entries gets unrolled by compilation
 				if (thc_single_threaded) {
 					for (auto &entry : state.collected_entries) {
+						// TODO return 0 or 1 from THC instead of having a if condition here?
 						if (tiered_hash_cache->InsertUnsafe(entry.hash, entry.row_ptr)) {
 							new_entries_this_phase++;
 						}
 					}
 					tiered_hash_cache->SyncCountersFromUnsafe();
 				} else {
+					// Concurrent insertions case
 					for (auto &entry : state.collected_entries) {
 						if (tiered_hash_cache->Insert(entry.hash, entry.row_ptr)) {
 							new_entries_this_phase++;
@@ -837,17 +852,18 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 					}
 				}
 			}
+
 			state.total_new_entries += new_entries_this_phase;
 
 			DEBUG_LOG("[Collect->Read-Only] cycle=%lu, probe_rows_in_phase=%lu, buffered=%lu, "
-			          "new_entries_this_phase=%lu, cache_fill=%lu/%lu, insert_new=%lu, insert_dup=%lu, "
+			          "new_entries_this_phase=%lu, cache_fill=%lu/%lu, new_inserts_count=%lu, dup_inserts_count=%lu, "
 			          "total_collect_phase_rows=%lu, total_probe=%lu (%.2f%%)\n",
 			          (unsigned long)state.cycle_count, (unsigned long)state.probe_rows_in_phase,
 			          (unsigned long)state.collected_entries.size(), (unsigned long)new_entries_this_phase,
-			          (unsigned long)tiered_hash_cache->insert_new.load(),
+			          (unsigned long)tiered_hash_cache->new_inserts_count.load(),
 			          (unsigned long)tiered_hash_cache->GetCapacity(),
-			          (unsigned long)tiered_hash_cache->insert_new.load(),
-			          (unsigned long)tiered_hash_cache->insert_dup.load(),
+			          (unsigned long)tiered_hash_cache->new_inserts_count.load(),
+			          (unsigned long)tiered_hash_cache->dup_inserts_count.load(),
 			          (unsigned long)state.total_collect_phase_rows, (unsigned long)state.total_probe_rows,
 			          state.total_probe_rows > 0 ? 100.0 * static_cast<double>(state.total_collect_phase_rows) /
 			                                           static_cast<double>(state.total_probe_rows)
@@ -912,6 +928,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		    static_cast<idx_t>(static_cast<double>(state.total_probe_rows) * thc_collect_budget_fraction);
 
 		// Check whether the THC has room for new entries
+		// TODO we should simplify the logic once we're full (no need to recheck every time)
 		const bool thc_full = tiered_hash_cache->IsFull();
 
 		// All three guards must pass to enter COLLECT
