@@ -935,9 +935,21 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		// All three guards must pass to enter COLLECT
 		const bool should_collect = (miss_rate >= thc_miss_below_which_skip_collect) && budget_ok && !thc_full;
 
+#ifdef DEBUG
 		DEBUG_LOG("[Checkpoint] checkpoint=%lu, ro_rows=%lu, miss_rate=%.2f%%, budget_ok=%d, thc_full=%d -> %s\n",
 		          (unsigned long)state.checkpoint_count, (unsigned long)state.read_only_rows_processed,
 		          miss_rate * 100.0, (int)budget_ok, (int)thc_full, should_collect ? "COLLECT" : "SKIP");
+
+		if (miss_rate < thc_miss_below_which_skip_collect) {
+			DEBUG_LOG("Skipping because miss rate is too low\n");
+		} else if (!budget_ok) {
+			DEBUG_LOG("Skipping because %d collection rows is more than budget of %d\n",
+			          (int)state.total_collect_phase_rows + (int)thc_collect_phase_rows,
+			          static_cast<int>(static_cast<double>(state.total_probe_rows) * thc_collect_budget_fraction));
+		} else {
+			DEBUG_LOG("Skipping because thc is full\n");
+		}
+#endif
 
 		// ---- Abandonment check ----
 		// If the miss rate is very high (above THC_ABANDON_MISS_THRESHOLD),
@@ -1480,7 +1492,6 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
 	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size,
 	                                               tiered_hash_cache_key_offset, row_copy_offset);
-
 	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
 }
 
