@@ -77,12 +77,12 @@ public:
 		cache_miss_count = 0;
 
 		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
-			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
+			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 3);
 		}
 
 		for (idx_t i = 0; i < count; i++) {
 			if (__builtin_expect(i + SLOT_PREFETCH_DIST < count, 1)) {
-				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
+				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 3);
 			}
 
 			const auto row_index = HAS_ROW_SEL ? row_sel->get_index(i) : i;
@@ -146,12 +146,12 @@ public:
 		// Constantly prefetch 16 probes ahead
 		// TODO test again which value works best
 		for (idx_t p = 0; p < MinValue<idx_t>(SLOT_PREFETCH_DIST, count); p++) {
-			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 1);
+			__builtin_prefetch(GetEntryPtr(hashes_dense[p] & bitmask), 0, 3);
 		}
 
 		for (idx_t i = 0; i < count; i++) {
 			if (__builtin_expect(i + SLOT_PREFETCH_DIST < count, 1)) {
-				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 1);
+				__builtin_prefetch(GetEntryPtr(hashes_dense[i + SLOT_PREFETCH_DIST] & bitmask), 0, 3);
 			}
 
 			const auto row_index = HAS_ROW_SEL ? row_sel->get_index(i) : i;
