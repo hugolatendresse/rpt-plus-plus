@@ -92,7 +92,7 @@ public:
 			auto entry_ptr = GetEntryPtr(slot);
 			auto stored_tag = LoadTag(entry_ptr);
 
-			if (__builtin_expect(stored_tag == probe_tag, 0)) {
+			if (__builtin_expect(stored_tag == probe_tag, 1)) {
 				auto row_ptr = GetRowPtr(entry_ptr);
 				cache_result_ptrs[row_index] = row_ptr;
 				cache_rhs_locations[row_index] = row_ptr;
@@ -162,7 +162,7 @@ public:
 			auto entry_ptr = GetEntryPtr(slot);
 			auto stored_tag = LoadTag(entry_ptr);
 
-			if (__builtin_expect(stored_tag == probe_tag, 0)) {
+			if (__builtin_expect(stored_tag == probe_tag, 1)) {
 				auto row_ptr = GetRowPtr(entry_ptr);
 				if (__builtin_expect(Load<T>(row_ptr + key_offset_in_row) == probe_key, 1)) {
 					result_ptrs[row_index] = row_ptr;
