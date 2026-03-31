@@ -37,7 +37,7 @@ public:
 	//! Maximum fraction of capacity that may be filled
 	//! Beyond this load factor, Insert silently drops new entries to avoid
 	//! pathological linear-probing chains (the extreme case being an infinite loop).
-	static constexpr double MAX_LOAD_FACTOR = 0.9; // TODO this should be a config parameter
+	static constexpr double MAX_LOAD_FACTOR = 0.875; // TODO this should be a config parameter
 
 	//! @param capacity_p is the number of slots to create (must be a power of 2)
 	//! @param row_size_p is the number of bytes in each row of data_collection.
@@ -337,18 +337,18 @@ private:
 
 	//! Extract upper 16 bits of the hash as a tag.
 	//! Maps 0 to 1 since 0 means empty slot.
-	static inline tag_t ComputeTag(hash_t h) {
+	__attribute__((always_inline)) static inline tag_t ComputeTag(hash_t h) {
 		auto tag = static_cast<tag_t>(h >> 48);
 		return tag == 0 ? 1 : tag;
 	}
 
 	// Get a pointer to the `slot`th entry in the THC
-	inline data_ptr_t GetEntryPtr(idx_t slot) const {
+	__attribute__((always_inline)) inline data_ptr_t GetEntryPtr(idx_t slot) const {
 		return base_ptr + slot * entry_stride;
 	}
 
 	// Get the tag stored in an entry
-	static inline tag_t LoadTag(const data_ptr_t entry_ptr) {
+	__attribute__((always_inline)) static inline tag_t LoadTag(const data_ptr_t entry_ptr) {
 		tag_t h;
 		memcpy(&h, entry_ptr, sizeof(tag_t)); // TODO can probably do this without memcpy... just derefence the value?
 		                                      // or mem-compare? or something?
@@ -356,7 +356,7 @@ private:
 	}
 
 	//! Pointer to the cached row data within an entry (the first byte after the hash)
-	static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
+	__attribute__((always_inline)) static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
 		return entry_ptr + HEADER_SIZE;
 	}
 
@@ -368,7 +368,7 @@ private:
 	idx_t entry_stride;
 	idx_t max_fill;          //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
 	idx_t unsafe_fill_count; //! Non-atomic counter for InsertSafe
-	unsafe_unique_array<data_t> data; // TODO free() that eventually
+	unsafe_unique_array<data_t> data; // TODO does that get freed() automatically when hash join is done? 
 	data_ptr_t base_ptr; //! Cached raw pointer for data.get()
 };
 
