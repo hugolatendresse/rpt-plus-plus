@@ -838,11 +838,11 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			// stopping when the table is full or all entries are consumed.
 			idx_t new_entries_this_phase;
 			if (thc_single_threaded) {
-				new_entries_this_phase = tiered_hash_cache->InsertBatch<true>(
-				    state.collected_entries.data(), state.collected_entries.size());
+				new_entries_this_phase = tiered_hash_cache->InsertBatch<true>(state.collected_entries.data(),
+				                                                              state.collected_entries.size());
 			} else {
-				new_entries_this_phase = tiered_hash_cache->InsertBatch<false>(
-				    state.collected_entries.data(), state.collected_entries.size());
+				new_entries_this_phase = tiered_hash_cache->InsertBatch<false>(state.collected_entries.data(),
+				                                                               state.collected_entries.size());
 			}
 			if (tiered_hash_cache->IsFull()) {
 				DEBUG_LOG("THC has reached desired load factor - don't collect ever again.");
@@ -941,7 +941,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 
 	DEBUG_LOG("[Checkpoint] checkpoint=%lu, ro_rows=%lu, miss_rate=%.2f%%, budget_ok=%d -> %s\n",
 	          (unsigned long)state.checkpoint_count, (unsigned long)state.read_only_rows_processed, miss_rate * 100.0,
-	          (int)budget_ok,  should_collect ? "COLLECT" : "SKIP");
+	          (int)budget_ok, should_collect ? "COLLECT" : "SKIP");
 
 	// ---- Abandonment check ----
 	// If the miss rate is very high (above THC_ABANDON_MISS_THRESHOLD),
