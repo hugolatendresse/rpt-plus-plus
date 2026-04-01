@@ -34,11 +34,6 @@ class TieredHashCache {
 public:
 	using tag_t = uint16_t;
 
-	//! Maximum fraction of capacity that may be filled
-	//! Beyond this load factor, Insert silently drops new entries to avoid
-	//! pathological linear-probing chains (the extreme case being an infinite loop).
-	static constexpr double MAX_LOAD_FACTOR = 0.875; // TODO this should be a config parameter
-
 	//! @param capacity_p is the number of slots to create (must be a power of 2)
 	//! @param row_size_p is the number of bytes in each row of data_collection.
 	//!            This is smaller than the entry size of each row of our
@@ -46,11 +41,17 @@ public:
 	//! @param key_offset_in_row_p byte offset of key within the row (after validity bytes)
 	//! @param row_copy_offset_p how many bytes to skip over in each data_collection row before starting copying into
 	//! the fast cache
-	TieredHashCache(idx_t capacity_p, idx_t row_size_p, idx_t key_offset_in_row_p, idx_t row_copy_offset_p = 0)
+	//! @param max_load_factor_p maximum fraction of capacity that may be filled (0.0–1.0).
+	//!            Beyond this, we stop inserting new entries to avoid pathological
+	//!            linear-probing chains (the extreme case being an infinite loop).
+	TieredHashCache(idx_t capacity_p, idx_t row_size_p, idx_t key_offset_in_row_p, idx_t row_copy_offset_p = 0,
+	                double max_load_factor_p = 0.875)
 	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), key_offset_in_row(key_offset_in_row_p),
 	      row_copy_offset(row_copy_offset_p), entry_stride(ComputeEntryStride(row_size_p)),
-	      max_fill(static_cast<idx_t>(capacity_p * MAX_LOAD_FACTOR)), unsafe_fill_count(0) {
+	      max_fill(static_cast<idx_t>(static_cast<double>(capacity_p) * max_load_factor_p)), unsafe_fill_count(0) {
+		D_ASSERT(max_load_factor_p >= 1 && max_load_factor_p <= 1);
 		D_ASSERT(IsPowerOfTwo(capacity)); // Needed for bitmask logic
+		D_ASSERT(max_load_factor_p > 0.0 && max_load_factor_p <= 1.0);
 		auto total_bytes = capacity * entry_stride;
 		// TODO should we use BPM? Or Arena?
 		data = make_unsafe_uniq_array_uninitialized<data_t>(total_bytes);
@@ -117,7 +118,7 @@ public:
 					found = true;
 					break;
 				}
-				
+
 				if (__builtin_expect(stored_tag == 0, 0)) {
 					break;
 				}
@@ -366,10 +367,10 @@ private:
 	idx_t key_offset_in_row;
 	idx_t row_copy_offset;
 	idx_t entry_stride;
-	idx_t max_fill;          //! capacity * MAX_LOAD_FACTOR — Insert refuses beyond this
-	idx_t unsafe_fill_count; //! Non-atomic counter for InsertSafe
-	unsafe_unique_array<data_t> data; // TODO does that get freed() automatically when hash join is done? 
-	data_ptr_t base_ptr; //! Cached raw pointer for data.get()
+	idx_t max_fill;                   //! capacity * max load factor — Insert refuses beyond this
+	idx_t unsafe_fill_count;          //! Non-atomic counter for InsertSafe
+	unsafe_unique_array<data_t> data; // TODO does that get freed() automatically when hash join is done?
+	data_ptr_t base_ptr;              //! Cached raw pointer for data.get()
 };
 
 } // namespace duckdb

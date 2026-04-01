@@ -99,6 +99,10 @@ struct ClientConfig {
 	//! Minimum HT capacity (in entries) to activate the THC.
 	//! Hash tables smaller than this are assumed to fit in L3 naturally.
 	idx_t thc_activation_threshold = 10ULL * 1024 * 1024 / sizeof(uint64_t);
+	//! Maximum load factor for the THC (0.0–1.0).
+	//! Beyond this fill ratio, THC does not insert new entries. This
+	//! is to avoid pathological linear-probing chains.
+	double thc_max_load_factor = 0.875;
 	//! Enable caching operators
 	bool enable_caching_operators = true;
 	//! Force parallelism of small tables, used for testing
