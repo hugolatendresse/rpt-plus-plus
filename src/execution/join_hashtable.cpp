@@ -1,5 +1,6 @@
 #include "duckdb/execution/join_hashtable.hpp"
 
+#include "duckdb/common/assert.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/radix_partitioning.hpp"
 #include "duckdb/common/debug_log.hpp"
@@ -614,14 +615,16 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		// during COLLECT phase (cycle > 0) where the caller will consume them
 		// to insert new entries into the THC. In READ_ONLY phase this work
 		// is wasted — the data is never read.
-		// TODO pass this as a parameter instead of calculating it
-		const bool collecting =
-		    (state.thc_collection_enabled && state.tiered_hash_cache_phase == TieredHashCachePhase::COLLECT && state.cycle_count > 0);
+		D_ASSERT(state.cycle_count > 0); // This function shouldn't be called at all in the first cycle
+		const bool in_collect_phase = state.tiered_hash_cache_phase == TieredHashCachePhase::COLLECT;
 
+		// Populate `thc_miss_match_sel` selection vector with all the entries not found in
+		// THC but found in data_collection. Those entries will be pushed back to collected_entries
+		// after this function returns.
 		for (idx_t i = 0; i < regular_count; i++) {
 			const auto row_index = regular_match_sel.get_index(i);
 			match_sel.set_index(match_count++, row_index);
-			if (collecting) {
+			if (in_collect_phase) {
 				state.thc_miss_match_sel.set_index(state.thc_miss_match_count++, row_index);
 			}
 		}
@@ -831,30 +834,18 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		if (state.probe_rows_in_phase >= thc_collect_phase_rows) {
 			ScopedHashJoinTimer insert_timer(state.thc_insert_time_ns);
 
-			// Insert all collected entries into the shared THC.
-			// The THC's CAS-based Insert is thread-safe and silently
-			// drops entries if the table is full or has hash collisions.
-			idx_t new_entries_this_phase = 0;
-			if (!tiered_hash_cache->IsFull()) {
-				// TODO make sure inserting collected entries gets unrolled by compilation
-				if (thc_single_threaded) {
-					for (auto &entry : state.collected_entries) {
-						// TODO return 0 or 1 from THC instead of having a if condition here?
-						if (tiered_hash_cache->InsertUnsafe(entry.hash, entry.row_ptr)) {
-							new_entries_this_phase++;
-						}
-					}
-					tiered_hash_cache->SyncCountersFromUnsafe();
-				} else {
-					// Concurrent insertions case
-					for (auto &entry : state.collected_entries) {
-						if (tiered_hash_cache->Insert(entry.hash, entry.row_ptr)) {
-							new_entries_this_phase++;
-						}
-					}
-				}
+			// Insert collected entries into the shared THC in batches,
+			// stopping when the table is full or all entries are consumed.
+			idx_t new_entries_this_phase;
+			if (thc_single_threaded) {
+				new_entries_this_phase = tiered_hash_cache->InsertBatch<true>(
+				    state.collected_entries.data(), state.collected_entries.size());
 			} else {
-				// The THC is full -> we read-only until the end of the probe phase. 
+				new_entries_this_phase = tiered_hash_cache->InsertBatch<false>(
+				    state.collected_entries.data(), state.collected_entries.size());
+			}
+			if (tiered_hash_cache->IsFull()) {
+				DEBUG_LOG("THC has reached desired load factor - don't collect ever again.");
 				state.thc_collection_enabled = false;
 			}
 
@@ -882,11 +873,11 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			// The first READ_ONLY segment uses READ_ONLY_BASE_ROWS.
 			// Each subsequent segment doubles in length.
 			// thc_first_read_only_phase_rows == 0 means skip READ_ONLY (stay in collect)
-			if (thc_first_read_only_phase_rows > 0) {   
+			if (thc_first_read_only_phase_rows > 0) {
 				state.tiered_hash_cache_phase = TieredHashCachePhase::READ_ONLY;
 				state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
 				state.read_only_rows_processed = 0;
-					state.ro_miss_count = 0;
+				state.ro_miss_count = 0;
 				state.ro_total_count = 0;
 				state.cycle_count++;
 			}
@@ -920,68 +911,73 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// This happens when we've processed enough rows in this
 	// READ_ONLY segment (the target grows exponentially).
 	// ----------------------------------------------------------
-	if (state.read_only_rows_processed >= state.read_only_rows_target) {
+	if (state.read_only_rows_processed < state.read_only_rows_target) {
+		DEBUG_LOG("Staying in read-only made since haven't reached row count target\n");
+		return;
+	}
+	// We have reached out read-only row count target.
 
-		// Compute the miss rate over this entire READ_ONLY segment
-		const double miss_rate = state.ro_total_count > 0 ? static_cast<double>(state.ro_miss_count) /
-		                                                        static_cast<double>(state.ro_total_count)
-		                                                  : 0.0;
+	if (!state.thc_collection_enabled) {
+		DEBUG_LOG("Staying in read-only mode since collection phase has been permanently disabled\n");
+		return;
+	}
 
-		// Check whether we can afford another collect phase within the total budget.
-		// We project the cost of the next COLLECT_PHASE_PROBE_ROWS and check if
-		// total_collect_phase_rows + COLLECT_PHASE_PROBE_ROWS stays within the
-		// configured fraction budget.
-		const bool budget_ok =
-		    (state.total_collect_phase_rows + thc_collect_phase_rows) <=
-		    static_cast<idx_t>(static_cast<double>(state.total_probe_rows) * thc_collect_budget_fraction);
+	// Compute the miss rate over this entire READ_ONLY segment
+	const double miss_rate = state.ro_total_count > 0
+	                             ? static_cast<double>(state.ro_miss_count) / static_cast<double>(state.ro_total_count)
+	                             : 0.0;
 
-		// Check whether the THC has room for new entries
-		// TODO we should simplify the logic once we're full (no need to recheck every time)
-		const bool thc_full = tiered_hash_cache->IsFull();
+	// Check whether we can afford another collect phase within the total budget.
+	// We project the cost of the next COLLECT_PHASE_PROBE_ROWS and check if
+	// total_collect_phase_rows + COLLECT_PHASE_PROBE_ROWS stays within the
+	// configured fraction budget.
+	const bool budget_ok =
+	    (state.total_collect_phase_rows + thc_collect_phase_rows) <=
+	    static_cast<idx_t>(static_cast<double>(state.total_probe_rows) * thc_collect_budget_fraction);
 
-		// All three guards must pass to enter COLLECT
-		const bool should_collect = (miss_rate >= thc_miss_below_which_skip_collect) && budget_ok && !thc_full;
+	// All three guards must pass to enter COLLECT
+	const bool should_collect =
+	    state.thc_collection_enabled && (miss_rate >= thc_miss_below_which_skip_collect) && budget_ok;
 
-		DEBUG_LOG("[Checkpoint] checkpoint=%lu, ro_rows=%lu, miss_rate=%.2f%%, budget_ok=%d, thc_full=%d -> %s\n",
-		          (unsigned long)state.checkpoint_count, (unsigned long)state.read_only_rows_processed,
-		          miss_rate * 100.0, (int)budget_ok, (int)thc_full, should_collect ? "COLLECT" : "SKIP");
+	DEBUG_LOG("[Checkpoint] checkpoint=%lu, ro_rows=%lu, miss_rate=%.2f%%, budget_ok=%d -> %s\n",
+	          (unsigned long)state.checkpoint_count, (unsigned long)state.read_only_rows_processed, miss_rate * 100.0,
+	          (int)budget_ok,  should_collect ? "COLLECT" : "SKIP");
 
-		// ---- Abandonment check ----
-		// If the miss rate is very high (above THC_ABANDON_MISS_THRESHOLD),
-		// the THC is clearly not helping this thread.  We track consecutive
-		// high-miss checkpoints and permanently abandon the THC once the
-		// counter reaches THC_ABANDON_CONSECUTIVE_MISSES.  After abandonment,
-		// GetRowPointers skips all THC logic and goes straight to the vanilla
-		// DuckDB probe path, eliminating the overhead entirely.
-		if (miss_rate >= THC_ABANDON_MISS_THRESHOLD) {
-			state.consecutive_high_miss_checkpoints++;
-			if (state.consecutive_high_miss_checkpoints >= THC_ABANDON_CONSECUTIVE_MISSES) {
-				DEBUG_LOG("[THC Abandon] thread abandoned THC after %lu consecutive high-miss checkpoints "
-				          "(miss_rate=%.2f%%)\n",
-				          (unsigned long)state.consecutive_high_miss_checkpoints, miss_rate * 100.0);
-				state.thc_abandoned = true;
-				return;
-			}
-		} else {
-			// Reset the counter when we observe a low-miss segment
-			state.consecutive_high_miss_checkpoints = 0;
+	// ---- Abandonment check ----
+	// If the miss rate is very high (above THC_ABANDON_MISS_THRESHOLD),
+	// the THC is clearly not helping this thread.  We track consecutive
+	// high-miss checkpoints and permanently abandon the THC once the
+	// counter reaches THC_ABANDON_CONSECUTIVE_MISSES.  After abandonment,
+	// GetRowPointers skips all THC logic and goes straight to the vanilla
+	// DuckDB probe path, eliminating the overhead entirely.
+	if (miss_rate >= THC_ABANDON_MISS_THRESHOLD) {
+		state.consecutive_high_miss_checkpoints++;
+		if (state.consecutive_high_miss_checkpoints >= THC_ABANDON_CONSECUTIVE_MISSES) {
+			DEBUG_LOG("[THC Abandon] thread abandoned THC after %lu consecutive high-miss checkpoints "
+			          "(miss_rate=%.2f%%)\n",
+			          (unsigned long)state.consecutive_high_miss_checkpoints, miss_rate * 100.0);
+			state.thc_abandoned = true;
+			return;
 		}
+	} else {
+		// Reset the counter when we observe a low-miss segment
+		state.consecutive_high_miss_checkpoints = 0;
+	}
 
-		// Always increment checkpoint count (controls exponential backoff)
-		state.checkpoint_count++;
+	// Always increment checkpoint count (controls exponential backoff)
+	state.checkpoint_count++;
 
-		if (should_collect) {
-			// Enter COLLECT phase: reset per-phase state
-			state.tiered_hash_cache_phase = TieredHashCachePhase::COLLECT;
-			state.probe_rows_in_phase = 0;
-			state.collected_entries.clear();
-		} else {
-			// Stay in READ_ONLY with a doubled target.
-			state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
-			state.read_only_rows_processed = 0;
-			state.ro_miss_count = 0;
-			state.ro_total_count = 0;
-		}
+	if (should_collect) {
+		// Enter COLLECT phase: reset per-phase state
+		state.tiered_hash_cache_phase = TieredHashCachePhase::COLLECT;
+		state.probe_rows_in_phase = 0;
+		state.collected_entries.clear();
+	} else {
+		// Stay in READ_ONLY with a doubled target.
+		state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
+		state.read_only_rows_processed = 0;
+		state.ro_miss_count = 0;
+		state.ro_total_count = 0;
 	}
 }
 
@@ -1485,9 +1481,8 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)row_copy_offset, coverage_ratio * 100.0,
 	          (unsigned long)tuple_size, (unsigned long)pointer_offset, (unsigned long)entry_stride,
 	          (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
-	tiered_hash_cache =
-	    make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size, tiered_hash_cache_key_offset,
-	                                row_copy_offset, thc_max_load_factor);
+	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size,
+	                                               tiered_hash_cache_key_offset, row_copy_offset, thc_max_load_factor);
 
 	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
 }
