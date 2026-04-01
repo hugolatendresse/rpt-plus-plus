@@ -207,11 +207,10 @@ public:
 	//! Counts how many times Insert does NOT insert an entry because its hash is already in the table
 	std::atomic<idx_t> dup_inserts_count {0};
 
-	//! Inserts an entry, including the row.
+	//! Inserts an entry, including the row, all atomically.
 	//! Returns true if a genuinely new entry was inserted, false otherwise
 	//! (duplicate hash, table full, or probe distance exceeded).
-	//! TODO is there a way to vectorize this?
-	bool Insert(hash_t hash, const_data_ptr_t row_data_ptr) {
+	bool InsertSafe(hash_t hash, const_data_ptr_t row_data_ptr) {
 		// Refuse to insert once we've reached the maximum load factor.
 		// Without this guard the unbounded linear-probing loop below can
 		// spin forever when the table is (nearly) full.
@@ -279,6 +278,54 @@ public:
 		new_inserts_count.store(unsafe_fill_count, std::memory_order_relaxed);
 	}
 
+	//! Batch-insert collected entries into the THC, stopping when the max load
+	//! factor has been achieved or all entries have been processed.
+	//!
+	//! @tparam SingleThreaded  When true, uses InsertUnsafe (no atomics) and
+	//!                         reads unsafe_fill_count to budget batches—
+	//!                         avoiding every atomic load.  When false, uses
+	//!                         the CAS-based InsertSafe and the atomic
+	//!                         GetFreeSlotsUntilMaxFilled query.
+	//! @tparam EntryT          Must expose .hash (hash_t) and .row_ptr
+	//!                         (const_data_ptr_t).
+	//! @return Number of genuinely new entries inserted.
+	//! TODO try to unroll/optimize this
+	template <bool SingleThreaded, typename EntryT>
+	idx_t InsertBatch(const EntryT *entries, idx_t count) {
+		idx_t new_entries = 0;
+		idx_t i = 0;
+
+		idx_t free_slots;
+		if constexpr (SingleThreaded) {
+			free_slots = GetFreeSlotsUntilMaxFilledUnsafe();
+		} else {
+			free_slots = GetFreeSlotsUntilMaxFilled();
+		}
+
+		while (i < count && free_slots > 0) {
+			const idx_t batch_end = i + MinValue<idx_t>(free_slots, count - i);
+			for (; i < batch_end; i++) {
+				if constexpr (SingleThreaded) {
+					new_entries += static_cast<idx_t>(InsertUnsafe(entries[i].hash, entries[i].row_ptr));
+				} else {
+					new_entries += static_cast<idx_t>(InsertSafe(entries[i].hash, entries[i].row_ptr));
+				}
+			}
+			if (i < count) {
+				if constexpr (SingleThreaded) {
+					free_slots = GetFreeSlotsUntilMaxFilledUnsafe();
+				} else {
+					free_slots = GetFreeSlotsUntilMaxFilled();
+				}
+			}
+		}
+
+		if constexpr (SingleThreaded) {
+			SyncCountersFromUnsafe();
+		}
+		return new_entries;
+	}
+
 	idx_t GetCapacity() const {
 		return capacity;
 	}
@@ -289,6 +336,20 @@ public:
 	//! when the cache is saturated and no new entries can be added.
 	bool IsFull() const {
 		return new_inserts_count.load(std::memory_order_relaxed) >= max_fill;
+	}
+
+	//! Returns the number of entries we can add to the THC until the maximum
+	//! load factor has been achieved (uses atomic counter — prefer the unsafe
+	//! variant on the single-threaded path).
+	idx_t GetFreeSlotsUntilMaxFilled() const {
+		auto fill = new_inserts_count.load(std::memory_order_relaxed);
+		return fill >= max_fill ? 0 : max_fill - fill;
+	}
+
+	//! Non-atomic free-slots query for the single-threaded (InsertUnsafe) path.
+	//! Avoids the atomic load; the caller MUST guarantee no concurrent writers.
+	idx_t GetFreeSlotsUntilMaxFilledUnsafe() const {
+		return unsafe_fill_count >= max_fill ? 0 : max_fill - unsafe_fill_count;
 	}
 
 	idx_t CountOccupiedEntries() const {
