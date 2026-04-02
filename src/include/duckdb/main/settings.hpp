@@ -657,6 +657,16 @@ struct ThcActivationThresholdSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct ThcMaxLoadFactorSetting {
+	using RETURN_TYPE = double;
+	static constexpr const char *Name = "thc_max_load_factor";
+	static constexpr const char *Description = "Maximum load factor for the THC (default: 0.875)";
+	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct EnableHTTPMetadataCacheSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "enable_http_metadata_cache";
