@@ -12,7 +12,11 @@ double CostModel::ComputeCost(DPJoinNode &left, DPJoinNode &right) {
 	auto &combination = query_graph_manager.set_manager.Union(left.set, right.set);
 	auto join_card = cardinality_estimator.EstimateCardinalityWithSet<double>(combination);
 	auto join_cost = join_card;
+#ifdef ExactLeftDeep
+	return join_cost + left.cost + 1.2 * right.cost;
+#else
 	return join_cost + left.cost + right.cost;
+#endif
 }
 
 } // namespace duckdb
