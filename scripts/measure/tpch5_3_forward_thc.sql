@@ -3,9 +3,9 @@ build/release/duckdb ../benchmark_data/tpch/tpch_sf100.duckdb -f scripts/measure
 */
 
 -- https://duckdb.org/docs/stable/dev/profiling
-PRAGMA enable_profiling = 'json';
-PRAGMA profiling_output = 'results.json';
-PRAGMA profiling_coverage = 'SELECT';
+-- PRAGMA enable_profiling = 'json';
+-- PRAGMA profiling_output = 'results.json';
+-- PRAGMA profiling_coverage = 'SELECT';
 -- PRAGMA profiling_mode = 'detailed';
 
 -------- Case #3: RPT+ Forward + THC -------- 

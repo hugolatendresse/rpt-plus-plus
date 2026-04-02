@@ -11,9 +11,9 @@ SET pin_threads = 'on';
 SET thc_l3_budget = 67108864;
 
 
-PRAGMA enable_profiling = 'json';
-PRAGMA profiling_output = 'results.json';
-PRAGMA profiling_coverage = 'SELECT';
+-- PRAGMA enable_profiling = 'json';
+-- PRAGMA profiling_output = 'results.json';
+-- PRAGMA profiling_coverage = 'SELECT';
 -- PRAGMA profiling_mode = 'detailed';
 
 
