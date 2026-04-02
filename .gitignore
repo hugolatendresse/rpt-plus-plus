@@ -364,3 +364,5 @@ test/sql/pragma/output.json
 tools/pythonpkg/duckdb_build/
 scripts/measure/data/
 scripts/measure/*.json
+*.tgz
+join-order-benchmark/*.csv
