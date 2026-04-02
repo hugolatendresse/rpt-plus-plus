@@ -10,7 +10,7 @@ cd "$REPO_ROOT"
 
 DB="${1:?Usage: $0 <db-path>}"
 COMMON_SETTINGS_SQL="${COMMON_SETTINGS_SQL:-scripts/measure/settings-common.sql}"
-RUN_SETTINGS_SQL="${RUN_SETTINGS_SQL:-}"
+RUN_SETTINGS_SQL="${RUN_SETTINGS_SQL:-scripts/measure/settings-run_ash_datagen.sql}"
 
 if [[ ! -f "$COMMON_SETTINGS_SQL" ]]; then
     echo "Error: Common settings file not found: $COMMON_SETTINGS_SQL" >&2
