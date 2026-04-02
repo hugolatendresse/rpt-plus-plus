@@ -1,7 +1,26 @@
--- Scenario driver: edit only this file per experiment.
+------------------------- Common Settings -----------------------------
+
+SET thc_activation_threshold = 1_000_000;
+SET thc_collect_budget_fraction = 1.00;
+SET thc_collect_phase_rows = 100_000;
+SET thc_first_read_only_phase_rows = 0;
+-- SET thc_l3_budget = 33_554_432; -- 32M
+SET thc_l3_budget = 37_748_736; -- 36MB
+-- SET thc_l3_budget = 62_914_560; -- 60MB
+-- SET thc_l3_budget = 67_108_864; -- 64MB
+SET thc_miss_below_which_skip_collect = 0.1;
 
 
------------- Data Generation Settings ---------------------
+SET max_temp_directory_size='0KiB';
+SET threads = 1;
+-- Statistics propagation sometimes just removes the cold portion
+SET disabled_optimizers = 'compressed_materialization,join_order,build_side_probe_side,statistics_propagation';
+SET thc_collect_phase_rows = 400_000;
+SET disable_perfect_hashing = true;
+SET pin_threads = 'on';
+
+
+------------ ASH-Datagen Generation Settings ---------------------
 
 
 SET VARIABLE scale_factor = 40_000;
@@ -27,58 +46,3 @@ SET VARIABLE unproductive_rate_RS = 0.00;
 SET VARIABLE unproductive_rate_ST = 0.00;
 
 SET VARIABLE benchmark_threads = 1;
-
-
-
-------------- SPY Settings ----------------------------------
-
--------- Case #1: Old DuckDB --------------  
--- SET disable_rpt = true;
--- SET disable_tiered_hash_cache = true;
-------------------------------------------
-
--------- Case #2: RPT+ Forward Pass Only -------- 
--- SET rpt_forward_only = true;
--- SET disable_tiered_hash_cache = true;
--------------------------------------------------
-
--------- Case #3: RPT+ Forward + THC -------- 
-SET rpt_forward_only = true;
----------------------------------------------
-
--------- Case #4: RPT+ Forward + Backward ----
--- SET disable_tiered_hash_cache = true;
-----------------------------------------------
-
-
-
-SET thc_activation_threshold = 1_000_000;
-SET thc_collect_budget_fraction = 1.00;
-SET thc_collect_phase_rows = 100_000;
-SET thc_first_read_only_phase_rows = 0;
--- SET thc_l3_budget = 33_554_432; -- 32M
-SET thc_l3_budget = 37_748_736; -- 36MB
--- SET thc_l3_budget = 62_914_560; -- 60MB
--- SET thc_l3_budget = 67_108_864; -- 64MB
-SET thc_miss_below_which_skip_collect = 0.1;
-
-
-
-
-
-/*
-Parameters that worked best as of 3/30
-
-SET thc_activation_threshold = 1_000_000;
-SET thc_collect_budget_fraction = 0.25;
-SET thc_collect_phase_rows = 1_000_000;
-SET thc_first_read_only_phase_rows = 1_000_000;
--- SET thc_l3_budget = 33_554_432; -- 32M
-SET thc_l3_budget = 37_748_736; -- 36MB
--- SET thc_l3_budget = 62_914_560; -- 60MB
--- SET thc_l3_budget = 67_108_864; -- 64MB
-SET thc_miss_below_which_skip_collect = 0.1;
-*/
-
-
-SET disable_perfect_hashing = true;
