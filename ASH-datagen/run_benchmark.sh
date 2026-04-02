@@ -24,7 +24,7 @@ if [[ -n "$RUN_SETTINGS_SQL" ]] && [[ ! -f "$RUN_SETTINGS_SQL" ]]; then
 fi
 
 {
-    grep '^SET ' "$COMMON_SETTINGS_SQL"
+    grep '^SET ' "$COMMON_SETTINGS_SQL" || true
     if [[ -n "$RUN_SETTINGS_SQL" ]]; then
         grep '^SET ' "$RUN_SETTINGS_SQL" || true
     fi

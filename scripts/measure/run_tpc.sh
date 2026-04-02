@@ -103,7 +103,7 @@ TPCDS_CSV_PATH="$OUT_DIR/tpcds_runtimes_sf${SF}_${TIMESTAMP}.csv"
 build_sql() {
     local extension="$1"
     local query_stmt="$2"
-    grep '^SET ' "$COMMON_SETTINGS_SQL"
+    grep '^SET ' "$COMMON_SETTINGS_SQL" || true
     grep '^SET ' "$RUN_SETTINGS_SQL" || true
     printf '%s\n' "$CASE_SETTINGS"
     printf 'LOAD %s;\n' "$extension"

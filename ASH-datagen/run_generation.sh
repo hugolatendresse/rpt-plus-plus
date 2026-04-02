@@ -25,7 +25,7 @@ rm -f "$DB" "${DB}.wal"
 
 echo "=== Phase 1: generating tables with release build ==="
 {
-    grep '^SET VARIABLE' "$COMMON_SETTINGS_SQL"
+    grep '^SET VARIABLE' "$COMMON_SETTINGS_SQL" || true
     if [[ -n "$RUN_SETTINGS_SQL" ]]; then
         grep '^SET VARIABLE' "$RUN_SETTINGS_SQL" || true
     fi

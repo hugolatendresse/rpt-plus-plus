@@ -128,7 +128,7 @@ fi
 
 build_bench_sql() {
     printf '%s\n' "$PROFILING_HEADER"
-    grep '^SET ' "$COMMON_SETTINGS_SQL"
+    grep '^SET ' "$COMMON_SETTINGS_SQL" || true
     grep '^SET ' "$RUN_SETTINGS_SQL" || true
     printf '%s\n' "$CASE_SETTINGS"
     echo ""

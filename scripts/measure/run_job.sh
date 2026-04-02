@@ -62,14 +62,14 @@ run_query() {
     local query_file="$1"
     if $USE_PERF; then
         {
-            grep '^SET ' "$COMMON_SETTINGS_SQL"
+            grep '^SET ' "$COMMON_SETTINGS_SQL" || true
             grep '^SET ' "$RUN_SETTINGS_SQL" || true
             printf '%s\n' "$CASE_SETTINGS"
             cat "$query_file"
         } | sudo perf stat -e "$PERF_EVENTS" -- "$REPO_ROOT/build/release/duckdb" "$DB_FILE"
     else
         {
-            grep '^SET ' "$COMMON_SETTINGS_SQL"
+            grep '^SET ' "$COMMON_SETTINGS_SQL" || true
             grep '^SET ' "$RUN_SETTINGS_SQL" || true
             printf '%s\n' "$CASE_SETTINGS"
             cat "$query_file"
