@@ -1,6 +1,6 @@
 # Synthetic Three-Join Benchmark Generator
 
-**TL;DR:** Edit `settings.sql` to choose parameters then run `launch_release.sh rs`
+**TL;DR:** Edit `settings-common.sql` and the run-specific settings file, then run `scripts/measure/run_ash_datagen_release.sh --case 3 rs`
 
 ## Overview
 
@@ -178,17 +178,17 @@ So the bridge / RS-only / ST-only / neither split tells you **which filtered `S`
 
 To run the R-S query in DuckDB Release mode:
 ```text
-`launch_release.sh rs`
+`scripts/measure/run_ash_datagen_release.sh --case 3 rs`
 ```
 
 To run the R-S-T query in DuckDB Debug mode:
 ```text
-`launch_debug.sh rst`
+`scripts/measure/run_ash_datagen_debug.sh --case 3 rst`
 ```
 
 ## Driver File Workflow
 
-Edit `settings.sql` and set your scenario values with `SET VARIABLE`.
+Edit `settings-common.sql` and (optionally) a run-specific settings file under `scripts/measure/`, then set your scenario values with `SET VARIABLE`.
 
 
 Set scale factor and other parameters:

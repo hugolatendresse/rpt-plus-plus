@@ -13,8 +13,8 @@ SET thc_miss_below_which_skip_collect = 0.1;
 
 SET max_temp_directory_size='0KiB';
 SET threads = 1;
--- Statistics propagation sometimes just removes the cold portion
-SET disabled_optimizers = 'compressed_materialization,join_order,build_side_probe_side,statistics_propagation';
+-- -- Statistics propagation sometimes just removes the cold portion
+SET disabled_optimizers = 'compressed_materialization,statistics_propagation';
 SET thc_collect_phase_rows = 400_000;
 SET disable_perfect_hashing = true;
 SET pin_threads = 'on';
@@ -45,4 +45,3 @@ SET VARIABLE probe_multiplicity_in_S = 1; -- higher than 1 means keys are duplic
 SET VARIABLE unproductive_rate_RS = 0.00;
 SET VARIABLE unproductive_rate_ST = 0.00;
 
-SET VARIABLE benchmark_threads = 1;

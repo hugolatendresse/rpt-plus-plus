@@ -10,10 +10,27 @@ cd "$REPO_ROOT"
 QUERY="${1:?Usage: $0 <query> <num_runs> <db_path> <duckdb_cmd...>}"
 NUM_RUNS="${2:?Usage: $0 <query> <num_runs> <db_path> <duckdb_cmd...>}"
 DB="${3:?Usage: $0 <query> <num_runs> <db_path> <duckdb_cmd...>}"
+COMMON_SETTINGS_SQL="${COMMON_SETTINGS_SQL:-ASH-datagen/settings-common.sql}"
+RUN_SETTINGS_SQL="${RUN_SETTINGS_SQL:-}"
 shift 3
 
+if [[ ! -f "$COMMON_SETTINGS_SQL" ]]; then
+    echo "Error: Common settings file not found: $COMMON_SETTINGS_SQL" >&2
+    exit 1
+fi
+if [[ -n "$RUN_SETTINGS_SQL" ]] && [[ ! -f "$RUN_SETTINGS_SQL" ]]; then
+    echo "Error: Run-specific settings file not found: $RUN_SETTINGS_SQL" >&2
+    exit 1
+fi
+
 {
-    grep '^SET ' ASH-datagen/settings.sql
+    grep '^SET ' "$COMMON_SETTINGS_SQL"
+    if [[ -n "$RUN_SETTINGS_SQL" ]]; then
+        grep '^SET ' "$RUN_SETTINGS_SQL" || true
+    fi
+    if [[ -n "${CASE_SETTINGS:-}" ]]; then
+        printf '%s\n' "${CASE_SETTINGS}"
+    fi
     echo "CREATE OR REPLACE TEMP TABLE generator_counts AS SELECT * FROM generator_counts_persistent;"
     echo ".read ASH-datagen/query_${QUERY}.sql"
 
@@ -32,6 +49,4 @@ shift 3
     echo "SELECT printf('Average run time: %.3f s', (getvariable('t_end') - getvariable('t0')) / ${NUM_RUNS}.0 / 1000.0) AS info;"
 
     echo "SET disabled_optimizers = '';"
-    echo "SET threads = getvariable('old_threads');"
-    echo "RESET VARIABLE old_threads;"
 } | "$@"

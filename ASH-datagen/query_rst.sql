@@ -2,15 +2,11 @@
 -- BENCHMARK: R ⋈ S ⋈ T
 -- ============================================================
 -- Requires: generate_tables.sql has been run first.
--- Uses variable benchmark_threads from settings.sql.
 -- ============================================================
 
 -- Force query plan (R JOIN S) JOIN T, disable reordering.
 SET disabled_optimizers = 'join_order,build_side_probe_side,statistics_propagation';
 .output /dev/null
-
-SET VARIABLE old_threads = current_setting('threads');
-SET threads = getvariable('benchmark_threads');
 
 PREPARE benchmark_query AS
 WITH g AS (SELECT * FROM generator_counts)
