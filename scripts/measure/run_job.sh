@@ -41,7 +41,7 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 JOB_DIR="$REPO_ROOT/join-order-benchmark"
-COMMON_SETTINGS_SQL="$REPO_ROOT/ASH-datagen/settings-common.sql"
+COMMON_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-common.sql"
 RUN_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-run_job.sql"
 DB_FILE="$JOB_DIR/job.db"
 

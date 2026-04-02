@@ -81,7 +81,7 @@ cd "$REPO_ROOT"
 DB_NAME="${COLD}_cold_${LAYOUT}"
 DB="scripts/measure/data/${DB_NAME}.duckdb"
 SETUP_SQL="scripts/measure/generation/${DB_NAME}.sql"
-COMMON_SETTINGS_SQL="ASH-datagen/settings-common.sql"
+COMMON_SETTINGS_SQL="scripts/measure/settings-common.sql"
 RUN_SETTINGS_SQL="scripts/measure/settings-run_hugo_generated.sql"
 PROFILE_JSON="scripts/measure/${DB_NAME}.json"
 

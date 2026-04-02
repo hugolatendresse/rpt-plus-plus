@@ -24,7 +24,7 @@ run_one() {
 
     local output avg rc=0
     output=$({
-        grep '^SET ' ASH-datagen/settings-common.sql \
+        grep '^SET ' scripts/measure/settings-common.sql \
             | grep -v 'thc_collect_phase_rows\|thc_first_read_only_phase_rows\|thc_l3_budget\|thc_collect_budget_fraction\|thc_miss_below_which_skip_collect\|thc_activation_threshold'
         echo "SET thc_l3_budget = ${budget};"
         echo "SET thc_collect_phase_rows = ${collect};"

@@ -10,7 +10,7 @@ cd "$REPO_ROOT"
 QUERY="${1:?Usage: $0 <query> <num_runs> <db_path> <duckdb_cmd...>}"
 NUM_RUNS="${2:?Usage: $0 <query> <num_runs> <db_path> <duckdb_cmd...>}"
 DB="${3:?Usage: $0 <query> <num_runs> <db_path> <duckdb_cmd...>}"
-COMMON_SETTINGS_SQL="${COMMON_SETTINGS_SQL:-ASH-datagen/settings-common.sql}"
+COMMON_SETTINGS_SQL="${COMMON_SETTINGS_SQL:-scripts/measure/settings-common.sql}"
 RUN_SETTINGS_SQL="${RUN_SETTINGS_SQL:-}"
 shift 3
 

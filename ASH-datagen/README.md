@@ -1,6 +1,6 @@
 # Synthetic Three-Join Benchmark Generator
 
-**TL;DR:** Edit `settings-common.sql` and the run-specific settings file, then run `scripts/measure/run_ash_datagen_release.sh --case 3 rs`
+**TL;DR:** Edit `scripts/measure/settings-common.sql` and the run-specific settings file, then run `scripts/measure/run_ash_datagen_release.sh --case 3 rs`
 
 ## Overview
 
@@ -188,7 +188,7 @@ To run the R-S-T query in DuckDB Debug mode:
 
 ## Driver File Workflow
 
-Edit `settings-common.sql` and (optionally) a run-specific settings file under `scripts/measure/`, then set your scenario values with `SET VARIABLE`.
+Edit `scripts/measure/settings-common.sql` and (optionally) a run-specific settings file under `scripts/measure/`, then set your scenario values with `SET VARIABLE`.
 
 
 Set scale factor and other parameters:

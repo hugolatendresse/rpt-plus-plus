@@ -9,7 +9,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 DB="${1:?Usage: $0 <db-path>}"
-COMMON_SETTINGS_SQL="${COMMON_SETTINGS_SQL:-ASH-datagen/settings-common.sql}"
+COMMON_SETTINGS_SQL="${COMMON_SETTINGS_SQL:-scripts/measure/settings-common.sql}"
 RUN_SETTINGS_SQL="${RUN_SETTINGS_SQL:-}"
 
 if [[ ! -f "$COMMON_SETTINGS_SQL" ]]; then

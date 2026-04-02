@@ -1,5 +1,5 @@
 -- Overrides for scripts/measure/run_ash_datagen_release.sh.
--- Loaded after ASH-datagen/settings-common.sql.
+-- Loaded after scripts/measure/settings-common.sql.
 -- Add SET/SET VARIABLE statements here when needed.
 
 
