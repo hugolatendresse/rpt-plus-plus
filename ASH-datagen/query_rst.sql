@@ -4,8 +4,6 @@
 -- Requires: generate_tables.sql has been run first.
 -- ============================================================
 
--- Force query plan (R JOIN S) JOIN T, disable reordering.
-SET disabled_optimizers = 'join_order,build_side_probe_side,statistics_propagation';
 .output /dev/null
 
 PREPARE benchmark_query AS
