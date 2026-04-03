@@ -26,7 +26,7 @@ SET VARIABLE probe_multiplicity_in_S = 1; -- higher than 1 means keys are duplic
 SET VARIABLE unproductive_rate_RS = 0.00;
 SET VARIABLE unproductive_rate_ST = 0.00;
 
-SET VARIABLE benchmark_threads = 1;
+SET threads = 1;
 
 
 
