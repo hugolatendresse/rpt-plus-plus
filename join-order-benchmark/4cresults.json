@@ -1,0 +1,541 @@
+{
+    "rows_returned": 1,
+    "latency": 0.044305496,
+    "result_set_size": 32,
+    "query_name": "SELECT MIN(mi_idx.info) AS rating,\n       MIN(t.title) AS movie_title\nFROM info_type AS it,\n     keyword AS k,\n     movie_info_idx AS mi_idx,\n     movie_keyword AS mk,\n     title AS t\nWHERE it.info ='rating'\n  AND k.keyword LIKE '%sequel%'\n  AND mi_idx.info > '2.0'\n  AND t.production_year > 1990\n  AND t.id = mi_idx.movie_id\n  AND t.id = mk.movie_id\n  AND mk.movie_id = mi_idx.movie_id\n  AND k.id = mk.keyword_id\n  AND it.id = mi_idx.info_type_id;",
+    "blocked_thread_time": 0.0,
+    "system_peak_buffer_memory": 495354048,
+    "system_peak_temp_dir_size": 0,
+    "cpu_time": 0.389674565,
+    "extra_info": {},
+    "cumulative_cardinality": 10498038,
+    "cumulative_rows_scanned": 306963807,
+    "children": [
+        {
+            "result_set_size": 32,
+            "operator_name": "UNGROUPED_AGGREGATE",
+            "cpu_time": 0.389674565,
+            "extra_info": {
+                "Aggregates": [
+                    "min(#0)",
+                    "min(#1)"
+                ]
+            },
+            "cumulative_cardinality": 10498038,
+            "operator_type": "UNGROUPED_AGGREGATE",
+            "operator_cardinality": 1,
+            "cumulative_rows_scanned": 306963807,
+            "operator_rows_scanned": 0,
+            "operator_timing": 0.00008988699999999999,
+            "children": [
+                {
+                    "result_set_size": 150400,
+                    "operator_name": "PROJECTION",
+                    "cpu_time": 0.38958467799999996,
+                    "extra_info": {
+                        "Projections": [
+                            "info",
+                            "title"
+                        ],
+                        "Estimated Cardinality": "603"
+                    },
+                    "cumulative_cardinality": 10498037,
+                    "operator_type": "PROJECTION",
+                    "operator_cardinality": 4700,
+                    "cumulative_rows_scanned": 306963807,
+                    "operator_rows_scanned": 0,
+                    "operator_timing": 0.00000137,
+                    "children": [
+                        {
+                            "result_set_size": 169200,
+                            "operator_name": "HASH_JOIN",
+                            "cpu_time": 0.38958330799999996,
+                            "extra_info": {
+                                "Join Type": "INNER",
+                                "Conditions": "id = keyword_id",
+                                "Estimated Cardinality": "603",
+                                "Build Time": "0.000 ms",
+                                "Probe Time": "0.000 ms",
+                                "Probe Time (ExecuteInternal)": "0.000 ms",
+                                "Probe Time (ExternalProbe)": "0.000 ms",
+                                "Scan Structure Next Time (ExecuteInternal)": "0.000 ms",
+                                "THC Collect Time": "0.000 ms",
+                                "THC Insert Time": "0.000 ms",
+                                "THC Probe Time": "0.000 ms",
+                                "ProbeForPointers Time": "0.000 ms",
+                                "Match Time": "0.000 ms"
+                            },
+                            "cumulative_cardinality": 10493337,
+                            "operator_type": "HASH_JOIN",
+                            "operator_cardinality": 4700,
+                            "cumulative_rows_scanned": 306963807,
+                            "operator_rows_scanned": 0,
+                            "operator_timing": 0.020588881999999992,
+                            "children": [
+                                {
+                                    "result_set_size": 120,
+                                    "operator_name": "USE_BF",
+                                    "cpu_time": 0.011751067999999998,
+                                    "extra_info": {
+                                        "BF Creators": "0x264694659788216\n"
+                                    },
+                                    "cumulative_cardinality": 90,
+                                    "operator_type": "USE_BF",
+                                    "operator_cardinality": 30,
+                                    "cumulative_rows_scanned": 268340,
+                                    "operator_rows_scanned": 0,
+                                    "operator_timing": 0.000015301999999999997,
+                                    "children": [
+                                        {
+                                            "result_set_size": 120,
+                                            "operator_name": "CREATE_BF",
+                                            "cpu_time": 0.011735765999999998,
+                                            "extra_info": {
+                                                "BF Number": "1",
+                                                "ID": "0x264694659679120",
+                                                "Min-Max Filter": "3.1 "
+                                            },
+                                            "cumulative_cardinality": 60,
+                                            "operator_type": "CREATE_BF",
+                                            "operator_cardinality": 30,
+                                            "cumulative_rows_scanned": 268340,
+                                            "operator_rows_scanned": 0,
+                                            "operator_timing": 0.00022318099999999998,
+                                            "children": [
+                                                {
+                                                    "result_set_size": 120,
+                                                    "operator_name": "SEQ_SCAN ",
+                                                    "cpu_time": 0.011512584999999999,
+                                                    "extra_info": {
+                                                        "Table": "keyword",
+                                                        "Type": "Sequential Scan",
+                                                        "Projections": "id",
+                                                        "Filters": "contains(keyword, 'sequel')",
+                                                        "Estimated Cardinality": "26834"
+                                                    },
+                                                    "cumulative_cardinality": 30,
+                                                    "operator_type": "TABLE_SCAN",
+                                                    "operator_cardinality": 30,
+                                                    "cumulative_rows_scanned": 268340,
+                                                    "operator_rows_scanned": 268340,
+                                                    "operator_timing": 0.011512584999999999,
+                                                    "children": []
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                },
+                                {
+                                    "result_set_size": 221004,
+                                    "operator_name": "HASH_JOIN",
+                                    "cpu_time": 0.35724335799999996,
+                                    "extra_info": {
+                                        "Join Type": "INNER",
+                                        "Conditions": "movie_id = movie_id",
+                                        "Estimated Cardinality": "2931",
+                                        "Build Time": "0.000 ms",
+                                        "Probe Time": "0.000 ms",
+                                        "Probe Time (ExecuteInternal)": "0.000 ms",
+                                        "Probe Time (ExternalProbe)": "0.000 ms",
+                                        "Scan Structure Next Time (ExecuteInternal)": "0.000 ms",
+                                        "THC Collect Time": "0.000 ms",
+                                        "THC Insert Time": "0.000 ms",
+                                        "THC Probe Time": "0.000 ms",
+                                        "ProbeForPointers Time": "0.000 ms",
+                                        "Match Time": "0.000 ms"
+                                    },
+                                    "cumulative_cardinality": 10488547,
+                                    "operator_type": "HASH_JOIN",
+                                    "operator_cardinality": 6139,
+                                    "cumulative_rows_scanned": 306695467,
+                                    "operator_rows_scanned": 0,
+                                    "operator_timing": 0.012712921,
+                                    "children": [
+                                        {
+                                            "result_set_size": 129224,
+                                            "operator_name": "CREATE_BF",
+                                            "cpu_time": 0.10282951,
+                                            "extra_info": {
+                                                "BF Number": "3",
+                                                "ID": "0x264694659788216",
+                                                "Min-Max Filter": "4.1 2.1 1.1 "
+                                            },
+                                            "cumulative_cardinality": 4010899,
+                                            "operator_type": "CREATE_BF",
+                                            "operator_cardinality": 16153,
+                                            "cumulative_rows_scanned": 167385410,
+                                            "operator_rows_scanned": 0,
+                                            "operator_timing": 0.0020414569999999996,
+                                            "children": [
+                                                {
+                                                    "result_set_size": 129224,
+                                                    "operator_name": "USE_BF",
+                                                    "cpu_time": 0.100788053,
+                                                    "extra_info": {
+                                                        "BF Creators": "0x264694659787712\n"
+                                                    },
+                                                    "cumulative_cardinality": 3994746,
+                                                    "operator_type": "USE_BF",
+                                                    "operator_cardinality": 16153,
+                                                    "cumulative_rows_scanned": 167385410,
+                                                    "operator_rows_scanned": 0,
+                                                    "operator_timing": 0.000034481000000000004,
+                                                    "children": [
+                                                        {
+                                                            "result_set_size": 129224,
+                                                            "operator_name": "USE_BF",
+                                                            "cpu_time": 0.100753572,
+                                                            "extra_info": {
+                                                                "BF Creators": "0x264694659679120\n"
+                                                            },
+                                                            "cumulative_cardinality": 3978593,
+                                                            "operator_type": "USE_BF",
+                                                            "operator_cardinality": 16153,
+                                                            "cumulative_rows_scanned": 167385410,
+                                                            "operator_rows_scanned": 0,
+                                                            "operator_timing": 0.033072319,
+                                                            "children": [
+                                                                {
+                                                                    "result_set_size": 31699520,
+                                                                    "operator_name": "SEQ_SCAN ",
+                                                                    "cpu_time": 0.067681253,
+                                                                    "extra_info": {
+                                                                        "Table": "movie_keyword",
+                                                                        "Type": "Sequential Scan",
+                                                                        "Projections": [
+                                                                            "movie_id",
+                                                                            "keyword_id"
+                                                                        ],
+                                                                        "Filters": "movie_id<=2525793",
+                                                                        "Estimated Cardinality": "4523930"
+                                                                    },
+                                                                    "cumulative_cardinality": 3962440,
+                                                                    "operator_type": "TABLE_SCAN",
+                                                                    "operator_cardinality": 3962440,
+                                                                    "cumulative_rows_scanned": 167385410,
+                                                                    "operator_rows_scanned": 167385410,
+                                                                    "operator_timing": 0.067681253,
+                                                                    "children": []
+                                                                }
+                                                            ]
+                                                        }
+                                                    ]
+                                                }
+                                            ]
+                                        },
+                                        {
+                                            "result_set_size": 195624,
+                                            "operator_name": "HASH_JOIN",
+                                            "cpu_time": 0.24170092699999998,
+                                            "extra_info": {
+                                                "Join Type": "INNER",
+                                                "Conditions": "id = movie_id",
+                                                "Estimated Cardinality": "1265",
+                                                "Build Time": "0.000 ms",
+                                                "Probe Time": "0.000 ms",
+                                                "Probe Time (ExecuteInternal)": "0.000 ms",
+                                                "Probe Time (ExternalProbe)": "0.000 ms",
+                                                "Scan Structure Next Time (ExecuteInternal)": "0.000 ms",
+                                                "THC Collect Time": "0.000 ms",
+                                                "THC Insert Time": "0.000 ms",
+                                                "THC Probe Time": "0.000 ms",
+                                                "ProbeForPointers Time": "0.000 ms",
+                                                "Match Time": "0.000 ms"
+                                            },
+                                            "cumulative_cardinality": 6471509,
+                                            "operator_type": "HASH_JOIN",
+                                            "operator_cardinality": 5434,
+                                            "cumulative_rows_scanned": 139310057,
+                                            "operator_rows_scanned": 0,
+                                            "operator_timing": 0.005273913999999999,
+                                            "children": [
+                                                {
+                                                    "result_set_size": 191800,
+                                                    "operator_name": "USE_BF",
+                                                    "cpu_time": 0.181019498,
+                                                    "extra_info": {
+                                                        "BF Creators": "0x264694659788216\n"
+                                                    },
+                                                    "cumulative_cardinality": 5482025,
+                                                    "operator_type": "USE_BF",
+                                                    "operator_cardinality": 9590,
+                                                    "cumulative_rows_scanned": 106189104,
+                                                    "operator_rows_scanned": 0,
+                                                    "operator_timing": 0.016491097,
+                                                    "children": [
+                                                        {
+                                                            "result_set_size": 0,
+                                                            "operator_name": "CREATE_BF",
+                                                            "cpu_time": 0.164528401,
+                                                            "extra_info": {
+                                                                "BF Number": "1",
+                                                                "ID": "0x264694659787712",
+                                                                "Min-Max Filter": "3.0 "
+                                                            },
+                                                            "cumulative_cardinality": 5472435,
+                                                            "operator_type": "CREATE_BF",
+                                                            "operator_cardinality": 0,
+                                                            "cumulative_rows_scanned": 106189104,
+                                                            "operator_rows_scanned": 0,
+                                                            "operator_timing": 0.0028834940000000003,
+                                                            "children": [
+                                                                {
+                                                                    "result_set_size": 36482900,
+                                                                    "operator_name": "USE_BF",
+                                                                    "cpu_time": 0.161644907,
+                                                                    "extra_info": {
+                                                                        "BF Creators": "0x264694659787208\n"
+                                                                    },
+                                                                    "cumulative_cardinality": 5472435,
+                                                                    "operator_type": "USE_BF",
+                                                                    "operator_cardinality": 1824145,
+                                                                    "cumulative_rows_scanned": 106189104,
+                                                                    "operator_rows_scanned": 0,
+                                                                    "operator_timing": 0.0003789940000000001,
+                                                                    "children": [
+                                                                        {
+                                                                            "result_set_size": 36482900,
+                                                                            "operator_name": "FILTER",
+                                                                            "cpu_time": 0.161265913,
+                                                                            "extra_info": {
+                                                                                "Expression": "(id BETWEEN 2 AND 2525793)",
+                                                                                "Estimated Cardinality": "505662"
+                                                                            },
+                                                                            "cumulative_cardinality": 3648290,
+                                                                            "operator_type": "FILTER",
+                                                                            "operator_cardinality": 1824145,
+                                                                            "cumulative_rows_scanned": 106189104,
+                                                                            "operator_rows_scanned": 0,
+                                                                            "operator_timing": 0.006358790000000001,
+                                                                            "children": [
+                                                                                {
+                                                                                    "result_set_size": 36482900,
+                                                                                    "operator_name": "SEQ_SCAN ",
+                                                                                    "cpu_time": 0.154907123,
+                                                                                    "extra_info": {
+                                                                                        "Table": "title",
+                                                                                        "Type": "Sequential Scan",
+                                                                                        "Projections": [
+                                                                                            "id",
+                                                                                            "title"
+                                                                                        ],
+                                                                                        "Filters": "production_year>1990",
+                                                                                        "Estimated Cardinality": "505662"
+                                                                                    },
+                                                                                    "cumulative_cardinality": 1824145,
+                                                                                    "operator_type": "TABLE_SCAN",
+                                                                                    "operator_cardinality": 1824145,
+                                                                                    "cumulative_rows_scanned": 106189104,
+                                                                                    "operator_rows_scanned": 106189104,
+                                                                                    "operator_timing": 0.154907123,
+                                                                                    "children": []
+                                                                                }
+                                                                            ]
+                                                                        }
+                                                                    ]
+                                                                }
+                                                            ]
+                                                        }
+                                                    ]
+                                                },
+                                                {
+                                                    "result_set_size": 234288,
+                                                    "operator_name": "HASH_JOIN",
+                                                    "cpu_time": 0.05540751499999999,
+                                                    "extra_info": {
+                                                        "Join Type": "INNER",
+                                                        "Conditions": "info_type_id = id",
+                                                        "Estimated Cardinality": "4885",
+                                                        "Build Time": "0.000 ms",
+                                                        "Probe Time": "0.000 ms",
+                                                        "Probe Time (ExecuteInternal)": "0.000 ms",
+                                                        "Probe Time (ExternalProbe)": "0.000 ms",
+                                                        "Scan Structure Next Time (ExecuteInternal)": "0.000 ms",
+                                                        "THC Collect Time": "0.000 ms",
+                                                        "THC Insert Time": "0.000 ms",
+                                                        "THC Probe Time": "0.000 ms",
+                                                        "ProbeForPointers Time": "0.000 ms",
+                                                        "Match Time": "0.000 ms"
+                                                    },
+                                                    "cumulative_cardinality": 984050,
+                                                    "operator_type": "HASH_JOIN",
+                                                    "operator_cardinality": 9762,
+                                                    "cumulative_rows_scanned": 33120953,
+                                                    "operator_rows_scanned": 0,
+                                                    "operator_timing": 0.0012586890000000001,
+                                                    "children": [
+                                                        {
+                                                            "result_set_size": 234288,
+                                                            "operator_name": "CREATE_BF",
+                                                            "cpu_time": 0.05368560699999999,
+                                                            "extra_info": {
+                                                                "BF Number": "1",
+                                                                "ID": "0x264694659789104",
+                                                                "Min-Max Filter": "0.1 "
+                                                            },
+                                                            "cumulative_cardinality": 974284,
+                                                            "operator_type": "CREATE_BF",
+                                                            "operator_cardinality": 9762,
+                                                            "cumulative_rows_scanned": 33120840,
+                                                            "operator_rows_scanned": 0,
+                                                            "operator_timing": 0.000870107,
+                                                            "children": [
+                                                                {
+                                                                    "result_set_size": 234288,
+                                                                    "operator_name": "USE_BF",
+                                                                    "cpu_time": 0.05281549999999999,
+                                                                    "extra_info": {
+                                                                        "BF Creators": "0x264694659788216\n"
+                                                                    },
+                                                                    "cumulative_cardinality": 964522,
+                                                                    "operator_type": "USE_BF",
+                                                                    "operator_cardinality": 9762,
+                                                                    "cumulative_rows_scanned": 33120840,
+                                                                    "operator_rows_scanned": 0,
+                                                                    "operator_timing": 0.005721292999999999,
+                                                                    "children": [
+                                                                        {
+                                                                            "result_set_size": 0,
+                                                                            "operator_name": "CREATE_BF",
+                                                                            "cpu_time": 0.04709420699999999,
+                                                                            "extra_info": {
+                                                                                "BF Number": "1",
+                                                                                "ID": "0x264694659787208",
+                                                                                "Min-Max Filter": "4.1 "
+                                                                            },
+                                                                            "cumulative_cardinality": 954760,
+                                                                            "operator_type": "CREATE_BF",
+                                                                            "operator_cardinality": 0,
+                                                                            "cumulative_rows_scanned": 33120840,
+                                                                            "operator_rows_scanned": 0,
+                                                                            "operator_timing": 0.000755696,
+                                                                            "children": [
+                                                                                {
+                                                                                    "result_set_size": 11457120,
+                                                                                    "operator_name": "USE_BF",
+                                                                                    "cpu_time": 0.04633851099999999,
+                                                                                    "extra_info": {
+                                                                                        "BF Creators": "0x264694659786704\n"
+                                                                                    },
+                                                                                    "cumulative_cardinality": 954760,
+                                                                                    "operator_type": "USE_BF",
+                                                                                    "operator_cardinality": 477380,
+                                                                                    "cumulative_rows_scanned": 33120840,
+                                                                                    "operator_rows_scanned": 0,
+                                                                                    "operator_timing": 0.0041206440000000006,
+                                                                                    "children": [
+                                                                                        {
+                                                                                            "result_set_size": 11457120,
+                                                                                            "operator_name": "SEQ_SCAN ",
+                                                                                            "cpu_time": 0.04221786699999999,
+                                                                                            "extra_info": {
+                                                                                                "Table": "movie_info_idx",
+                                                                                                "Type": "Sequential Scan",
+                                                                                                "Projections": [
+                                                                                                    "info",
+                                                                                                    "movie_id",
+                                                                                                    "info_type_id"
+                                                                                                ],
+                                                                                                "Filters": "info>'2.0'",
+                                                                                                "Estimated Cardinality": "276007"
+                                                                                            },
+                                                                                            "cumulative_cardinality": 477380,
+                                                                                            "operator_type": "TABLE_SCAN",
+                                                                                            "operator_cardinality": 477380,
+                                                                                            "cumulative_rows_scanned": 33120840,
+                                                                                            "operator_rows_scanned": 33120840,
+                                                                                            "operator_timing": 0.04221786699999999,
+                                                                                            "children": []
+                                                                                        }
+                                                                                    ]
+                                                                                }
+                                                                            ]
+                                                                        }
+                                                                    ]
+                                                                }
+                                                            ]
+                                                        },
+                                                        {
+                                                            "result_set_size": 4,
+                                                            "operator_name": "USE_BF",
+                                                            "cpu_time": 0.00046321900000000007,
+                                                            "extra_info": {
+                                                                "BF Creators": "0x264694659789104\n"
+                                                            },
+                                                            "cumulative_cardinality": 4,
+                                                            "operator_type": "USE_BF",
+                                                            "operator_cardinality": 1,
+                                                            "cumulative_rows_scanned": 113,
+                                                            "operator_rows_scanned": 0,
+                                                            "operator_timing": 0.00001701,
+                                                            "children": [
+                                                                {
+                                                                    "result_set_size": 4,
+                                                                    "operator_name": "CREATE_BF",
+                                                                    "cpu_time": 0.00044620900000000004,
+                                                                    "extra_info": {
+                                                                        "BF Number": "1",
+                                                                        "ID": "0x264694659786704",
+                                                                        "Min-Max Filter": "2.2 "
+                                                                    },
+                                                                    "cumulative_cardinality": 3,
+                                                                    "operator_type": "CREATE_BF",
+                                                                    "operator_cardinality": 1,
+                                                                    "cumulative_rows_scanned": 113,
+                                                                    "operator_rows_scanned": 0,
+                                                                    "operator_timing": 0.000176171,
+                                                                    "children": [
+                                                                        {
+                                                                            "result_set_size": 4,
+                                                                            "operator_name": "FILTER",
+                                                                            "cpu_time": 0.000270038,
+                                                                            "extra_info": {
+                                                                                "Expression": "(id >= 99)",
+                                                                                "Estimated Cardinality": "2"
+                                                                            },
+                                                                            "cumulative_cardinality": 2,
+                                                                            "operator_type": "FILTER",
+                                                                            "operator_cardinality": 1,
+                                                                            "cumulative_rows_scanned": 113,
+                                                                            "operator_rows_scanned": 0,
+                                                                            "operator_timing": 0.00001847,
+                                                                            "children": [
+                                                                                {
+                                                                                    "result_set_size": 4,
+                                                                                    "operator_name": "SEQ_SCAN ",
+                                                                                    "cpu_time": 0.00025156800000000003,
+                                                                                    "extra_info": {
+                                                                                        "Table": "info_type",
+                                                                                        "Type": "Sequential Scan",
+                                                                                        "Projections": "id",
+                                                                                        "Filters": "info='rating'",
+                                                                                        "Estimated Cardinality": "2"
+                                                                                    },
+                                                                                    "cumulative_cardinality": 1,
+                                                                                    "operator_type": "TABLE_SCAN",
+                                                                                    "operator_cardinality": 1,
+                                                                                    "cumulative_rows_scanned": 113,
+                                                                                    "operator_rows_scanned": 113,
+                                                                                    "operator_timing": 0.00025156800000000003,
+                                                                                    "children": []
+                                                                                }
+                                                                            ]
+                                                                        }
+                                                                    ]
+                                                                }
+                                                            ]
+                                                        }
+                                                    ]
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

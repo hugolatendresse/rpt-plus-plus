@@ -1,3 +1,10 @@
+PRAGMA enable_profiling = 'json';
+PRAGMA profiling_output = '4cresults.json';
+PRAGMA profiling_coverage = 'SELECT';
+
+-- SET disabled_optimizers = 'compressed_materialization,join_order,build_side_probe_side,statistics_propagation';
+
+
 SELECT MIN(mi_idx.info) AS rating,
        MIN(t.title) AS movie_title
 FROM info_type AS it,

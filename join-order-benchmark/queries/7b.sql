@@ -1,3 +1,9 @@
+
+PRAGMA enable_profiling = 'json';
+PRAGMA profiling_output = 'res.json';
+PRAGMA profiling_coverage = 'SELECT';
+
+-- EXPLAIN ANALYZE
 SELECT MIN(n.name) AS of_person,
        MIN(t.title) AS biography_movie
 FROM aka_name AS an,
