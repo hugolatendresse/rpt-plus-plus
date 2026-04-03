@@ -6,9 +6,6 @@
 
 .output /dev/null
 
--- SET VARIABLE old_threads = current_setting('threads');
--- SET threads = getvariable('benchmark_threads');
-
 PREPARE benchmark_query AS
 WITH g AS (SELECT * FROM generator_counts)
 SELECT COUNT(*) AS full_result_count
