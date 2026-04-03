@@ -3,13 +3,6 @@
 -- Add SET/SET VARIABLE statements here when needed.
 
 
-
---Generation queries hit a known unstable path in this branch's join-order optimizer.
--- Keep generation deterministic by pinning optimizer behavior during table creation.
--- SET disabled_optimizers = 'compressed_materialization,join_order,build_side_probe_side,statistics_propagation';
-
-
-
 SET VARIABLE scale_factor = 40_000;
 
 SET VARIABLE base_row_count_R = 100; -- the MAX number of rows. Count of rows = min(hot entries in S * probe_mmultiplicity_in_R, base_row_count_R)
