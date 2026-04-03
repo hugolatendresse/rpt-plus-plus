@@ -5,19 +5,34 @@
 set -euo pipefail
 
 CASE=""
+JOB_QUERY=""
 USE_PERF=false
 PERF_EVENTS="cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,mem_access,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd,branch-instructions,branch-misses,br_mis_pred_retired"
+
+usage() {
+    cat <<'USAGE'
+Usage: scripts/measure/run_job.sh --case <1|2|3|4> [options]
+
+Options:
+  --case <1|2|3|4>      Optimizer case (required)
+  --job-query <id>      Run one JOB query (e.g. 10a, 24a, or 10a.sql)
+  --perf                Run query/queries under perf stat
+  -h, --help            Show this help
+USAGE
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --case) CASE="$2"; shift 2 ;;
+        --job-query) JOB_QUERY="$2"; shift 2 ;;
         --perf) USE_PERF=true; shift ;;
         -h|--help)
-            echo "Usage: scripts/measure/run_job.sh --case <1|2|3|4> [--perf]"
+            usage
             exit 0
             ;;
         *)
             echo "Unknown option: $1" >&2
+            usage
             exit 1
             ;;
     esac
@@ -58,6 +73,21 @@ if [[ ! -f "$RUN_SETTINGS_SQL" ]]; then
     exit 1
 fi
 
+QUERY_FILES=()
+if [[ -n "$JOB_QUERY" ]]; then
+    JOB_QUERY="${JOB_QUERY%.sql}"
+    TARGET_QUERY_FILE="$JOB_DIR/queries/${JOB_QUERY}.sql"
+    if [[ ! -f "$TARGET_QUERY_FILE" ]]; then
+        echo "Error: JOB query file not found: $TARGET_QUERY_FILE" >&2
+        exit 1
+    fi
+    QUERY_FILES+=("queries/${JOB_QUERY}.sql")
+else
+    while IFS= read -r q; do
+        QUERY_FILES+=("${q#"$JOB_DIR/"}")
+    done < <(printf "%s\n" "$JOB_DIR"/queries/*.sql | sort -V)
+fi
+
 run_query() {
     local query_file="$1"
     if $USE_PERF; then
@@ -77,11 +107,15 @@ run_query() {
     fi
 }
 
-echo "Starting Join Order Benchmark execution (case ${CASE})..."
+if [[ -n "$JOB_QUERY" ]]; then
+    echo "Starting Join Order Benchmark execution (case ${CASE}, query ${JOB_QUERY})..."
+else
+    echo "Starting Join Order Benchmark execution (case ${CASE})..."
+fi
 cd "$JOB_DIR"
 TIMEFORMAT='Total wall clock time: %3R seconds'
 time {
-    for q in queries/*.sql; do
+    for q in "${QUERY_FILES[@]}"; do
         echo "Executing $q..."
         run_query "$q"
     done
