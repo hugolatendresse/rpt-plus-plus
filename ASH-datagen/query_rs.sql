@@ -8,7 +8,7 @@
 SET disabled_optimizers = 'join_order,build_side_probe_side,statistics_propagation';
 .output /dev/null
 
-SET VARIABLE old_threads = current_setting('threads');
+-- SET VARIABLE old_threads = current_setting('threads');
 -- SET threads = getvariable('benchmark_threads');
 
 PREPARE benchmark_query AS

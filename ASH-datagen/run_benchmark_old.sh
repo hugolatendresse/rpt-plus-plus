@@ -32,6 +32,6 @@ shift 3
     echo "SELECT printf('Average run time: %.3f s', (getvariable('t_end') - getvariable('t0')) / ${NUM_RUNS}.0 / 1000.0) AS info;"
 
     echo "SET disabled_optimizers = '';"
-    echo "SET threads = getvariable('old_threads');"
-    echo "RESET VARIABLE old_threads;"
+    # echo "SET threads = getvariable('old_threads');"
+    # echo "RESET VARIABLE old_threads;"
 } | "$@"
