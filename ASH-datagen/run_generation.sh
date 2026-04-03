@@ -29,9 +29,6 @@ echo "=== Phase 1: generating tables with release build ==="
     if [[ -n "$RUN_SETTINGS_SQL" ]]; then
         grep '^SET VARIABLE' "$RUN_SETTINGS_SQL" || true
     fi
-    # Generation queries hit a known unstable path in this branch's join-order optimizer.
-    # Keep generation deterministic by pinning optimizer behavior during table creation.
-    echo "SET disabled_optimizers = 'join_order,build_side_probe_side,statistics_propagation';"
     cat <<'SQL'
 .read ASH-datagen/generate_tables.sql
 CREATE OR REPLACE TABLE generator_counts_persistent AS SELECT * FROM generator_counts;
