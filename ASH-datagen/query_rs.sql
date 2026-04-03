@@ -4,8 +4,6 @@
 -- Requires: generate_tables.sql has been run first.
 -- ============================================================
 
--- Force query plan, disable reordering.
-SET disabled_optimizers = 'join_order,build_side_probe_side,statistics_propagation';
 .output /dev/null
 
 -- SET VARIABLE old_threads = current_setting('threads');

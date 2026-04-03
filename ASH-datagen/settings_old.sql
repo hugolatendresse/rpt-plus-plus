@@ -1,5 +1,6 @@
 -- Scenario driver: edit only this file per experiment.
 
+SET disabled_optimizers = 'join_order,build_side_probe_side,statistics_propagation';
 
 ------------ Data Generation Settings ---------------------
 
