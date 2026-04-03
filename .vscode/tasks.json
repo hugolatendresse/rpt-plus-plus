@@ -2,6 +2,19 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Build Release No Join-Order",
+      "type": "shell",
+      "command": "GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' make release -j $(nproc)",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "hide": false
+    },
+    {
       "label": "Build Debug",
       "type": "shell",
       "command": "GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' EXTRA_CMAKE_VARIABLES='-DCMAKE_CXX_FLAGS=-DExactLeftDeep' make debug -j $(nproc)",
