@@ -14,7 +14,7 @@ SET thc_miss_below_which_skip_collect = 0.1;
 SET max_temp_directory_size='0KiB';
 SET threads = 1;
 -- -- Statistics propagation sometimes just removes the cold portion
-SET disabled_optimizers = 'compressed_materialization,statistics_propagation';
+-- SET disabled_optimizers = 'compressed_materialization,statistics_propagation';
 SET thc_collect_phase_rows = 400_000;
 SET disable_perfect_hashing = true;
 SET pin_threads = 'on';

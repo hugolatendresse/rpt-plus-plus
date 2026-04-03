@@ -4,7 +4,7 @@
     {
       "label": "Build Release no-join-order-flag",
       "type": "shell",
-      "command": "GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' make debug -j $(nproc)",
+      "command": "GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' make release -j $(nproc)",
       "group": {
         "kind": "build",
         "isDefault": true

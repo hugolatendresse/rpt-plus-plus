@@ -6,7 +6,7 @@
 
 --Generation queries hit a known unstable path in this branch's join-order optimizer.
 -- Keep generation deterministic by pinning optimizer behavior during table creation.
-SET disabled_optimizers = 'compressed_materialization,join_order,build_side_probe_side,statistics_propagation';
+-- SET disabled_optimizers = 'compressed_materialization,join_order,build_side_probe_side,statistics_propagation';
 
 
 
