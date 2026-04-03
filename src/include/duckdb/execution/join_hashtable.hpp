@@ -191,6 +191,10 @@ public:
 	//! provides sufficient margin for joins that truly benefit from the THC
 	//! (those typically have 80-94% miss rates).
 	static constexpr idx_t THC_ABANDON_CONSECUTIVE_MISSES = 1;
+	//! If the estimated probe multiplicity mu_{S->R} after the first
+	//! COLLECT+READ_ONLY cycle is below this threshold, THC is skipped
+	//! entirely and probing falls back to the regular hash table path.
+	static constexpr double THC_MIN_ESTIMATED_MU_S_TO_R = 4.0; // TODO make that a client_config param
 
 	struct CollectedEntry {
 		hash_t hash;
@@ -236,6 +240,9 @@ public:
 		//! was above the abandon threshold.  Once this reaches
 		//! THC_ABANDON_CONSECUTIVE_MISSES, the THC is permanently abandoned.
 		idx_t consecutive_high_miss_checkpoints = 0;
+		//! When true, THC is fully bypassed because the first-cycle estimated
+		//! probe multiplicity mu_{S->R} was too low to justify THC overhead.
+		bool thc_low_multiplicity_bypass = false; // TODO refactor to a more generic bypass (when miss rate is high, etc)
 
 		//! How many collect -> read-only transitions have occurred so far.
 		//! cycle_count == 0 means we are still in the very first collect phase.
@@ -281,6 +288,12 @@ public:
 		//! Lifetime count of genuinely new entries this thread inserted into the THC
 		//! (summed across all collect phases).
 		idx_t total_new_entries = 0;
+		//! Number of unique keys inserted in the very first COLLECT flush.
+		//! This is U1 in the first-cycle multiplicity estimator.
+		idx_t first_collect_new_entries = 0;
+		//! Whether we have already executed the one-shot first-cycle
+		//! multiplicity check and made the bypass decision.
+		bool first_cycle_multiplicity_checked = false;
 
 		//! We only collect (and populate) the THC is this is true. By default it is true,
 		//! and the algorithm can set to false if we don't want to collect/populate anymore.  

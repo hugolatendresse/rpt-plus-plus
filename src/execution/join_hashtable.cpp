@@ -666,12 +666,10 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_state, ProbeState &state, Vector &hashes_v,
                                    const SelectionVector *sel, idx_t &count, Vector &pointers_result_v,
                                    SelectionVector &match_sel, const bool has_sel) {
-	// If this thread has abandoned the THC (because the miss rate was
-	// persistently high and the THC was not helping), bypass all THC
-	// logic and use the vanilla DuckDB probe path.  This eliminates the
-	// per-probe overhead of hash densification, ProbeAndMatch, and
-	// fallback bookkeeping that would otherwise be wasted.
-	if (!tiered_hash_cache || state.thc_abandoned) {
+	// If this thread has abandoned THC (high miss rate), or if first-cycle
+	// multiplicity estimation determined THC is not worthwhile, bypass all
+	// THC logic and use the vanilla DuckDB probe path.
+	if (!tiered_hash_cache || state.thc_abandoned || state.thc_low_multiplicity_bypass) {
 		if (UseSalt()) {
 			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
 			                             pointers_result_v, match_sel, has_sel);
@@ -851,6 +849,11 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			}
 
 			state.total_new_entries += new_entries_this_phase;
+			// Save U1 from the very first COLLECT flush for the one-shot
+			// multiplicity estimate computed after the first READ_ONLY phase.
+			if (state.cycle_count == 0) {
+				state.first_collect_new_entries = new_entries_this_phase;
+			}
 
 			DEBUG_LOG("[Collect->Read-Only] cycle=%lu, probe_rows_in_phase=%lu, buffered=%lu, "
 			          "new_entries_this_phase=%lu, cache_fill=%lu/%lu, new_inserts_count=%lu, dup_inserts_count=%lu, "
@@ -927,6 +930,33 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	const double miss_rate = state.ro_total_count > 0
 	                             ? static_cast<double>(state.ro_miss_count) / static_cast<double>(state.ro_total_count)
 	                             : 0.0;
+	// One-shot first-cycle multiplicity estimate:
+	//   mu_{S->R} ~= |R|(1 - p_miss) / U1
+	// where |R| is estimated_probe_side_rows, p_miss is first READ_ONLY miss
+	// rate, and U1 is the number of unique entries inserted in first COLLECT.
+	// If mu_{S->R} < 4, skip THC entirely for this thread.
+	if (!state.first_cycle_multiplicity_checked && state.cycle_count == 1) {
+		state.first_cycle_multiplicity_checked = true;
+		if (state.first_collect_new_entries > 0) {
+			const double estimated_mu_s_to_r =
+			    (static_cast<double>(estimated_probe_side_rows) * (1.0 - miss_rate)) /
+			    static_cast<double>(state.first_collect_new_entries);
+			DEBUG_LOG("[THC First-Cycle Mu] |R|_est=%lu, U1=%lu, miss_rate=%.2f%%, mu_{S->R}=%.4f\n",
+			          (unsigned long)estimated_probe_side_rows, (unsigned long)state.first_collect_new_entries,
+			          miss_rate * 100.0, estimated_mu_s_to_r);
+			if (estimated_mu_s_to_r < THC_MIN_ESTIMATED_MU_S_TO_R) {
+				DEBUG_LOG("[THC Low-Multiplicity Bypass] mu_{S->R}=%.4f < %.1f -> bypassing THC for this thread\n",
+				          estimated_mu_s_to_r, THC_MIN_ESTIMATED_MU_S_TO_R);
+				state.thc_low_multiplicity_bypass = true;
+				state.thc_collection_enabled = false;
+				state.collected_entries.clear();
+				state.collected_entries.shrink_to_fit();
+				return;
+			}
+		} else {
+			DEBUG_LOG("[THC First-Cycle Mu] skipped estimation because U1==0\n");
+		}
+	}
 
 	// Check whether we can afford another collect phase within the total budget.
 	// We project the cost of the next COLLECT_PHASE_PROBE_ROWS and check if
