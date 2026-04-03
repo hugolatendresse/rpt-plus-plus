@@ -2,7 +2,7 @@
 # Run THC benchmark: generate data (optionally) then run the join query under perf (optionally).
 #
 # Usage:
-#   ./scripts/measure/launch.sh [OPTIONS]
+#   ./scripts/measure/run_hugo_generated.sh [OPTIONS]
 #
 # Options:
 #   --cold N        Cold-to-hot ratio: 1, 5, 10, 100  (default: 10)
@@ -20,9 +20,9 @@
 #   --no-taskset    Don't pin DuckDB to cores 4-59 via taskset (pinning is on by default)
 #
 # Examples:
-#   ./scripts/measure/launch.sh --case 3                  # 10 cold, interleaved, RPT+Forward+THC
-#   ./scripts/measure/launch.sh --case 1 --generate      # generate data first, Old DuckDB
-#   ./scripts/measure/launch.sh --case 4 --cold 100 --layout segmented --generate --perf
+#   ./scripts/measure/run_hugo_generated.sh --case 3                  # 10 cold, interleaved, RPT+Forward+THC
+#   ./scripts/measure/run_hugo_generated.sh --case 1 --generate       # generate data first, Old DuckDB
+#   ./scripts/measure/run_hugo_generated.sh --case 4 --cold 100 --layout segmented --generate --perf
 set -euo pipefail
 
 COLD=10
@@ -81,8 +81,8 @@ cd "$REPO_ROOT"
 DB_NAME="${COLD}_cold_${LAYOUT}"
 DB="scripts/measure/data/${DB_NAME}.duckdb"
 SETUP_SQL="scripts/measure/generation/${DB_NAME}.sql"
-SETTINGS_SQL="scripts/measure/settings.sql"
-QUERY_SQL="scripts/measure/query.sql"
+COMMON_SETTINGS_SQL="scripts/measure/settings-common.sql"
+RUN_SETTINGS_SQL="scripts/measure/settings-run_hugo_generated.sql"
 PROFILE_JSON="scripts/measure/${DB_NAME}.json"
 
 if $GENERATE; then
@@ -94,6 +94,14 @@ fi
 
 if [[ ! -f "$DB" ]]; then
     echo "Error: $DB does not exist. Run with --generate first."
+    exit 1
+fi
+if [[ ! -f "$COMMON_SETTINGS_SQL" ]]; then
+    echo "Error: Common settings file not found: $COMMON_SETTINGS_SQL"
+    exit 1
+fi
+if [[ ! -f "$RUN_SETTINGS_SQL" ]]; then
+    echo "Error: Run-specific settings file not found: $RUN_SETTINGS_SQL"
     exit 1
 fi
 
@@ -120,8 +128,9 @@ fi
 
 build_bench_sql() {
     printf '%s\n' "$PROFILING_HEADER"
+    grep '^SET ' "$COMMON_SETTINGS_SQL" || true
+    grep '^SET ' "$RUN_SETTINGS_SQL" || true
     printf '%s\n' "$CASE_SETTINGS"
-    cat "$SETTINGS_SQL"
     echo ""
     echo "PREPARE benchmark_query AS"
     echo "SELECT min(b.valueB1)"
@@ -129,7 +138,7 @@ build_bench_sql() {
     echo "JOIN b ON a.keyB1 = b.keyB1;"
     echo ""
     echo "EXECUTE benchmark_query;"
-    echo ".print Warmup done — running $RUNS timed iterations"
+    echo ".print Warmup done - running $RUNS timed iterations"
     echo "SET VARIABLE t0 = epoch_ms(now());"
     echo ".timer on"
     for ((i = 0; i < RUNS; i++)); do
