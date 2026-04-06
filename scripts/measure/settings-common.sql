@@ -13,9 +13,6 @@ SET thc_miss_below_which_skip_collect = 0.1;
 
 SET max_temp_directory_size='0KiB';
 SET threads = 1;
--- -- Statistics propagation sometimes just removes the cold portion
-SET disabled_optimizers = 'join_order,build_side_probe_side,statistics_propagation'; -- TODO REMOVE THAT!!! And even remove statistics propagation for tpch and jobs
--- SET disabled_optimizers = 'compressed_materialization,statistics_propagation';
 SET disable_perfect_hashing = true;
 SET pin_threads = 'on';
 
