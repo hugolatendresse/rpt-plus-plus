@@ -1514,8 +1514,6 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
 	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Estimated probe-side rows=%lu\n",
 	          (unsigned long)estimated_probe_side_rows);
-	// fprintf(stderr,"[JoinHashTable::InitializeTieredHashCache] Estimated probe-side rows=%lu\n",
-	//           (unsigned long)estimated_probe_side_rows);  // TODO remove!!!
 	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size,
 	                                               tiered_hash_cache_key_offset, row_copy_offset, thc_max_load_factor);
 
