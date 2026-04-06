@@ -301,7 +301,7 @@ public:
 
 unique_ptr<JoinHashTable> PhysicalHashJoin::InitializeHashTable(ClientContext &context) const {
 	auto result = make_uniq<JoinHashTable>(context, conditions, payload_columns.col_types, join_type,
-	                                       rhs_output_columns.col_idxs);
+	                                       rhs_output_columns.col_idxs, children[0].get().estimated_cardinality);
 	if (!delim_types.empty() && join_type == JoinType::MARK) {
 		// correlated MARK join
 		if (delim_types.size() + 1 == conditions.size()) {
