@@ -47,6 +47,4 @@ fi
     echo ".output stdout"
     echo "EXPLAIN ANALYZE EXECUTE benchmark_query;"
     echo "SELECT printf('Average run time: %.3f s', (getvariable('t_end') - getvariable('t0')) / ${NUM_RUNS}.0 / 1000.0) AS info;"
-
-    echo "SET disabled_optimizers = '';"
 } | "$@"

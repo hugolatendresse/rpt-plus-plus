@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 
 DB="ASH-datagen/bench.duckdb"
-RESULTS="ASH-datagen/search_results2.csv"
+RESULTS="ASH-datagen/search_results.csv"
 NUM_RUNS=3
 
 echo "phase,param_name,param_value,budget,collect_rows,first_ro,budget_frac,miss_thresh,activation,avg_time_s" > "$RESULTS"

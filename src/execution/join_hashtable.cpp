@@ -38,11 +38,12 @@ JoinHashTable::InsertState::InsertState(const JoinHashTable &ht)
 }
 
 JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinCondition> &conditions_p,
-                             vector<LogicalType> btypes, JoinType type_p, const vector<idx_t> &output_columns_p)
+                             vector<LogicalType> btypes, JoinType type_p, const vector<idx_t> &output_columns_p,
+                             idx_t estimated_probe_side_rows_p)
     : context(context_p), buffer_manager(BufferManager::GetBufferManager(context)), conditions(conditions_p),
       build_types(std::move(btypes)), output_columns(output_columns_p), entry_size(0), tuple_size(0),
       vfound(Value::BOOLEAN(false)), join_type(type_p), finalized(false), has_null(false),
-      radix_bits(INITIAL_RADIX_BITS) {
+      radix_bits(INITIAL_RADIX_BITS), estimated_probe_side_rows(estimated_probe_side_rows_p) {
 	// Load THC parameters from the client configuration.
 	// These are per-session settings that control THC sizing and adaptive behaviour
 	// so that users can tune them via SQL SET commands without recompiling.
@@ -1481,6 +1482,8 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)row_copy_offset, coverage_ratio * 100.0,
 	          (unsigned long)tuple_size, (unsigned long)pointer_offset, (unsigned long)entry_stride,
 	          (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
+	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Estimated probe-side rows=%lu\n",
+	          (unsigned long)estimated_probe_side_rows);
 	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size,
 	                                               tiered_hash_cache_key_offset, row_copy_offset, thc_max_load_factor);
 
