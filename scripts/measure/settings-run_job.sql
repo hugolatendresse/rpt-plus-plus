@@ -1,0 +1,3 @@
+-- Overrides for scripts/measure/run_job.sh.
+-- Loaded after scripts/measure/settings-common.sql.
+-- Add SET/SET VARIABLE statements here when needed.

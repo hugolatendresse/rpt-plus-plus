@@ -1,11 +1,11 @@
 /* Can run with:
-build/release/duckdb ../benchmark_data/tpch/tpch_sf100.duckdb -f scripts/measure/tpch5_3_forward_thc.sql
+build/release/duckdb ../benchmark_data/tpch/tpch_sf10.duckdb -f scripts/measure/tpch5_3_forward_thc.sql
 */
 
 -- https://duckdb.org/docs/stable/dev/profiling
--- PRAGMA enable_profiling = 'json';
--- PRAGMA profiling_output = 'results.json';
--- PRAGMA profiling_coverage = 'SELECT';
+PRAGMA enable_profiling = 'json';
+PRAGMA profiling_output = 'results.json';
+PRAGMA profiling_coverage = 'SELECT';
 -- PRAGMA profiling_mode = 'detailed';
 
 -------- Case #3: RPT+ Forward + THC -------- 
@@ -18,7 +18,7 @@ SET thc_l3_budget = 4194304;
 SET thc_collect_phase_rows = 100000; 
 SET thc_collect_budget_fraction = 0.02; 
 SET thc_miss_below_which_skip_collect = 0.05; 
-SET thc_activation_threshold = 500000;
+SET thc_activation_threshold = 1;
 
 
 load tpch;

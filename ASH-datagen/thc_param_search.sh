@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 
 DB="ASH-datagen/bench.duckdb"
-RESULTS="ASH-datagen/search_results2.csv"
+RESULTS="ASH-datagen/search_results.csv"
 NUM_RUNS=3
 
 echo "phase,param_name,param_value,budget,collect_rows,first_ro,budget_frac,miss_thresh,activation,avg_time_s" > "$RESULTS"
@@ -24,7 +24,7 @@ run_one() {
 
     local output avg rc=0
     output=$({
-        grep '^SET ' ASH-datagen/settings.sql \
+        grep '^SET ' scripts/measure/settings-common.sql \
             | grep -v 'thc_collect_phase_rows\|thc_first_read_only_phase_rows\|thc_l3_budget\|thc_collect_budget_fraction\|thc_miss_below_which_skip_collect\|thc_activation_threshold'
         echo "SET thc_l3_budget = ${budget};"
         echo "SET thc_collect_phase_rows = ${collect};"
@@ -42,8 +42,6 @@ run_one() {
         echo ".output stdout"
         echo "SELECT printf('%.3f', (getvariable('t_end') - getvariable('t0')) / ${NUM_RUNS}.0 / 1000.0) AS avg_time;"
         echo "SET disabled_optimizers = '';"
-        echo "SET threads = getvariable('old_threads');"
-        echo "RESET VARIABLE old_threads;"
     } | taskset -c 4-59 build/release/duckdb "$DB" 2>&1) || rc=$?
     if [[ $rc -ne 0 ]]; then
         echo "ERROR in run_one (${tag} ${pname}=${pval}), duckdb exit code ${rc}:" >&2

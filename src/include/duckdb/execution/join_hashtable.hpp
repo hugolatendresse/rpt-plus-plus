@@ -316,7 +316,7 @@ public:
 	};
 
 	JoinHashTable(ClientContext &context, const vector<JoinCondition> &conditions, vector<LogicalType> build_types,
-	              JoinType type, const vector<idx_t> &output_columns);
+	              JoinType type, const vector<idx_t> &output_columns, idx_t estimated_probe_side_rows);
 	~JoinHashTable();
 
 	//! Add the given data to the HT
@@ -511,6 +511,8 @@ private:
 	idx_t thc_activation_threshold;
 	//! Maximum THC load factor; inserts stop beyond this fill ratio.
 	double thc_max_load_factor;
+	//! Estimated probe-side row count passed from the physical hash join.
+	idx_t estimated_probe_side_rows;
 	//! True when only one thread is active, enabling non-atomic InsertUnsafe.
 	bool thc_single_threaded = false;
 	

@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Build Release No Join-Order",
+      "label": "Build Release no-join-order-flag",
       "type": "shell",
       "command": "GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' make release -j $(nproc)",
       "group": {
@@ -15,7 +15,20 @@
       "hide": false
     },
     {
-      "label": "Build Debug",
+      "label": "Build Debug no-join-order-flag",
+      "type": "shell",
+      "command": "GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' make debug -j $(nproc)",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "hide": false
+    },
+    {
+      "label": "Build Debug ExactLeftDeep",
       "type": "shell",
       "command": "GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' EXTRA_CMAKE_VARIABLES='-DCMAKE_CXX_FLAGS=-DExactLeftDeep' make debug -j $(nproc)",
       "group": {
@@ -27,8 +40,8 @@
       ],
       "hide": false
     },
-{
-      "label": "Build Release",
+    {
+      "label": "Build Release ExactLeftDeep",
       "type": "shell",
       "command": "GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' EXTRA_CMAKE_VARIABLES='-DCMAKE_CXX_FLAGS=-DExactLeftDeep' make release -j $(nproc)",
       "group": {
@@ -41,7 +54,7 @@
       "hide": false
     },
     {
-      "label": "Build Release (time-thc)",
+      "label": "Build Release ExactLeftDeep (with thc timers)",
       "type": "shell",
       "command": "GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' EXTRA_CMAKE_VARIABLES='-DCMAKE_CXX_FLAGS=-DExactLeftDeep' CXXFLAGS='-DDUCKDB_ENABLE_HASH_JOIN_TIMERS=1' make release -j $(nproc)",
       "group": {
@@ -53,9 +66,9 @@
       "hide": false
     },
     {
-      "label": "RS on ASH-datagen",
+      "label": "RS on ASH-datagen Case 3",
       "type": "shell",
-      "command": "cd /mnt/local_ssd/spy; GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' EXTRA_CMAKE_VARIABLES='-DCMAKE_CXX_FLAGS=-DExactLeftDeep' make release -j $(nproc); cd ASH-datagen; ./launch_release.sh rs",
+      "command": "cd /mnt/local_ssd/spy; GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' EXTRA_CMAKE_VARIABLES='-DCMAKE_CXX_FLAGS=-DExactLeftDeep' make release -j $(nproc); ./scripts/measure/run_ash_datagen_release.sh --case 3 rs",
       "group": {
         "isDefault": true
       },
@@ -65,9 +78,9 @@
       "hide": false
     },
     {
-      "label": "RS on ASH-datagen (time-thc)",
+      "label": "time RS on ASH-datagen Case 3",
       "type": "shell",
-      "command": "cd /mnt/local_ssd/spy; GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' EXTRA_CMAKE_VARIABLES='-DCMAKE_CXX_FLAGS=-DExactLeftDeep' CXXFLAGS='-DDUCKDB_ENABLE_HASH_JOIN_TIMERS=1' make release -j $(nproc); cd ASH-datagen; ./launch_release.sh rs",
+      "command": "cd /mnt/local_ssd/spy; GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' EXTRA_CMAKE_VARIABLES='-DCMAKE_CXX_FLAGS=-DExactLeftDeep' CXXFLAGS='-DDUCKDB_ENABLE_HASH_JOIN_TIMERS=1' make release -j $(nproc); ./scripts/measure/run_ash_datagen_release.sh --case 3 rs",
       "group": {
         "isDefault": true
       },
