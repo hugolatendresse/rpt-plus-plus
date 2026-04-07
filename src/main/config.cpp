@@ -118,6 +118,8 @@ static const ConfigurationOption internal_options[] = {
 	DUCKDB_LOCAL(ThcMissThresholdSetting),
 	DUCKDB_LOCAL(ThcActivationThresholdSetting),
 	DUCKDB_LOCAL(ThcMaxLoadFactorSetting),
+	DUCKDB_LOCAL(ThcMuSMethodSetting),
+	DUCKDB_LOCAL(ThcLogMuSSetting),
     DUCKDB_GLOBAL(EnableLogging),
     DUCKDB_GLOBAL(EnableMacroDependenciesSetting),
     DUCKDB_GLOBAL(EnableObjectCacheSetting),

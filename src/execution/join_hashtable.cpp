@@ -19,6 +19,9 @@ using ScanStructure = JoinHashTable::ScanStructure;
 using ProbeSpill = JoinHashTable::ProbeSpill;
 using ProbeSpillLocalState = JoinHashTable::ProbeSpillLocalAppendState;
 
+// Forward declaration for pointer chain walker used earlier in file
+static data_ptr_t LoadPointer(const const_data_ptr_t &source);
+
 JoinHashTable::SharedState::SharedState()
     : salt_v(LogicalType::UBIGINT), keys_to_compare_sel(STANDARD_VECTOR_SIZE), keys_no_match_sel(STANDARD_VECTOR_SIZE) {
 }
@@ -55,6 +58,11 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
 	thc_miss_below_which_skip_collect = config.thc_miss_below_which_skip_collect;
 	thc_activation_threshold = config.thc_activation_threshold;
 	thc_max_load_factor = config.thc_max_load_factor;
+	// mu_s estimation controls (per-session)
+	thc_mu_s_method = config.thc_mu_s_method;
+	thc_log_mu_s = config.thc_log_mu_s;
+	thc_mu_s_method = config.thc_mu_s_method;
+	thc_log_mu_s = config.thc_log_mu_s;
 	for (idx_t i = 0; i < conditions.size(); ++i) {
 		auto &condition = conditions[i];
 		D_ASSERT(condition.left->return_type == condition.right->return_type);
@@ -764,6 +772,25 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 					}
 				}
 
+				// Approach B: During cycle 0 COLLECT, optionally sample build-side chain lengths
+				// for the matched rows to estimate within-build-side multiplicity (mu_s).
+				if (thc_mu_s_method == "probe_sample" || thc_mu_s_method == "all") {
+					// Limit the number of chains we walk per chunk to bound overhead.
+					static constexpr idx_t MU_S_SAMPLE_LIMIT = 1024;
+					idx_t samples = MinValue<idx_t>(count, MU_S_SAMPLE_LIMIT);
+					for (idx_t si = 0; si < samples; si++) {
+						const auto row_index = match_sel.get_index(si);
+						data_ptr_t ptr = pointers_result[row_index];
+						idx_t chain_len = 0;
+						while (ptr) {
+							chain_len++;
+							ptr = LoadPointer(ptr + pointer_offset);
+						}
+						state.mu_s_chain_length_sum += chain_len;
+						state.mu_s_chain_count++;
+					}
+				}
+
 			} else {
 				// ----------------------------------------------------------
 				// Subsequent collect phase (cycle > 0): THC already has entries.
@@ -884,6 +911,17 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				state.ro_miss_count = 0;
 				state.ro_total_count = 0;
 				state.cycle_count++;
+
+				// If we collected any chain samples during cycle 0, log the probe-sampled mu_s now
+				if ((thc_mu_s_method == "probe_sample" || thc_mu_s_method == "all") && state.cycle_count == 1 &&
+				    state.mu_s_chain_count > 0 && thc_log_mu_s) {
+					double mu_s_probe_estimate = static_cast<double>(state.mu_s_chain_length_sum) /
+					                              static_cast<double>(state.mu_s_chain_count);
+					std::fprintf(stderr,
+					            "[mu_s probe_sample] chains=%lu mean_len=%.6f\n",
+					            (unsigned long)state.mu_s_chain_count, mu_s_probe_estimate);
+					std::fflush(stderr);
+				}
 			}
 		}
 		return;
@@ -1335,7 +1373,12 @@ static void InsertHashesLoop(atomic<ht_entry_t> entries[], Vector &row_locations
 				const auto potential_collided_ptr =
 				    InsertRowToEntry<PARALLEL, true>(atomic_entry, row_ptr_to_insert, salt, ht.pointer_offset);
 
-				if (PARALLEL) {
+				// Approach A: count unique build-side keys as successful first-insertions
+				// Only count when the slot was truly empty (no race). In non-parallel builds,
+				// InsertRowToEntry always returns nullptr here.
+				if (!PARALLEL) {
+					ht.CountUniqueBuildKey();
+				} else {
 					// if the insertion was not successful, the entry was occupied in the meantime, so we have to
 					// compare the keys and insert the row to the next entry
 					if (DUCKDB_UNLIKELY(potential_collided_ptr != nullptr)) {
@@ -1344,6 +1387,9 @@ static void InsertHashesLoop(atomic<ht_entry_t> entries[], Vector &row_locations
 						state.keys_to_compare_sel.set_index(salt_match_count, row_index);
 						rhs_row_locations[salt_match_count] = potential_collided_ptr;
 						salt_match_count += 1;
+					} else {
+						// truly first insertion into this slot -> new unique key chain
+						ht.CountUniqueBuildKey();
 					}
 				}
 
@@ -1441,6 +1487,31 @@ void JoinHashTable::Finalize(idx_t chunk_idx_from, idx_t chunk_idx_to, bool para
 
 void JoinHashTable::InitializeTieredHashCache() {
 	auto &config = ClientConfig::GetConfig(context);
+	// Before any early returns, compute and optionally log build-side mu_s estimates
+	// that rely solely on the finalized HT (Build-phase approach and HT sampling approach). These are independent
+	// of whether the THC itself is enabled.
+	if (thc_mu_s_method == "build_count" || thc_mu_s_method == "all") {
+		const idx_t unique_keys = build_unique_keys.load(std::memory_order_relaxed);
+		if (unique_keys > 0) {
+			mu_s_build_estimate = static_cast<double>(Count()) / static_cast<double>(unique_keys);
+			if (thc_log_mu_s) {
+				std::fprintf(stderr,
+				            "[mu_s build_count] rows=%lu unique=%lu mu_s=%.6f\n",
+				            (unsigned long)Count(), (unsigned long)unique_keys, mu_s_build_estimate);
+				std::fflush(stderr);
+			}
+		}
+	}
+	if (thc_mu_s_method == "ht_sample" || thc_mu_s_method == "all") {
+		mu_s_ht_sample_estimate = EstimateMuSFromHTSample();
+		if (thc_log_mu_s) {
+			std::fprintf(stderr,
+			            "[mu_s ht_sample] capacity=%lu mu_s=%.6f\n",
+			            (unsigned long)capacity, mu_s_ht_sample_estimate);
+			std::fflush(stderr);
+		}
+	}
+
 	if (config.disable_tiered_hash_cache) {
 		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since it's disabled with "
 		          "disable_tiered_hash_cache.\n");
@@ -1518,6 +1589,39 @@ void JoinHashTable::InitializeTieredHashCache() {
 	                                               tiered_hash_cache_key_offset, row_copy_offset, thc_max_load_factor);
 
 	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
+}
+
+void JoinHashTable::CountUniqueBuildKey() {
+	build_unique_keys.fetch_add(1, std::memory_order_relaxed);
+}
+
+double JoinHashTable::EstimateMuSFromHTSample() {
+	if (!entries || capacity == 0) {
+		return 0.0;
+	}
+	// Sample up to 1024 entries evenly across the table
+	const idx_t target_samples = 1024;
+	const idx_t stride = capacity <= target_samples ? 1 : (capacity / target_samples);
+	idx_t observed = 0;
+	idx_t total_chain_len = 0;
+	for (idx_t i = 0; i < capacity; i += stride) {
+		const ht_entry_t &entry = entries[i];
+		if (!entry.IsOccupied()) {
+			continue;
+		}
+		idx_t chain_len = 0;
+		const_data_ptr_t ptr = entry.GetPointer();
+		while (ptr) {
+			chain_len++;
+			ptr = LoadPointer(ptr + pointer_offset);
+		}
+		total_chain_len += chain_len;
+		observed++;
+	}
+	if (observed == 0) {
+		return 0.0;
+	}
+	return static_cast<double>(total_chain_len) / static_cast<double>(observed);
 }
 
 void JoinHashTable::InitializeScanStructure(ScanStructure &scan_structure, DataChunk &keys,

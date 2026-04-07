@@ -312,6 +312,12 @@ public:
 
 		//! Count of entries in thc_miss_match_sel
 		idx_t thc_miss_match_count = 0;
+
+		// ---- mu_s estimation (Probe-phase chain walking approach) ----
+		//! Sum of chain lengths walked during cycle 0 COLLECT.
+		idx_t mu_s_chain_length_sum = 0;
+		//! Number of chains walked during cycle 0 COLLECT.
+		idx_t mu_s_chain_count = 0;
 	};
 
 	struct InsertState : SharedState {
@@ -357,6 +363,9 @@ public:
 
 	//! Fill the pointer with all the addresses from the hashtable for full scan
 	static idx_t FillWithHTOffsets(JoinHTScanState &state, Vector &addresses);
+
+	//! Increment unique key counter during build (Build-phase approach of mu_s estimation)
+	void CountUniqueBuildKey();
 
 	idx_t Count() const {
 		return data_collection->Count();
@@ -528,7 +537,21 @@ private:
 	idx_t estimated_probe_side_rows;
 	//! True when only one thread is active, enabling non-atomic InsertUnsafe.
 	bool thc_single_threaded = false;
-	
+
+	// ---- mu_s estimation ----
+	//! Which mu_s estimation method(s) to run: "none", "build_count", "probe_sample", "ht_sample", "all".
+	std::string thc_mu_s_method;
+	//! When true, log mu_s estimates to stderr.
+	bool thc_log_mu_s = false;
+	//! Build-phase approach: count of unique keys inserted during build (Finalize). Atomic for parallel Finalize.
+	std::atomic<idx_t> build_unique_keys {0};
+	//! Build phase approach result: mu_s computed after Finalize as Count() / build_unique_keys.
+	double mu_s_build_estimate = 0.0;
+	//! Hash table sampling approach: mu_s from post-finalize HT sampling.
+	double mu_s_ht_sample_estimate = 0.0;
+	//! Hash table sampling approach: post-finalize HT sampling. Returns mean chain length.
+	double EstimateMuSFromHTSample();
+
 	//! Copying not allowed
 	JoinHashTable(const JoinHashTable &) = delete;
 
