@@ -362,7 +362,7 @@ public:
 	static idx_t FillWithHTOffsets(JoinHTScanState &state, Vector &addresses);
 
 	//! Increment unique key counter during build (Build-phase approach of mu_s estimation)
-	void CountUniqueBuildKey();
+	void CountOneUniqueBuildKey();
 
 	idx_t Count() const {
 		return data_collection->Count();
