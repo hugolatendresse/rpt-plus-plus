@@ -112,6 +112,12 @@ struct ClientConfig {
 	std::string thc_mu_s_method = "build_count"; // TODO we are now incurring a cost on every single build. Other methods are less precise but could be done only if we are to use a THC
 	//! When true, log mu_s estimates to stderr (works in both debug and release builds).
 	bool thc_log_mu_s = false;
+	//! Minimum estimated mu_{S->R} to keep THC active after the first cycle.
+	double thc_min_estimated_mu_s_to_r = 4.0;
+	//! Maximum estimated fraction of hot build-side rows before abandoning THC.
+	double thc_max_estimated_perc_hot = 0.5;
+	//! Minimum coverage factor: THC is abandoned when thc_size_needed * this > thc_size.
+	double thc_min_coverage_of_build_side = 5.0;
 	//! Enable caching operators
 	bool enable_caching_operators = true;
 	//! Force parallelism of small tables, used for testing

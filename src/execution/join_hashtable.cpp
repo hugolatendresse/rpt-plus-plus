@@ -58,6 +58,9 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
 	thc_miss_below_which_skip_collect = config.thc_miss_below_which_skip_collect;
 	thc_activation_threshold = config.thc_activation_threshold;
 	thc_max_load_factor = config.thc_max_load_factor;
+	thc_min_estimated_mu_s_to_r = config.thc_min_estimated_mu_s_to_r;
+	thc_max_estimated_perc_hot = config.thc_max_estimated_perc_hot;
+	thc_min_coverage_of_build_side = config.thc_min_coverage_of_build_side;
 	// mu_s estimation controls (per-session)
 	thc_mu_s_method = config.thc_mu_s_method;
 	thc_log_mu_s = config.thc_log_mu_s;
@@ -915,11 +918,10 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				// If we collected any chain samples during cycle 0, log the probe-sampled mu_s now
 				if ((thc_mu_s_method == "probe_sample" || thc_mu_s_method == "all") && state.cycle_count == 1 &&
 				    state.mu_s_chain_count > 0 && thc_log_mu_s) {
-					double mu_s_probe_estimate = static_cast<double>(state.mu_s_chain_length_sum) /
-					                              static_cast<double>(state.mu_s_chain_count);
-					std::fprintf(stderr,
-					            "[mu_s probe_sample] chains=%lu mean_len=%.6f\n",
-					            (unsigned long)state.mu_s_chain_count, mu_s_probe_estimate);
+					double mu_s_probe_estimate =
+					    static_cast<double>(state.mu_s_chain_length_sum) / static_cast<double>(state.mu_s_chain_count);
+					std::fprintf(stderr, "[mu_s probe_sample] chains=%lu mean_len=%.6f\n",
+					             (unsigned long)state.mu_s_chain_count, mu_s_probe_estimate);
 					std::fflush(stderr);
 				}
 			}
@@ -976,21 +978,48 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	if (!state.first_cycle_multiplicity_checked && state.cycle_count == 1) {
 		state.first_cycle_multiplicity_checked = true;
 		if (state.first_collect_new_entries > 0) {
-			const double estimated_mu_s_to_r =
-			    (static_cast<double>(estimated_probe_side_rows) * (1.0 - miss_rate)) /
-			    static_cast<double>(state.first_collect_new_entries);
+			// Estimate cross-multiplicity
+			const double estimated_mu_s_to_r = (static_cast<double>(estimated_probe_side_rows) * (1.0 - miss_rate)) /
+			                                   static_cast<double>(state.first_collect_new_entries);
 			DEBUG_LOG("[THC First-Cycle Mu] |R|_est=%lu, U1=%lu, miss_rate=%.2f%%, mu_{S->R}=%.4f\n",
 			          (unsigned long)estimated_probe_side_rows, (unsigned long)state.first_collect_new_entries,
 			          miss_rate * 100.0, estimated_mu_s_to_r);
-			if (estimated_mu_s_to_r < THC_MIN_ESTIMATED_MU_S_TO_R) {
+			if (estimated_mu_s_to_r < thc_min_estimated_mu_s_to_r) {
 				DEBUG_LOG("[THC Low-Multiplicity Bypass] mu_{S->R}=%.4f < %.1f -> abandoning THC for this thread\n",
-				          estimated_mu_s_to_r, THC_MIN_ESTIMATED_MU_S_TO_R);
+				          estimated_mu_s_to_r, thc_min_estimated_mu_s_to_r);
 				state.thc_abandoned = true;
 				state.thc_collection_enabled = false;
 				state.collected_entries.clear();
 				state.collected_entries.shrink_to_fit();
 				return;
 			}
+
+			// Estimate the % of rows that are hot on build side
+			// % hot = (U1 * u_s) / (|S| * (1-pmiss))
+			double estimated_perc_hot = (static_cast<double>(state.first_collect_new_entries) * mu_s_build_estimate) /
+			                            (static_cast<double>(Count()) * (1.0 - miss_rate));
+
+			if (estimated_perc_hot > thc_max_estimated_perc_hot) {
+				DEBUG_LOG("[THC High-Hotness Bypass]: Estimated Hotness is %.2f -> abandoning THC for this thread\n",
+				          estimated_perc_hot);
+			    state.thc_abandoned = true;
+				state.thc_collection_enabled = false;
+				state.collected_entries.clear();
+				state.collected_entries.shrink_to_fit();
+			}
+
+			// Estimate the THC size needed to store all of the hot entries
+			double thc_size_needed = static_cast<double>(Count()) * estimated_perc_hot * stride;
+			if (thc_size_needed * thc_min_coverage_of_build_side > thc_size) {
+				DEBUG_LOG("THC Too Small for Build Side Bypass: THC size needed is %.2f, THC size is %.2f\n",
+				          thc_size_needed, thc_size);
+				state.thc_abandoned = true;
+				state.thc_collection_enabled = false;
+				state.collected_entries.clear();
+				state.collected_entries.shrink_to_fit();
+			}
+
+
 		} else {
 			DEBUG_LOG("[THC First-Cycle Mu] skipped estimation because U1==0\n");
 		}
@@ -1495,9 +1524,8 @@ void JoinHashTable::InitializeTieredHashCache() {
 		if (unique_keys > 0) {
 			mu_s_build_estimate = static_cast<double>(Count()) / static_cast<double>(unique_keys);
 			if (thc_log_mu_s) {
-				std::fprintf(stderr,
-				            "[mu_s build_count] rows=%lu unique=%lu mu_s=%.6f\n",
-				            (unsigned long)Count(), (unsigned long)unique_keys, mu_s_build_estimate);
+				std::fprintf(stderr, "[mu_s build_count] rows=%lu unique=%lu mu_s=%.6f\n", (unsigned long)Count(),
+				             (unsigned long)unique_keys, mu_s_build_estimate);
 				std::fflush(stderr);
 			}
 		}
@@ -1505,9 +1533,8 @@ void JoinHashTable::InitializeTieredHashCache() {
 	if (thc_mu_s_method == "ht_sample" || thc_mu_s_method == "all") {
 		mu_s_ht_sample_estimate = EstimateMuSFromHTSample();
 		if (thc_log_mu_s) {
-			std::fprintf(stderr,
-			            "[mu_s ht_sample] capacity=%lu mu_s=%.6f\n",
-			            (unsigned long)capacity, mu_s_ht_sample_estimate);
+			std::fprintf(stderr, "[mu_s ht_sample] capacity=%lu mu_s=%.6f\n", (unsigned long)capacity,
+			             mu_s_ht_sample_estimate);
 			std::fflush(stderr);
 		}
 	}
@@ -1575,14 +1602,14 @@ void JoinHashTable::InitializeTieredHashCache() {
 		return;
 	}
 
-	const auto entry_stride = (sizeof(TieredHashCache::tag_t) + data_collection_row_size + 7) & ~idx_t(7);
+	thc_entry_stride = (sizeof(TieredHashCache::tag_t) + data_collection_row_size + 7) & ~idx_t(7);
 	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Instantiating THC (cache_capacity=%lu, row_size=%lu, "
 	          "key_offset=%lu, row_copy_offset=%lu, "
 	          "coverage=%.2f%%, tuple_size=%lu, pointer_offset=%lu, entry_stride=%lu, total=%.1f MiB)\n",
 	          (unsigned long)cache_capacity, (unsigned long)data_collection_row_size,
 	          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)row_copy_offset, coverage_ratio * 100.0,
-	          (unsigned long)tuple_size, (unsigned long)pointer_offset, (unsigned long)entry_stride,
-	          (double)(cache_capacity * entry_stride) / (1024.0 * 1024.0));
+	          (unsigned long)tuple_size, (unsigned long)pointer_offset, (unsigned long)thc_entry_stride,
+	          (double)(cache_capacity * thc_entry_stride) / (1024.0 * 1024.0));
 	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Estimated probe-side rows=%lu\n",
 	          (unsigned long)estimated_probe_side_rows);
 	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size,
