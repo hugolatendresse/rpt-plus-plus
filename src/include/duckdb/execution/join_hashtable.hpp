@@ -512,6 +512,8 @@ private:
 	idx_t tiered_hash_cache_key_offset = 0;
 
 	// ---- Per-instance THC parameters (loaded from ClientConfig at construction) ----
+	//! The capacity of the THC (in count of entries) computed by ComputeCapacity.
+	idx_t thc_capacity;
 	//! Memory budget (bytes) for the THC. Controls ComputeCapacity.
 	idx_t thc_budget_bytes;
 	//! Number of probe rows per collect phase before flushing to the THC.
@@ -548,7 +550,7 @@ private:
 	//! When true, log mu_s estimates to stderr.
 	bool thc_log_mu_s = false;
 	//! Build-phase approach: count of unique keys inserted during build (Finalize). Atomic for parallel Finalize.
-	std::atomic<idx_t> build_unique_keys {0};
+	std::atomic<idx_t> build_unique_keys_cnt {0};
 	//! Build phase approach result: mu_s computed after Finalize as Count() / build_unique_keys.
 	double mu_s_build_estimate = 0.0;
 	//! Hash table sampling approach: mu_s from post-finalize HT sampling.

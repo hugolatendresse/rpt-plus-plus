@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Allows running the JOB benchmark
 # Usage:
-# scripts/measure/run_job.sh --case <1|2|3|4> [--perf]
+# scripts/measure/run_job.sh --case <1|2|3|4> [--perf] [--job-query NX]
 set -euo pipefail
 
 CASE=""

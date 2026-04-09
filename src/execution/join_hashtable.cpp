@@ -1002,23 +1002,23 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			if (estimated_perc_hot > thc_max_estimated_perc_hot) {
 				DEBUG_LOG("[THC High-Hotness Bypass]: Estimated Hotness is %.2f -> abandoning THC for this thread\n",
 				          estimated_perc_hot);
-			    state.thc_abandoned = true;
-				state.thc_collection_enabled = false;
-				state.collected_entries.clear();
-				state.collected_entries.shrink_to_fit();
-			}
-
-			// Estimate the THC size needed to store all of the hot entries
-			double thc_size_needed = static_cast<double>(Count()) * estimated_perc_hot * stride;
-			if (thc_size_needed * thc_min_coverage_of_build_side > thc_size) {
-				DEBUG_LOG("THC Too Small for Build Side Bypass: THC size needed is %.2f, THC size is %.2f\n",
-				          thc_size_needed, thc_size);
 				state.thc_abandoned = true;
 				state.thc_collection_enabled = false;
 				state.collected_entries.clear();
 				state.collected_entries.shrink_to_fit();
 			}
 
+			// Estimate the THC entry count needed to store all of the hot entries
+			const idx_t unique_keys_cnt = build_unique_keys_cnt.load(std::memory_order_relaxed);
+			double thc_capacity_needed = static_cast<double>(unique_keys_cnt) * estimated_perc_hot;
+			if (static_cast<double>(thc_capacity) < thc_capacity_needed * thc_min_coverage_of_build_side) {
+				DEBUG_LOG("THC Too Small for Build Side Bypass: THC capacity needed is %.0f, THC capacity is %lu\n",
+				          thc_capacity_needed, thc_capacity);
+				state.thc_abandoned = true;
+				state.thc_collection_enabled = false;
+				state.collected_entries.clear();
+				state.collected_entries.shrink_to_fit();
+			}
 
 		} else {
 			DEBUG_LOG("[THC First-Cycle Mu] skipped estimation because U1==0\n");
@@ -1520,12 +1520,12 @@ void JoinHashTable::InitializeTieredHashCache() {
 	// that rely solely on the finalized HT (Build-phase approach and HT sampling approach). These are independent
 	// of whether the THC itself is enabled.
 	if (thc_mu_s_method == "build_count" || thc_mu_s_method == "all") {
-		const idx_t unique_keys = build_unique_keys.load(std::memory_order_relaxed);
-		if (unique_keys > 0) {
-			mu_s_build_estimate = static_cast<double>(Count()) / static_cast<double>(unique_keys);
+		const idx_t unique_keys_cnt = build_unique_keys_cnt.load(std::memory_order_relaxed);
+		if (unique_keys_cnt > 0) {
+			mu_s_build_estimate = static_cast<double>(Count()) / static_cast<double>(unique_keys_cnt);
 			if (thc_log_mu_s) {
 				std::fprintf(stderr, "[mu_s build_count] rows=%lu unique=%lu mu_s=%.6f\n", (unsigned long)Count(),
-				             (unsigned long)unique_keys, mu_s_build_estimate);
+				             (unsigned long)unique_keys_cnt, mu_s_build_estimate);
 				std::fflush(stderr);
 			}
 		}
@@ -1573,7 +1573,7 @@ void JoinHashTable::InitializeTieredHashCache() {
 	    pointer_offset + sizeof(data_ptr_t);                    // TODO might be duplicative of logic in FashHashCache
 	const idx_t row_copy_offset = 0;                            // TODO hack?
 	tiered_hash_cache_key_offset = layout_ptr->GetOffsets()[0]; // key after validity bytes // TODO this is a hack!!!
-	const idx_t cache_capacity = TieredHashCache::ComputeCapacity(data_collection_row_size, thc_budget_bytes);
+	thc_capacity = TieredHashCache::ComputeCapacity(data_collection_row_size, thc_budget_bytes);
 
 	// ---------------------------------------------------------------
 	// Coverage ratio check: skip THC if it can only cache a tiny
@@ -1593,11 +1593,11 @@ void JoinHashTable::InitializeTieredHashCache() {
 	// gets abandoned anyway (wasting the collect-phase overhead).
 	// ---------------------------------------------------------------
 	static constexpr double MIN_COVERAGE_RATIO = 0.00;
-	const double coverage_ratio = static_cast<double>(cache_capacity) / static_cast<double>(capacity);
+	const double coverage_ratio = static_cast<double>(thc_capacity) / static_cast<double>(capacity);
 	if (coverage_ratio < MIN_COVERAGE_RATIO) {
 		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since coverage ratio %.2f%% "
 		          "(cache_capacity=%lu, ht_capacity=%lu) below %.0f%% threshold\n",
-		          coverage_ratio * 100.0, (unsigned long)cache_capacity, (unsigned long)capacity,
+		          coverage_ratio * 100.0, (unsigned long)thc_capacity, (unsigned long)capacity,
 		          MIN_COVERAGE_RATIO * 100.0);
 		return;
 	}
@@ -1606,20 +1606,20 @@ void JoinHashTable::InitializeTieredHashCache() {
 	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Instantiating THC (cache_capacity=%lu, row_size=%lu, "
 	          "key_offset=%lu, row_copy_offset=%lu, "
 	          "coverage=%.2f%%, tuple_size=%lu, pointer_offset=%lu, entry_stride=%lu, total=%.1f MiB)\n",
-	          (unsigned long)cache_capacity, (unsigned long)data_collection_row_size,
+	          (unsigned long)thc_capacity, (unsigned long)data_collection_row_size,
 	          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)row_copy_offset, coverage_ratio * 100.0,
 	          (unsigned long)tuple_size, (unsigned long)pointer_offset, (unsigned long)thc_entry_stride,
-	          (double)(cache_capacity * thc_entry_stride) / (1024.0 * 1024.0));
+	          (double)(thc_capacity * thc_entry_stride) / (1024.0 * 1024.0));
 	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Estimated probe-side rows=%lu\n",
 	          (unsigned long)estimated_probe_side_rows);
-	tiered_hash_cache = make_uniq<TieredHashCache>(cache_capacity, data_collection_row_size,
-	                                               tiered_hash_cache_key_offset, row_copy_offset, thc_max_load_factor);
+	tiered_hash_cache = make_uniq<TieredHashCache>(thc_capacity, data_collection_row_size, tiered_hash_cache_key_offset,
+	                                               row_copy_offset, thc_max_load_factor);
 
 	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
 }
 
 void JoinHashTable::CountOneUniqueBuildKey() {
-	build_unique_keys.fetch_add(1, std::memory_order_relaxed);
+	build_unique_keys_cnt.fetch_add(1, std::memory_order_relaxed);
 }
 
 double JoinHashTable::EstimateMuSFromHTSample() {
