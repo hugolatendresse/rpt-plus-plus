@@ -772,7 +772,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 					}
 				}
 
-				// Approach B: During cycle 0 COLLECT, optionally sample build-side chain lengths
+				// mu_s estimation Approach B: During cycle 0 COLLECT, optionally sample build-side chain lengths
 				// for the matched rows to estimate within-build-side multiplicity (mu_s).
 				if (thc_mu_s_method == "probe_sample" || thc_mu_s_method == "all") {
 					// Limit the number of chains we walk per chunk to bound overhead.
@@ -1373,11 +1373,11 @@ static void InsertHashesLoop(atomic<ht_entry_t> entries[], Vector &row_locations
 				const auto potential_collided_ptr =
 				    InsertRowToEntry<PARALLEL, true>(atomic_entry, row_ptr_to_insert, salt, ht.pointer_offset);
 
-				// Approach A: count unique build-side keys as successful first-insertions
+				// mu_s estimation Approach A: count unique build-side keys as successful first-insertions
 				// Only count when the slot was truly empty (no race). In non-parallel builds,
 				// InsertRowToEntry always returns nullptr here.
 				if (!PARALLEL) {
-					ht.CountUniqueBuildKey();
+					ht.CountOneUniqueBuildKey();
 				} else {
 					// if the insertion was not successful, the entry was occupied in the meantime, so we have to
 					// compare the keys and insert the row to the next entry
@@ -1389,7 +1389,7 @@ static void InsertHashesLoop(atomic<ht_entry_t> entries[], Vector &row_locations
 						salt_match_count += 1;
 					} else {
 						// truly first insertion into this slot -> new unique key chain
-						ht.CountUniqueBuildKey();
+						ht.CountOneUniqueBuildKey();
 					}
 				}
 
@@ -1591,7 +1591,7 @@ void JoinHashTable::InitializeTieredHashCache() {
 	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
 }
 
-void JoinHashTable::CountUniqueBuildKey() {
+void JoinHashTable::CountOneUniqueBuildKey() {
 	build_unique_keys.fetch_add(1, std::memory_order_relaxed);
 }
 
