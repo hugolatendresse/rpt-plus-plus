@@ -677,7 +677,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// If this thread has abandoned THC (high miss rate), or if first-cycle
 	// multiplicity estimation determined THC is not worthwhile, bypass all
 	// THC logic and use the vanilla DuckDB probe path.
-	if (!tiered_hash_cache || state.thc_abandoned || state.thc_low_multiplicity_bypass) {
+	if (!tiered_hash_cache || state.thc_abandoned) {
 		if (UseSalt()) {
 			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
 			                             pointers_result_v, match_sel, has_sel);
@@ -983,9 +983,9 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			          (unsigned long)estimated_probe_side_rows, (unsigned long)state.first_collect_new_entries,
 			          miss_rate * 100.0, estimated_mu_s_to_r);
 			if (estimated_mu_s_to_r < THC_MIN_ESTIMATED_MU_S_TO_R) {
-				DEBUG_LOG("[THC Low-Multiplicity Bypass] mu_{S->R}=%.4f < %.1f -> bypassing THC for this thread\n",
+				DEBUG_LOG("[THC Low-Multiplicity Bypass] mu_{S->R}=%.4f < %.1f -> abandoning THC for this thread\n",
 				          estimated_mu_s_to_r, THC_MIN_ESTIMATED_MU_S_TO_R);
-				state.thc_low_multiplicity_bypass = true;
+				state.thc_abandoned = true;
 				state.thc_collection_enabled = false;
 				state.collected_entries.clear();
 				state.collected_entries.shrink_to_fit();

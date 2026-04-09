@@ -240,9 +240,6 @@ public:
 		//! was above the abandon threshold.  Once this reaches
 		//! THC_ABANDON_CONSECUTIVE_MISSES, the THC is permanently abandoned.
 		idx_t consecutive_high_miss_checkpoints = 0;
-		//! When true, THC is fully bypassed because the first-cycle estimated
-		//! probe multiplicity mu_{S->R} was too low to justify THC overhead.
-		bool thc_low_multiplicity_bypass = false; // TODO refactor to a more generic bypass (when miss rate is high, etc)
 
 		//! How many collect -> read-only transitions have occurred so far.
 		//! cycle_count == 0 means we are still in the very first collect phase.

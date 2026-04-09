@@ -109,7 +109,7 @@ struct ClientConfig {
 	//! "build_count" is during hash table build
 	//! "probe_sample" is during the first cycle of probing
 	//! "ht_sample" is between building and probing
-	std::string thc_mu_s_method = "none";
+	std::string thc_mu_s_method = "build_count"; // TODO we are now incurring a cost on every single build. Other methods are less precise but could be done only if we are to use a THC
 	//! When true, log mu_s estimates to stderr (works in both debug and release builds).
 	bool thc_log_mu_s = false;
 	//! Enable caching operators
