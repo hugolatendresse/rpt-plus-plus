@@ -704,6 +704,40 @@ Value ThcMaxLoadFactorSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// THC Mu-S Estimation Method
+//===----------------------------------------------------------------------===//
+void ThcMuSMethodSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_mu_s_method = input.GetValue<string>();
+}
+
+void ThcMuSMethodSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_mu_s_method = ClientConfig().thc_mu_s_method;
+}
+
+Value ThcMuSMethodSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value(config.thc_mu_s_method);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Log Mu-S
+//===----------------------------------------------------------------------===//
+void ThcLogMuSSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_log_mu_s = input.GetValue<bool>();
+}
+
+void ThcLogMuSSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_log_mu_s = ClientConfig().thc_log_mu_s;
+}
+
+Value ThcLogMuSSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.thc_log_mu_s);
+}
+
+//===----------------------------------------------------------------------===//
 // Enable H T T P Metadata Cache
 //===----------------------------------------------------------------------===//
 void EnableHTTPMetadataCacheSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {

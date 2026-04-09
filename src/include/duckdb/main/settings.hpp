@@ -667,6 +667,26 @@ struct ThcMaxLoadFactorSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct ThcMuSMethodSetting {
+	using RETURN_TYPE = string;
+	static constexpr const char *Name = "thc_mu_s_method";
+	static constexpr const char *Description = "Which mu_s estimation method to use: none, build_count, probe_sample, ht_sample, all";
+	static constexpr const char *InputType = "VARCHAR";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcLogMuSSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "thc_log_mu_s";
+	static constexpr const char *Description = "Log mu_s estimates to stderr";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct EnableHTTPMetadataCacheSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "enable_http_metadata_cache";
