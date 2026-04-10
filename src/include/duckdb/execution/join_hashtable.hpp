@@ -203,7 +203,7 @@ public:
 
 	//! There is one instance of this per thread at runtime
 	struct ProbeState : SharedState {
-		ProbeState();
+		explicit ProbeState(idx_t collected_entries_capacity = 0);
 
 		Vector ht_offsets_v;
 		Vector hashes_dense_v;
