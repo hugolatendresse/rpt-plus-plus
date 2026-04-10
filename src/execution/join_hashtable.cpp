@@ -685,6 +685,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// If this thread has abandoned THC (high miss rate), or if first-cycle
 	// multiplicity estimation determined THC is not worthwhile, bypass all
 	// THC logic and use the vanilla DuckDB probe path.
+
+	state.thc_abandoned = true;
 	if (!tiered_hash_cache || state.thc_abandoned) {
 		if (UseSalt()) {
 			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
@@ -693,6 +695,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries,
 			                              pointers_result_v, match_sel, has_sel);
 		}
+		state.thc_abandoned = true;
 		return;
 	}
 
@@ -762,6 +765,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		}
 		return;
 	}
+
+	state.thc_abandoned = true;
 
 	// =================================================================
 	// COLLECT PHASE
