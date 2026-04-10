@@ -1,5 +1,6 @@
 #include "duckdb/execution/join_hashtable.hpp"
 
+#include <chrono>
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/radix_partitioning.hpp"
@@ -61,6 +62,7 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
 	thc_min_estimated_mu_s_to_r = config.thc_min_estimated_mu_s_to_r;
 	thc_max_estimated_perc_hot = config.thc_max_estimated_perc_hot;
 	thc_min_coverage_of_build_side = config.thc_min_coverage_of_build_side;
+	thc_warmup_cycles = config.thc_warmup_cycles;
 	// mu_s estimation controls (per-session)
 	thc_mu_s_method = config.thc_mu_s_method;
 	thc_log_mu_s = config.thc_log_mu_s;
@@ -627,7 +629,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		// during COLLECT phase (cycle > 0) where the caller will consume them
 		// to insert new entries into the THC. In READ_ONLY phase this work
 		// is wasted — the data is never read.
-		D_ASSERT(state.cycle_count > 0); // This function shouldn't be called at all in the first cycle
+		D_ASSERT(state.completed_collect_cycles > 0); // This function shouldn't be called at all in the first cycle
 		const bool in_collect_phase = state.tiered_hash_cache_phase == TieredHashCachePhase::COLLECT;
 
 		// Populate `thc_miss_match_sel` selection vector with all the entries not found in
@@ -692,47 +694,82 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	}
 
 	// =====================================================================
-	// Adaptive THC Algorithm
+	// Cost-Based Adaptive THC Algorithm
 	// =====================================================================
 	//
-	// We alternate between two phases per thread:
+	// Three phases per thread:
 	//
-	//   COLLECT:    Probe the HT and collect matched entries into collected_entries.
-	//              On cycle 0: use the regular DuckDB probe (THC is empty).
-	//              On cycle > 0: probe THC first, fall back to regular HT for
-	//              THC misses, and collect only miss-matched entries.
-	//              When probe_rows_in_phase >= COLLECT_PHASE_PROBE_ROWS, flush entries into
-	//              the shared THC and transition to READ_ONLY.
+	//   BASELINE:   Probe the main HT only (no THC) for p probes.
+	//               Measures C_main — the baseline cost per probe.
+	//               This phase only happens once.
 	//
-	//   READ_ONLY: Probe the THC, fall back for misses, track miss rate.
-	//              When read_only_rows_processed >= read_only_rows_target
-	//              (a "checkpoint"), evaluate three guards:
-	//                1) miss_rate >= thc_miss_below_which_skip_collect (configurable, default 10%)
-	//                2) budget_ok: another collect phase won't exceed 2% overhead
+	//   COLLECT:    Probe the HT (or THC + HT fallback on cycles > 0),
+	//               collect matched entries, flush to THC at end.
+	//               Measures C_grow^t — average cost including collection.
+	//
+	//   READ_ONLY:  Probe the THC + HT fallback, no collection.
+	//               Stops when read_only_rows_processed >= read_only_rows_target
+	//               Measures C_eval^t — steady-state cost with current THC.
+	//               At the end of each evaluation phase, the cost-based
+	//               three-way decision rule determines:
+	//                 DROP   if delta_t >= 0
+	//                 FREEZE if delta_t < 0 and shrinkage < gamma_t
+	//                 CONTINUE otherwise
+	//
+	//              If we are to CONTINUE, evaluate three guards:
+	//                1) miss_rate >= thc_miss_below_which_skip_collect
+	//                2) budget_ok: another collect phase won't exceed collection budget
 	//                3) !thc_full: the THC isn't saturated
 	//              If all three pass → enter COLLECT. Otherwise → stay in
-	//              READ_ONLY with doubled target (exponential backoff).
+	//              READ_ONLY.
+	//
 	//              Always increment checkpoint_count.
 	//
-	// This design ensures:
-	//   - Total collect phases are bounded to ~2% of probe rows
-	//   - READ_ONLY segments grow exponentially, reducing checkpoint overhead
-	//   - Collection is skipped when the THC is effective (low miss rate) or full
 	// =====================================================================
 
-	// Track lifetime probe rows for the budget calculation
+	// Track lifetime probe rows (per thread) for the budget calculation
 	const idx_t input_count = count;
 	state.total_probe_rows += input_count;
+
+	// =================================================================
+	// BASELINE PHASE — measure C_main (main HT only, no THC)
+	// =================================================================
+	if (state.tiered_hash_cache_phase == TieredHashCachePhase::BASELINE) {
+		auto phase_t0 = std::chrono::steady_clock::now();
+		if (UseSalt()) {
+			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
+			                             pointers_result_v, match_sel, has_sel);
+		} else {
+			GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries,
+			                              pointers_result_v, match_sel, has_sel);
+		}
+		auto phase_t1 = std::chrono::steady_clock::now();
+		state.phase_time_ns +=
+		    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(phase_t1 - phase_t0).count());
+		state.phase_probe_count += input_count;
+
+		if (state.phase_probe_count >= thc_collect_phase_rows) {
+			state.c_main = static_cast<double>(state.phase_time_ns) / static_cast<double>(state.phase_probe_count);
+			DEBUG_LOG("[BASELINE->COLLECT] c_main=%.2f ns/probe, phase_probes=%lu\n", state.c_main,
+			          (unsigned long)state.phase_probe_count);
+			state.tiered_hash_cache_phase = TieredHashCachePhase::COLLECT;
+			state.phase_time_ns = 0;
+			state.phase_probe_count = 0;
+			state.probe_rows_in_phase = 0;
+		}
+		return;
+	}
 
 	// =================================================================
 	// COLLECT PHASE
 	// =================================================================
 	if (state.tiered_hash_cache_phase == TieredHashCachePhase::COLLECT) {
+		auto collect_phase_t0 = std::chrono::steady_clock::now();
 
 		{
 			ScopedHashJoinTimer collect_timer(state.thc_collect_time_ns);
 
-			if (state.cycle_count == 0) {
+			if (state.completed_collect_cycles == 0) {
 				// ----------------------------------------------------------
 				// First collect phase (cycle 0): THC is empty, use regular DuckDB probe.
 				// Save hashes before GetRowPointersInternal modifies them,
@@ -858,7 +895,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		// ----------------------------------------------------------
 		// Check if this collect phase is complete.
 		// Flush collected entries into the shared THC and transition
-		// to READ_ONLY with the appropriate exponential backoff target.
+		// to READ_ONLY. The flush is included in the COLLECT timing
+		// so that C_grow captures the full collection overhead.
 		// ----------------------------------------------------------
 		if (state.probe_rows_in_phase >= thc_collect_phase_rows) {
 			ScopedHashJoinTimer insert_timer(state.thc_insert_time_ns);
@@ -881,19 +919,28 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			state.total_new_entries += new_entries_this_phase;
 			// Save U1 from the very first COLLECT flush for the one-shot
 			// multiplicity estimate computed after the first READ_ONLY phase.
-			if (state.cycle_count == 0) {
+			if (state.completed_collect_cycles == 0) {
 				state.first_collect_new_entries = new_entries_this_phase;
 			}
 
+			// Finalize C_grow timing: include everything up to and including the flush
+			auto collect_phase_t1 = std::chrono::steady_clock::now();
+			state.phase_time_ns += static_cast<uint64_t>(
+			    std::chrono::duration_cast<std::chrono::nanoseconds>(collect_phase_t1 - collect_phase_t0).count());
+			state.phase_probe_count += state.probe_rows_in_phase;
+			state.c_grow_current =
+			    static_cast<double>(state.phase_time_ns) / static_cast<double>(state.phase_probe_count);
+
 			DEBUG_LOG("[Collect->Read-Only] cycle=%lu, probe_rows_in_phase=%lu, buffered=%lu, "
 			          "new_entries_this_phase=%lu, cache_fill=%lu/%lu, new_inserts_count=%lu, dup_inserts_count=%lu, "
+			          "c_grow=%.2f ns/probe, "
 			          "total_collect_phase_rows=%lu, total_probe=%lu (%.2f%%)\n",
-			          (unsigned long)state.cycle_count, (unsigned long)state.probe_rows_in_phase,
+			          (unsigned long)state.completed_collect_cycles, (unsigned long)state.probe_rows_in_phase,
 			          (unsigned long)state.collected_entries.size(), (unsigned long)new_entries_this_phase,
 			          (unsigned long)tiered_hash_cache->new_inserts_count.load(),
 			          (unsigned long)tiered_hash_cache->GetCapacity(),
 			          (unsigned long)tiered_hash_cache->new_inserts_count.load(),
-			          (unsigned long)tiered_hash_cache->dup_inserts_count.load(),
+			          (unsigned long)tiered_hash_cache->dup_inserts_count.load(), state.c_grow_current,
 			          (unsigned long)state.total_collect_phase_rows, (unsigned long)state.total_probe_rows,
 			          state.total_probe_rows > 0 ? 100.0 * static_cast<double>(state.total_collect_phase_rows) /
 			                                           static_cast<double>(state.total_probe_rows)
@@ -905,19 +952,24 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 
 			// Transition to READ_ONLY with exponentially growing target.
 			// The first READ_ONLY segment uses READ_ONLY_BASE_ROWS.
-			// Each subsequent segment doubles in length.
+			// OPTION for each subsequent segment to double in length.
 			// thc_first_read_only_phase_rows == 0 means skip READ_ONLY (stay in collect)
 			if (thc_first_read_only_phase_rows > 0) {
 				state.tiered_hash_cache_phase = TieredHashCachePhase::READ_ONLY;
-				state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
+				// state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
+				state.read_only_rows_target =
+				    thc_first_read_only_phase_rows; // TODO we used to have exp backoff. Removed it on 4/9 to implement
+				                                    // adaptive algo. Parametrize this option?
 				state.read_only_rows_processed = 0;
 				state.ro_miss_count = 0;
 				state.ro_total_count = 0;
-				state.cycle_count++;
+				state.phase_time_ns = 0;
+				state.phase_probe_count = 0;
+				state.completed_collect_cycles++;
 
 				// If we collected any chain samples during cycle 0, log the probe-sampled mu_s now
-				if ((thc_mu_s_method == "probe_sample" || thc_mu_s_method == "all") && state.cycle_count == 1 &&
-				    state.mu_s_chain_count > 0 && thc_log_mu_s) {
+				if ((thc_mu_s_method == "probe_sample" || thc_mu_s_method == "all") &&
+				    state.completed_collect_cycles == 1 && state.mu_s_chain_count > 0 && thc_log_mu_s) {
 					double mu_s_probe_estimate =
 					    static_cast<double>(state.mu_s_chain_length_sum) / static_cast<double>(state.mu_s_chain_count);
 					std::fprintf(stderr, "[mu_s probe_sample] chains=%lu mean_len=%.6f\n",
@@ -925,17 +977,25 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 					std::fflush(stderr);
 				}
 			}
+		} else {
+			// Not yet at phase COLLECT boundary — accumulate timing for intermediate chunks
+			auto collect_phase_t1 = std::chrono::steady_clock::now();
+			state.phase_time_ns += static_cast<uint64_t>(
+			    std::chrono::duration_cast<std::chrono::nanoseconds>(collect_phase_t1 - collect_phase_t0).count());
 		}
 		return;
 	}
 
 	// =================================================================
-	// READ_ONLY PHASE
+	// READ_ONLY (EVALUATION) PHASE
 	// =================================================================
 	// Probe the THC, fall back to regular HT for misses.
-	// Track miss rate. At checkpoint boundaries, evaluate whether to
-	// enter COLLECT or stay in READ_ONLY with a doubled target.
+	// Track miss rate and wall-clock cost. At checkpoint boundaries,
+	// evaluate whether to enter COLLECT or stay in READ_ONLY and
+	// apply the cost-based three-way decision rule.
 	// =================================================================
+
+	auto eval_phase_t0 = std::chrono::steady_clock::now();
 
 	idx_t match_count = 0;
 	idx_t cache_miss_count = 0;
@@ -943,9 +1003,11 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	                    match_count, cache_miss_count);
 	count = match_count;
 
-	// Accumulate miss statistics for this READ_ONLY segment.
-	// cache_miss_count is the number of rows that the THC could not serve
-	// and had to be resolved via the regular data_collection probe.
+	auto eval_phase_t1 = std::chrono::steady_clock::now();
+	state.phase_time_ns += static_cast<uint64_t>(
+	    std::chrono::duration_cast<std::chrono::nanoseconds>(eval_phase_t1 - eval_phase_t0).count());
+	state.phase_probe_count += input_count;
+
 	state.ro_miss_count += cache_miss_count;
 	state.ro_total_count += input_count;
 	state.read_only_rows_processed += input_count;
@@ -954,31 +1016,36 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// Checkpoint: decide whether to enter COLLECT or keep reading.
 	// This happens when we've processed enough rows in this
 	// READ_ONLY segment (the target grows exponentially).
+	// Also apply three-way decision rule and decide whether to drop, freeze, or continue.
 	// ----------------------------------------------------------
 	if (state.read_only_rows_processed < state.read_only_rows_target) {
 		DEBUG_LOG("Staying in read-only made since haven't reached row count target\n");
 		return;
 	}
-	// We have reached out read-only row count target.
+	// We have reached our read-only row count target.
 
+	// THC already frozen or collection disabled by another mechanism (e.g. THC full)
 	if (!state.thc_collection_enabled) {
 		DEBUG_LOG("Staying in read-only mode since collection phase has been permanently disabled\n");
 		return;
 	}
 
+	// Compute C_eval^t for this evaluation phase
+	state.c_eval_current = state.phase_probe_count > 0
+	                           ? static_cast<double>(state.phase_time_ns) / static_cast<double>(state.phase_probe_count)
+	                           : 0.0;
+
 	// Compute the miss rate over this entire READ_ONLY segment
 	const double miss_rate = state.ro_total_count > 0
 	                             ? static_cast<double>(state.ro_miss_count) / static_cast<double>(state.ro_total_count)
 	                             : 0.0;
-	// One-shot first-cycle multiplicity estimate:
-	//   mu_{S->R} ~= |R|(1 - p_miss) / U1
-	// where |R| is estimated_probe_side_rows, p_miss is first READ_ONLY miss
-	// rate, and U1 is the number of unique entries inserted in first COLLECT.
-	// If mu_{S->R} < 4, skip THC entirely for this thread.
-	if (!state.first_cycle_multiplicity_checked && state.cycle_count == 1) {
+
+	// One-shot first-cycle multiplicity / hotness / coverage checks
+	// (existing safety mechanisms, kept as supplementary early exits)
+	if (!state.first_cycle_multiplicity_checked && state.completed_collect_cycles == 1) {
 		state.first_cycle_multiplicity_checked = true;
 		if (state.first_collect_new_entries > 0) {
-			// Estimate cross-multiplicity
+			// Estimate cross-multiplicity = mu_SR = |R| (1 - p_miss) / U1
 			const double estimated_mu_s_to_r = (static_cast<double>(estimated_probe_side_rows) * (1.0 - miss_rate)) /
 			                                   static_cast<double>(state.first_collect_new_entries);
 			DEBUG_LOG("[THC First-Cycle Mu] |R|_est=%lu, U1=%lu, miss_rate=%.2f%%, mu_{S->R}=%.4f\n",
@@ -1006,6 +1073,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				state.thc_collection_enabled = false;
 				state.collected_entries.clear();
 				state.collected_entries.shrink_to_fit();
+				return;
 			}
 
 			// Estimate the THC entry count needed to store all of the hot entries
@@ -1018,8 +1086,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				state.thc_collection_enabled = false;
 				state.collected_entries.clear();
 				state.collected_entries.shrink_to_fit();
+				return;
 			}
-
 		} else {
 			DEBUG_LOG("[THC First-Cycle Mu] skipped estimation because U1==0\n");
 		}
@@ -1034,12 +1102,12 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	    static_cast<idx_t>(static_cast<double>(state.total_probe_rows) * thc_collect_budget_fraction);
 
 	// All three guards must pass to enter COLLECT
-	const bool should_collect =
+	const bool can_collect =
 	    state.thc_collection_enabled && (miss_rate >= thc_miss_below_which_skip_collect) && budget_ok;
 
 	DEBUG_LOG("[Checkpoint] checkpoint=%lu, ro_rows=%lu, miss_rate=%.2f%%, budget_ok=%d -> %s\n",
-	          (unsigned long)state.checkpoint_count, (unsigned long)state.read_only_rows_processed, miss_rate * 100.0,
-	          (int)budget_ok, should_collect ? "COLLECT" : "SKIP");
+	          (unsigned long)state.completed_evaluation_cycles, (unsigned long)state.read_only_rows_processed,
+	          miss_rate * 100.0, (int)budget_ok, can_collect ? "COLLECT" : "SKIP");
 
 	// ---- Abandonment check ----
 	// If the miss rate is very high (above THC_ABANDON_MISS_THRESHOLD),
@@ -1062,21 +1130,77 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		state.consecutive_high_miss_checkpoints = 0;
 	}
 
-	// Always increment checkpoint count (controls exponential backoff)
-	state.checkpoint_count++;
+	state.completed_evaluation_cycles++;
 
-	if (should_collect) {
-		// Enter COLLECT phase: reset per-phase state
-		state.tiered_hash_cache_phase = TieredHashCachePhase::COLLECT;
-		state.probe_rows_in_phase = 0;
-		state.collected_entries.clear();
-	} else {
+	if (!can_collect) {
 		// Stay in READ_ONLY with a doubled target.
-		state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) << state.checkpoint_count);
+		// TODO parametrize the exp backoff or something. See other place in GetRowPointers where we do exp backoff.
+		// state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) <<
+		// state.completed_evaluation_cycles);
+		state.read_only_rows_target = thc_first_read_only_phase_rows;
 		state.read_only_rows_processed = 0;
 		state.ro_miss_count = 0;
 		state.ro_total_count = 0;
+		return;
 	}
+
+	// ---- Cost-based three-way decision rule to decide if we go into collection, freeze the THC, or abandon the THC
+
+	// Compute decision variables BEFORE updating c_eval_prev so that
+	// shrinkage uses the previous evaluation's cost correctly.
+	const double delta_t = state.c_eval_current - state.c_main;
+	const double gamma_t = state.c_grow_current - state.c_eval_current;
+	// shrinkage = delta^{t-1} - delta^t = c_eval_prev - c_eval_current
+	// c_eval_prev still holds the previous eval's cost.
+	const double shrinkage = state.c_eval_prev - state.c_eval_current;
+
+	const idx_t current_eval_cycle = state.eval_cycle_count;
+	// Advance the counter and save c_eval_current for the next round's shrinkage calc.
+	state.eval_cycle_count++;
+	state.c_eval_prev = state.c_eval_current;
+
+	// During warmup, unconditionally continue to give the THC time to stabilize.
+	if (state.eval_cycle_count <= thc_warmup_cycles) {
+		DEBUG_LOG("[Eval Checkpoint] eval_cycle=%lu (warmup, need %lu), c_eval=%.2f, c_main=%.2f, "
+		          "delta=%.2f, miss_rate=%.2f%% -> CONTINUE (warmup)\n",
+		          (unsigned long)current_eval_cycle, (unsigned long)thc_warmup_cycles, state.c_eval_current,
+		          state.c_main, delta_t, miss_rate * 100.0);
+		state.tiered_hash_cache_phase = TieredHashCachePhase::COLLECT;
+		state.probe_rows_in_phase = 0;
+		state.collected_entries.clear();
+		state.phase_time_ns = 0;
+		state.phase_probe_count = 0;
+		return;
+	}
+
+	if (delta_t >= 0) {
+		DEBUG_LOG("[Eval Checkpoint] eval_cycle=%lu, c_eval=%.2f, c_main=%.2f, delta=%.2f >= 0 -> DROP\n",
+		          (unsigned long)current_eval_cycle, state.c_eval_current, state.c_main, delta_t);
+		state.thc_abandoned = true;
+		return;
+	}
+
+	// delta_t < 0: THC is useful. Check if further growth is worth paying for.
+	if (shrinkage < gamma_t) {
+		DEBUG_LOG("[Eval Checkpoint] eval_cycle=%lu, c_eval=%.2f, c_main=%.2f, delta=%.2f, "
+		          "shrinkage=%.2f < gamma=%.2f -> FREEZE\n",
+		          (unsigned long)current_eval_cycle, state.c_eval_current, state.c_main, delta_t, shrinkage, gamma_t);
+		state.thc_frozen = true;
+		state.thc_collection_enabled = false;
+		state.phase_time_ns = 0;
+		state.phase_probe_count = 0;
+		return;
+	}
+
+	// Growth paid for itself — continue to next COLLECT phase.
+	DEBUG_LOG("[Eval Checkpoint] eval_cycle=%lu, c_eval=%.2f, c_main=%.2f, delta=%.2f, "
+	          "shrinkage=%.2f >= gamma=%.2f -> CONTINUE\n",
+	          (unsigned long)current_eval_cycle, state.c_eval_current, state.c_main, delta_t, shrinkage, gamma_t);
+	state.tiered_hash_cache_phase = TieredHashCachePhase::COLLECT;
+	state.probe_rows_in_phase = 0;
+	state.collected_entries.clear();
+	state.phase_time_ns = 0;
+	state.phase_probe_count = 0;
 }
 
 void JoinHashTable::Hash(DataChunk &keys, const SelectionVector &sel, idx_t count, Vector &hashes) {

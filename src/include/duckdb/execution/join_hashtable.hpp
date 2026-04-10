@@ -147,12 +147,16 @@ public:
 		SelectionVector keys_no_match_sel;
 	};
 
-	//! The two phases of the adaptive THC lifecycle.
+	//! The three phases of the adaptive THC lifecycle.
+	//! BASELINE: probe the main HT only (no THC) for p probes; measures C_main.
 	//! COLLECT: probe the regular HT (or THC + regular HT fallback on cycles > 0),
 	//!         and collect matched entries into collected_entries for later THC insertion.
 	//! READ_ONLY: probe the THC first, fall back to regular HT for misses.
-	//!            Track miss rate to decide whether the next collect phase is needed.
-	enum class TieredHashCachePhase : uint8_t { COLLECT, READ_ONLY };
+	//!            At the end of each evaluation phase, the cost-based decision rule
+	//!            decides whether to drop, freeze, or continue building the THC.
+	enum class TieredHashCachePhase : uint8_t { BASELINE, COLLECT, READ_ONLY };
+
+// TODO most items below should be config params. Some might already be duplicates of config params
 
 	//! Number of probe-side rows each thread processes during a single collect phase.
 	//! Each collect phase has a fixed row budget. The number of collect phases is
@@ -223,7 +227,7 @@ public:
 		// phase.
 
 		//! Current phase of the adaptive THC lifecycle
-		TieredHashCachePhase tiered_hash_cache_phase = TieredHashCachePhase::COLLECT;
+		TieredHashCachePhase tiered_hash_cache_phase = TieredHashCachePhase::BASELINE;
 
 		//! When true, this thread has permanently abandoned the THC because
 		//! the miss rate remained high even after the THC was full.
@@ -238,10 +242,10 @@ public:
 		idx_t consecutive_high_miss_checkpoints = 0;
 
 		//! How many collect -> read-only transitions have occurred so far.
-		//! cycle_count == 0 means we are still in the very first collect phase.
+		//! cycle_count == 0 means we are either in Cmain or first collect phase.
 		//! On cycle 0, we use the regular DuckDB probe and save all matches.
 		//! On cycle > 0, we probe THC + regular fallback and save only THC-miss matches.
-		idx_t cycle_count = 0;
+		idx_t completed_collect_cycles = 0;
 
 		//! Rows processed in the current collect phase (reset each time we enter COLLECT)
 		idx_t probe_rows_in_phase = 0;
@@ -252,7 +256,7 @@ public:
 
 		//! How many checkpoints (end-of-READ_ONLY evaluations) have occurred.
 		//! The READ_ONLY segment length is READ_ONLY_BASE_ROWS * 2^checkpoint_count.
-		idx_t checkpoint_count = 0;
+		idx_t completed_evaluation_cycles = 0;
 
 		//! Target number of rows for the current READ_ONLY segment.
 		//! Doubles at every checkpoint (exponential backoff).
@@ -311,6 +315,24 @@ public:
 		idx_t mu_s_chain_length_sum = 0;
 		//! Number of chains walked during cycle 0 COLLECT.
 		idx_t mu_s_chain_count = 0;
+
+		// ---- Cost-based adaptive tracking ----
+		//! Baseline average ns/probe measured during the BASELINE phase (main HT only).
+		double c_main = 0.0;
+		//! Average ns/probe measured during the most recent COLLECT phase.
+		double c_grow_current = 0.0;
+		//! Average ns/probe measured during the most recent READ_ONLY (evaluation) phase.
+		double c_eval_current = 0.0;
+		//! Average ns/probe from the previous evaluation phase, used to compute delta^{t-1}.
+		double c_eval_prev = 0.0;
+		//! Accumulated wall-clock nanoseconds in the current phase.
+		uint64_t phase_time_ns = 0;
+		//! Number of probes counted in the current phase.
+		idx_t phase_probe_count = 0;
+		//! Number of completed evaluation phases (= t in the decision rule).
+		idx_t eval_cycle_count = 0;
+		//! True once the cost-based rule decides to freeze the THC (useful but no more growth).
+		bool thc_frozen = false;
 	};
 
 	struct InsertState : SharedState {
@@ -532,6 +554,10 @@ private:
 	double thc_max_estimated_perc_hot;
 	//! Minimum coverage factor: THC is abandoned when thc_size_needed * this > thc_size.
 	double thc_min_coverage_of_build_side;
+	//! Number of COLLECT+EVAL cycles that must complete before the cost-based
+	//! decision rule (drop/freeze/continue) activates. During warmup, every
+	//! evaluation checkpoint unconditionally proceeds to the next COLLECT phase.
+	idx_t thc_warmup_cycles;
 	//! If the estimated probe multiplicity mu_{S->R} after the first
 	//! COLLECT+READ_ONLY cycle is below this threshold, THC is skipped
 	//! entirely and probing falls back to the regular hash table path.

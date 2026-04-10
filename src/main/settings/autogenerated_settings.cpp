@@ -789,6 +789,23 @@ Value ThcMinCoverageOfBuildSideSetting::GetSetting(const ClientContext &context)
 }
 
 //===----------------------------------------------------------------------===//
+// THC Warmup Cycles
+//===----------------------------------------------------------------------===//
+void ThcWarmupCyclesSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_warmup_cycles = static_cast<idx_t>(input.GetValue<int64_t>());
+}
+
+void ThcWarmupCyclesSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_warmup_cycles = ClientConfig().thc_warmup_cycles;
+}
+
+Value ThcWarmupCyclesSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BIGINT(static_cast<int64_t>(config.thc_warmup_cycles));
+}
+
+//===----------------------------------------------------------------------===//
 // Enable H T T P Metadata Cache
 //===----------------------------------------------------------------------===//
 void EnableHTTPMetadataCacheSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {

@@ -123,6 +123,7 @@ static const ConfigurationOption internal_options[] = {
 	DUCKDB_LOCAL(ThcMinEstimatedMuSToRSetting),
 	DUCKDB_LOCAL(ThcMaxEstimatedPercHotSetting),
 	DUCKDB_LOCAL(ThcMinCoverageOfBuildSideSetting),
+	DUCKDB_LOCAL(ThcWarmupCyclesSetting),
     DUCKDB_GLOBAL(EnableLogging),
     DUCKDB_GLOBAL(EnableMacroDependenciesSetting),
     DUCKDB_GLOBAL(EnableObjectCacheSetting),
