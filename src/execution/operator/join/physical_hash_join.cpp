@@ -435,8 +435,8 @@ static void PrintJoinHashTableFinalizeStats(JoinHashTable &ht) {
 	const idx_t entries_bytes = ht.capacity * sizeof(ht_entry_t);
 	const idx_t row_data_bytes = ht.GetDataCollection().SizeInBytes();
 	const size_t mib = static_cast<size_t>(1024 * 1024);
-	DEBUG_LOG("[HashJoinFinalizeEvent::FinishEvent] total=%zu MiB (entries=%zu MiB, row_data=%zu MiB)\n",
-	               (size_t)(entries_bytes + row_data_bytes) / mib, (size_t)entries_bytes / mib,
+	DEBUG_LOG("[HashJoinFinalizeEvent::FinishEvent] total=%zu MiB total=%lu bytes total=%lu entries count (entries=%zu MiB, row_data=%zu MiB)\n",
+	               (size_t)(entries_bytes + row_data_bytes) / mib, entries_bytes+row_data_bytes, ht.Count(), (size_t)entries_bytes / mib,
 	               (size_t)row_data_bytes / mib);
 }
 
