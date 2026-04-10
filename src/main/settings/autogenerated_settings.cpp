@@ -738,6 +738,57 @@ Value ThcLogMuSSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// THC Min Estimated Mu-S To R
+//===----------------------------------------------------------------------===//
+void ThcMinEstimatedMuSToRSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_min_estimated_mu_s_to_r = input.GetValue<double>();
+}
+
+void ThcMinEstimatedMuSToRSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_min_estimated_mu_s_to_r = ClientConfig().thc_min_estimated_mu_s_to_r;
+}
+
+Value ThcMinEstimatedMuSToRSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::DOUBLE(config.thc_min_estimated_mu_s_to_r);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Max Estimated Perc Hot
+//===----------------------------------------------------------------------===//
+void ThcMaxEstimatedPercHotSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_max_estimated_perc_hot = input.GetValue<double>();
+}
+
+void ThcMaxEstimatedPercHotSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_max_estimated_perc_hot = ClientConfig().thc_max_estimated_perc_hot;
+}
+
+Value ThcMaxEstimatedPercHotSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::DOUBLE(config.thc_max_estimated_perc_hot);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Min Coverage Of Build Side
+//===----------------------------------------------------------------------===//
+void ThcMinCoverageOfBuildSideSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_min_coverage_of_build_side = input.GetValue<double>();
+}
+
+void ThcMinCoverageOfBuildSideSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_min_coverage_of_build_side = ClientConfig().thc_min_coverage_of_build_side;
+}
+
+Value ThcMinCoverageOfBuildSideSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::DOUBLE(config.thc_min_coverage_of_build_side);
+}
+
+//===----------------------------------------------------------------------===//
 // Enable H T T P Metadata Cache
 //===----------------------------------------------------------------------===//
 void EnableHTTPMetadataCacheSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
