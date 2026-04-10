@@ -55,7 +55,7 @@ public:
 		// TODO should we use BPM? Or Arena?
 		data = make_unsafe_uniq_array_uninitialized<data_t>(total_bytes);
 		base_ptr = data.get();
-		memset(base_ptr, 0, total_bytes);
+		// memset(base_ptr, 0, total_bytes);
 	}
 
 	//! Find the cache entry whose tag matches an input hash.
