@@ -992,7 +992,7 @@ SinkFinalizeType PhysicalHashJoin::Finalize(Pipeline &pipeline, Event &event, Cl
 		auto key_type = ht.equality_types[0];
 		use_perfect_hash = sink.perfect_join_executor->BuildPerfectHashTable(key_type);
 	}
-	DEBUG_LOG("[PhysicalHashJoin::Finalize] Using perfect hashing: %d\n", use_perfect_hash);
+	// DEBUG_LOG("[PhysicalHashJoin::Finalize] Using perfect hashing: %d\n", use_perfect_hash);
 
 	// In case of a large build side or duplicates, use regular hash join
 	if (!use_perfect_hash) {
@@ -1012,7 +1012,8 @@ SinkFinalizeType PhysicalHashJoin::Finalize(Pipeline &pipeline, Event &event, Cl
 class HashJoinOperatorState : public CachingOperatorState {
 public:
 	explicit HashJoinOperatorState(ClientContext &context, HashJoinGlobalSinkState &sink_p)
-	    : sink(sink_p), probe_executor(context), scan_structure(*sink.hash_table, join_key_state) {
+	    : sink(sink_p), probe_executor(context), scan_structure(*sink.hash_table, join_key_state),
+	      probe_state(ClientConfig::GetConfig(context).thc_collect_phase_rows) {
 		probe_state.probe_for_pointers_time_ns = &probe_for_pointers_time_ns;
 		probe_state.match_time_ns = &match_time_ns;
 		probe_state.thc_probe_time_ns = &thc_probe_time_ns;
@@ -1469,7 +1470,8 @@ bool HashJoinGlobalSourceState::AssignTask(HashJoinGlobalSinkState &sink, HashJo
 HashJoinLocalSourceState::HashJoinLocalSourceState(const PhysicalHashJoin &op, HashJoinGlobalSinkState &sink_p,
                                                    Allocator &allocator)
     : local_stage(HashJoinSourceStage::INIT), addresses(LogicalType::POINTER), lhs_join_key_executor(sink_p.context),
-      scan_structure(*sink_p.hash_table, join_key_state), sink(sink_p) {
+      scan_structure(*sink_p.hash_table, join_key_state),
+      probe_state(ClientConfig::GetConfig(sink_p.context).thc_collect_phase_rows), sink(sink_p) {
 	auto &chunk_state = probe_local_scan.current_chunk_state;
 	chunk_state.properties = ColumnDataScanProperties::ALLOW_ZERO_COPY;
 

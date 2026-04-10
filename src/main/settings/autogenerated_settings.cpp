@@ -704,6 +704,108 @@ Value ThcMaxLoadFactorSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// THC Mu-S Estimation Method
+//===----------------------------------------------------------------------===//
+void ThcMuSMethodSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_mu_s_method = input.GetValue<string>();
+}
+
+void ThcMuSMethodSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_mu_s_method = ClientConfig().thc_mu_s_method;
+}
+
+Value ThcMuSMethodSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value(config.thc_mu_s_method);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Log Mu-S
+//===----------------------------------------------------------------------===//
+void ThcLogMuSSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_log_mu_s = input.GetValue<bool>();
+}
+
+void ThcLogMuSSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_log_mu_s = ClientConfig().thc_log_mu_s;
+}
+
+Value ThcLogMuSSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.thc_log_mu_s);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Min Estimated Mu-S To R
+//===----------------------------------------------------------------------===//
+void ThcMinEstimatedMuSToRSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_min_estimated_mu_s_to_r = input.GetValue<double>();
+}
+
+void ThcMinEstimatedMuSToRSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_min_estimated_mu_s_to_r = ClientConfig().thc_min_estimated_mu_s_to_r;
+}
+
+Value ThcMinEstimatedMuSToRSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::DOUBLE(config.thc_min_estimated_mu_s_to_r);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Max Estimated Perc Hot
+//===----------------------------------------------------------------------===//
+void ThcMaxEstimatedPercHotSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_max_estimated_perc_hot = input.GetValue<double>();
+}
+
+void ThcMaxEstimatedPercHotSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_max_estimated_perc_hot = ClientConfig().thc_max_estimated_perc_hot;
+}
+
+Value ThcMaxEstimatedPercHotSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::DOUBLE(config.thc_max_estimated_perc_hot);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Min Coverage Of Build Side
+//===----------------------------------------------------------------------===//
+void ThcMinCoverageOfBuildSideSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_min_coverage_of_build_side = input.GetValue<double>();
+}
+
+void ThcMinCoverageOfBuildSideSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_min_coverage_of_build_side = ClientConfig().thc_min_coverage_of_build_side;
+}
+
+Value ThcMinCoverageOfBuildSideSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::DOUBLE(config.thc_min_coverage_of_build_side);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Warmup Cycles
+//===----------------------------------------------------------------------===//
+void ThcWarmupCyclesSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_warmup_cycles = static_cast<idx_t>(input.GetValue<int64_t>());
+}
+
+void ThcWarmupCyclesSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_warmup_cycles = ClientConfig().thc_warmup_cycles;
+}
+
+Value ThcWarmupCyclesSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BIGINT(static_cast<int64_t>(config.thc_warmup_cycles));
+}
+
+//===----------------------------------------------------------------------===//
 // Enable H T T P Metadata Cache
 //===----------------------------------------------------------------------===//
 void EnableHTTPMetadataCacheSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {

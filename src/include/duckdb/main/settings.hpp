@@ -667,6 +667,66 @@ struct ThcMaxLoadFactorSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct ThcMuSMethodSetting {
+	using RETURN_TYPE = string;
+	static constexpr const char *Name = "thc_mu_s_method";
+	static constexpr const char *Description = "Which mu_s estimation method to use: none, build_count, probe_sample, ht_sample, all";
+	static constexpr const char *InputType = "VARCHAR";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcLogMuSSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "thc_log_mu_s";
+	static constexpr const char *Description = "Log mu_s estimates to stderr";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcMinEstimatedMuSToRSetting {
+	using RETURN_TYPE = double;
+	static constexpr const char *Name = "thc_min_estimated_mu_s_to_r";
+	static constexpr const char *Description = "Minimum estimated mu_{S->R} to keep THC active after the first cycle (default: 4.0)";
+	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcMaxEstimatedPercHotSetting {
+	using RETURN_TYPE = double;
+	static constexpr const char *Name = "thc_max_estimated_perc_hot";
+	static constexpr const char *Description = "Maximum estimated fraction of hot build-side rows before abandoning THC (default: 0.5)";
+	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcMinCoverageOfBuildSideSetting {
+	using RETURN_TYPE = double;
+	static constexpr const char *Name = "thc_min_coverage_of_build_side";
+	static constexpr const char *Description = "Minimum coverage factor: THC is abandoned when thc_size_needed * this > thc_size (default: 5.0)";
+	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcWarmupCyclesSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "thc_warmup_cycles";
+	static constexpr const char *Description = "Number of collect+eval cycles before the cost-based decision rule activates (default: 2)";
+	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct EnableHTTPMetadataCacheSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "enable_http_metadata_cache";
