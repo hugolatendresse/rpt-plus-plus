@@ -1,6 +1,6 @@
--- PRAGMA enable_profiling = 'json';
--- PRAGMA profiling_output = '4cresults.json';
--- PRAGMA profiling_coverage = 'SELECT';
+PRAGMA enable_profiling = 'json';
+PRAGMA profiling_output = '4cresults.json';
+PRAGMA profiling_coverage = 'SELECT';
 
 -- SET disabled_optimizers = 'compressed_materialization,join_order,build_side_probe_side,statistics_propagation';
 

@@ -556,6 +556,16 @@ struct EnableHTTPLoggingSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct JoinOrderModeSetting {
+	using RETURN_TYPE = string;
+	static constexpr const char *Name = "join_order_mode";
+	static constexpr const char *Description = "Join order enumeration strategy: duckdb, exact_left_deep, random_bushy, random_left_deep";
+	static constexpr const char *InputType = "VARCHAR";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct RptForwardOnlySetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "rpt_forward_only";
