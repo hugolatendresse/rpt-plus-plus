@@ -508,6 +508,42 @@ void PlanEnumerator::SolveJoinOrderLeftDeep() {
 	}
 	auto &total_relation = query_graph_manager.set_manager.GetJoinRelation(bindings);
 	auto final_plan = plans.find(total_relation);
+	if (final_plan == plans.end()) {
+		// Disconnected query graph: some relations are only reachable via
+		// cross products. Collect the largest partial plan for each connected
+		// component and chain them together with cross-product edges.
+		vector<JoinRelationSet *> components;
+		unordered_set<idx_t> covered;
+		idx_t num_rels = query_graph_manager.relation_manager.NumRelations();
+		for (int level = (int)num_rels - 2; level >= 0 && covered.size() < num_rels; level--) {
+			for (auto *set : join_rels[level]) {
+				bool has_new = false;
+				for (idx_t k = 0; k < set->count; k++) {
+					if (covered.find(set->relations[k]) == covered.end()) {
+						has_new = true;
+						break;
+					}
+				}
+				if (has_new) {
+					components.push_back(set);
+					for (idx_t k = 0; k < set->count; k++) {
+						covered.insert(set->relations[k]);
+					}
+				}
+			}
+		}
+		while (components.size() > 1) {
+			auto *right = components.back();
+			components.pop_back();
+			auto *left = components.back();
+			components.pop_back();
+			query_graph_manager.CreateQueryGraphCrossProduct(*left, *right);
+			auto connections = query_graph.GetConnections(*left, *right);
+			D_ASSERT(!connections.empty());
+			auto &node = EmitPair(*left, *right, connections);
+			components.push_back(&node.set);
+		}
+	}
 	//SPY: REMOVED RETURN TYPE CHANGED return std::move(final_plan->second);
 }
 #elif defined(RandomBushy)
