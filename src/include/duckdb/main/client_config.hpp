@@ -116,11 +116,11 @@ struct ClientConfig {
 	double thc_min_estimated_mu_s_to_r = 4.0;
 	//! Maximum estimated fraction of hot build-side rows before abandoning THC.
 	double thc_max_estimated_perc_hot = 0.5;
-	//! Minimum coverage factor: THC is abandoned when thc_size_needed * this > thc_size.
-	double thc_min_coverage_of_build_side = 5.0;
+	//! Minimum coverage factor: THC is abandoned when thc_size < thc_size_needed * this.
+	double thc_min_coverage_of_build_side = 0.1;
 	//! Number of COLLECT+EVAL cycles that must complete before the cost-based
 	//! decision rule (drop/freeze/continue) activates.
-	idx_t thc_warmup_cycles = 2;
+	idx_t thc_warmup_cycles = 4;
 	//! Enable caching operators
 	bool enable_caching_operators = true;
 	//! Force parallelism of small tables, used for testing

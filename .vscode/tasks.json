@@ -28,6 +28,20 @@
       "hide": false
     },
     {
+      "label": "Generate Debug SQL (Case 3, JOB 4c)",
+      "type": "shell",
+      "command": "{ grep '^SET ' scripts/measure/settings-common.sql || true; grep '^SET ' scripts/measure/settings-run_job.sql || true; echo 'SET rpt_forward_only = true;'; cat join-order-benchmark/queries/4c.sql; } > scripts/debug/debug_query.sql",
+      "group": "none",
+      "problemMatcher": []
+    },
+    {
+      "label": "Generate Debug SQL (Case 4, JOB 4c)",
+      "type": "shell",
+      "command": "{ grep '^SET ' scripts/measure/settings-common.sql || true; grep '^SET ' scripts/measure/settings-run_job.sql || true; echo 'SET disable_tiered_hash_cache = true;'; cat join-order-benchmark/queries/4c.sql; } > scripts/debug/debug_query.sql",
+      "group": "none",
+      "problemMatcher": []
+    },
+    {
       "label": "Build Debug ExactLeftDeep",
       "type": "shell",
       "command": "TMPDIR=/mnt/local_ssd/tmp GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' EXTRA_CMAKE_VARIABLES='-DCMAKE_CXX_FLAGS=-DExactLeftDeep' make debug -j $(nproc)",
