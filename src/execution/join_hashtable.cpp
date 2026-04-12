@@ -1592,6 +1592,17 @@ void JoinHashTable::InsertHashes(Vector &hashes_v, const idx_t count, TupleDataC
 }
 
 void JoinHashTable::AllocatePointerTable() {
+
+#ifdef DEBUG
+	std::this_thread::sleep_for(std::chrono::seconds(1));
+	fprintf(stderr, "//////////////////////////////////////////////////////////////////////////////////////////////////"
+	                "//////////////////////\n");
+	fprintf(stderr, "////////////////////   STARTING A NEW HASH JOIN   ///////////////////////////////"
+	                "//////////////////////\n");
+	fprintf(stderr, "//////////////////////////////////////////////////////////////////////////////////////////////////"
+	                "//////////////////////\n");
+	std::this_thread::sleep_for(std::chrono::seconds(1));
+#endif
 	idx_t data_collection_row_cnt = Count();
 	capacity = PointerTableCapacity(data_collection_row_cnt);
 	D_ASSERT(IsPowerOfTwo(capacity));
@@ -1652,19 +1663,6 @@ void JoinHashTable::InitializeTieredHashCache() {
 	// Before any early returns, compute and optionally log build-side mu_s estimates
 	// that rely solely on the finalized HT (Build-phase approach and HT sampling approach). These are independent
 	// of whether the THC itself is enabled.
-
-#ifdef DEBUG
-	std::this_thread::sleep_for(std::chrono::seconds(1));
-	fprintf(stderr, "//////////////////////////////////////////////////////////////////////////////////////////////////"
-	                "//////////////////////\n");
-	fprintf(stderr, "//////////////////////////////////////////////////////////////////////////////////////////////////"
-	                "//////////////////////\n");
-	fprintf(stderr, "//////////////////////////////////////////////////////////////////////////////////////////////////"
-	                "//////////////////////\n");
-	fprintf(stderr, "//////////////////////////////////////////////////////////////////////////////////////////////////"
-	                "//////////////////////\n");
-	std::this_thread::sleep_for(std::chrono::seconds(1));
-#endif
 
 	DEBUG_LOG("Size in mb of hash table is %lu\n", Count() * 8 / (1024 * 1024));
 	if (thc_mu_s_method == "build_count" || thc_mu_s_method == "all") {
