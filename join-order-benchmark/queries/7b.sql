@@ -1,7 +1,7 @@
 
-PRAGMA enable_profiling = 'json';
-PRAGMA profiling_output = 'res.json';
-PRAGMA profiling_coverage = 'SELECT';
+-- PRAGMA enable_profiling = 'json';
+-- PRAGMA profiling_output = 'res.json';
+-- PRAGMA profiling_coverage = 'SELECT';
 
 -- EXPLAIN ANALYZE
 SELECT MIN(n.name) AS of_person,

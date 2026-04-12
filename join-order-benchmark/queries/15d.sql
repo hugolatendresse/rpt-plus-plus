@@ -1,8 +1,8 @@
-PRAGMA enable_profiling = 'json';
-PRAGMA profiling_output = '15dresults.json';
-PRAGMA profiling_coverage = 'SELECT';
+-- PRAGMA enable_profiling = 'json';
+-- PRAGMA profiling_output = '15dresults.json';
+-- PRAGMA profiling_coverage = 'SELECT';
 
-SET disabled_optimizers = 'compressed_materialization,join_order,build_side_probe_side,statistics_propagation';
+-- SET disabled_optimizers = 'compressed_materialization,join_order,build_side_probe_side,statistics_propagation';
 
 SELECT MIN(at1.title) AS aka_title,
        MIN(t.title) AS internet_movie_title

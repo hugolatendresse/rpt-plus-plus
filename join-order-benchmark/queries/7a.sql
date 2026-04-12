@@ -1,4 +1,4 @@
-EXPLAIN ANALYZE
+-- EXPLAIN ANALYZE
 SELECT MIN(n.name) AS of_person,
        MIN(t.title) AS biography_movie
 FROM aka_name AS an,
