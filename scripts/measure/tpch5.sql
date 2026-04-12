@@ -11,19 +11,13 @@ SET threads = 1;
 SET pin_threads = 'on';
 SET thc_l3_budget = 4194304;
 SET thc_collect_phase_rows = 100000;
-SET thc_collect_budget_fraction = 0.02;
+SET thc_collect_budget_fraction = 1.00;
 SET thc_miss_below_which_skip_collect = 0.05;
-SET thc_activation_threshold = 500000;
+SET thc_activation_threshold = 50000;
 
 SET disable_tiered_hash_cache = 'false';
 
-SET threads = 1;
-SET pin_threads = 'on';
-SET thc_l3_budget = 4194304;
-SET thc_collect_phase_rows = 100000; 
-SET thc_collect_budget_fraction = 0.02; 
-SET thc_miss_below_which_skip_collect = 0.05; 
-SET thc_activation_threshold = 500000;
+-- Case 3: THC
 SET rpt_forward_only = true;
 
 load tpch;

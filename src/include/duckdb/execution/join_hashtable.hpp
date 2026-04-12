@@ -281,6 +281,12 @@ public:
 		//! Lifetime count of genuinely new entries this thread inserted into the THC
 		//! (summed across all collect phases).
 		idx_t total_new_entries = 0;
+		//! Number of unique keys inserted in the very first COLLECT flush.
+		//! This is U1 in the first-cycle multiplicity estimator.
+		idx_t first_collect_new_entries = 0;
+		//! Whether we have already executed the one-shot first-cycle
+		//! multiplicity check and made the bypass decision.
+		bool first_cycle_multiplicity_checked = false;
 
 		//! We only collect (and populate) the THC is this is true. By default it is true,
 		//! and the algorithm can set to false if we don't want to collect/populate anymore.  
@@ -299,6 +305,12 @@ public:
 
 		//! Count of entries in thc_miss_match_sel
 		idx_t thc_miss_match_count = 0;
+
+		// ---- mu_s estimation (Probe-phase chain walking approach) ----
+		//! Sum of chain lengths walked during cycle 0 COLLECT.
+		idx_t mu_s_chain_length_sum = 0;
+		//! Number of chains walked during cycle 0 COLLECT.
+		idx_t mu_s_chain_count = 0;
 	};
 
 	struct InsertState : SharedState {
@@ -316,7 +328,7 @@ public:
 	};
 
 	JoinHashTable(ClientContext &context, const vector<JoinCondition> &conditions, vector<LogicalType> build_types,
-	              JoinType type, const vector<idx_t> &output_columns);
+	              JoinType type, const vector<idx_t> &output_columns, idx_t estimated_probe_side_rows);
 	~JoinHashTable();
 
 	//! Add the given data to the HT
@@ -344,6 +356,9 @@ public:
 
 	//! Fill the pointer with all the addresses from the hashtable for full scan
 	static idx_t FillWithHTOffsets(JoinHTScanState &state, Vector &addresses);
+
+	//! Increment unique key counter during build (Build-phase approach of mu_s estimation)
+	void CountOneUniqueBuildKey();
 
 	idx_t Count() const {
 		return data_collection->Count();
@@ -497,6 +512,8 @@ private:
 	idx_t tiered_hash_cache_key_offset = 0;
 
 	// ---- Per-instance THC parameters (loaded from ClientConfig at construction) ----
+	//! The capacity of the THC (in count of entries) computed by ComputeCapacity.
+	idx_t thc_capacity;
 	//! Memory budget (bytes) for the THC. Controls ComputeCapacity.
 	idx_t thc_budget_bytes;
 	//! Number of probe rows per collect phase before flushing to the THC.
@@ -511,9 +528,36 @@ private:
 	idx_t thc_activation_threshold;
 	//! Maximum THC load factor; inserts stop beyond this fill ratio.
 	double thc_max_load_factor;
+	//! Maximum estimated fraction of hot build-side rows before abandoning THC.
+	double thc_max_estimated_perc_hot;
+	//! Minimum coverage factor: THC is abandoned when thc_size_needed * this > thc_size.
+	double thc_min_coverage_of_build_side;
+	//! If the estimated probe multiplicity mu_{S->R} after the first
+	//! COLLECT+READ_ONLY cycle is below this threshold, THC is skipped
+	//! entirely and probing falls back to the regular hash table path.
+	double thc_min_estimated_mu_s_to_r;
+	//! The size of an entry in the THC, including the tag, the row, and the padding.
+	idx_t thc_entry_stride;
+	
+	//! Estimated probe-side row count passed from the physical hash join.
+	idx_t estimated_probe_side_rows;
 	//! True when only one thread is active, enabling non-atomic InsertUnsafe.
 	bool thc_single_threaded = false;
-	
+
+	// ---- mu_s estimation ----
+	//! Which mu_s estimation method(s) to run: "none", "build_count", "probe_sample", "ht_sample", "all".
+	std::string thc_mu_s_method;
+	//! When true, log mu_s estimates to stderr.
+	bool thc_log_mu_s = false;
+	//! Build-phase approach: count of unique keys inserted during build (Finalize). Atomic for parallel Finalize.
+	std::atomic<idx_t> build_unique_keys_cnt {0};
+	//! Build phase approach result: mu_s computed after Finalize as Count() / build_unique_keys.
+	double mu_s_build_estimate = 0.0;
+	//! Hash table sampling approach: mu_s from post-finalize HT sampling.
+	double mu_s_ht_sample_estimate = 0.0;
+	//! Hash table sampling approach: post-finalize HT sampling. Returns mean chain length.
+	double EstimateMuSFromHTSample();
+
 	//! Copying not allowed
 	JoinHashTable(const JoinHashTable &) = delete;
 

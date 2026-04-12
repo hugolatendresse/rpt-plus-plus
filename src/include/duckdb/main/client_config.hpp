@@ -103,6 +103,21 @@ struct ClientConfig {
 	//! Beyond this fill ratio, THC does not insert new entries. This
 	//! is to avoid pathological linear-probing chains.
 	double thc_max_load_factor = 0.875;
+	//! Which mu_s (within-build side multiplicity) estimation method(s) to run during hash join.
+	//! Values: "none", "build_count", "probe_sample", "ht_sample", or "all".
+	//! "none" bypasses mu_s estimation
+	//! "build_count" is during hash table build
+	//! "probe_sample" is during the first cycle of probing
+	//! "ht_sample" is between building and probing
+	std::string thc_mu_s_method = "build_count"; // TODO we are now incurring a cost on every single build. Other methods are less precise but could be done only if we are to use a THC
+	//! When true, log mu_s estimates to stderr (works in both debug and release builds).
+	bool thc_log_mu_s = false;
+	//! Minimum estimated mu_{S->R} to keep THC active after the first cycle.
+	double thc_min_estimated_mu_s_to_r = 4.0;
+	//! Maximum estimated fraction of hot build-side rows before abandoning THC.
+	double thc_max_estimated_perc_hot = 0.5;
+	//! Minimum coverage factor: THC is abandoned when thc_size < thc_size_needed * this.
+	double thc_min_coverage_of_build_side = 0.1;
 	//! Enable caching operators
 	bool enable_caching_operators = true;
 	//! Force parallelism of small tables, used for testing

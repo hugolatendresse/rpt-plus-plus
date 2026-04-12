@@ -301,7 +301,7 @@ public:
 
 unique_ptr<JoinHashTable> PhysicalHashJoin::InitializeHashTable(ClientContext &context) const {
 	auto result = make_uniq<JoinHashTable>(context, conditions, payload_columns.col_types, join_type,
-	                                       rhs_output_columns.col_idxs);
+	                                       rhs_output_columns.col_idxs, children[0].get().estimated_cardinality);
 	if (!delim_types.empty() && join_type == JoinType::MARK) {
 		// correlated MARK join
 		if (delim_types.size() + 1 == conditions.size()) {
@@ -992,7 +992,7 @@ SinkFinalizeType PhysicalHashJoin::Finalize(Pipeline &pipeline, Event &event, Cl
 		auto key_type = ht.equality_types[0];
 		use_perfect_hash = sink.perfect_join_executor->BuildPerfectHashTable(key_type);
 	}
-	DEBUG_LOG("[PhysicalHashJoin::Finalize] Using perfect hashing: %d\n", use_perfect_hash);
+	// DEBUG_LOG("[PhysicalHashJoin::Finalize] Using perfect hashing: %d\n", use_perfect_hash);
 
 	// In case of a large build side or duplicates, use regular hash join
 	if (!use_perfect_hash) {
