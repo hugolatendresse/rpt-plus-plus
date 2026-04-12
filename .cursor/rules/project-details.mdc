@@ -24,3 +24,12 @@ GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTEN
 ## Workflow
 
 Write a report as you go of the changes you implement and the optimizations you try/keep and all effects on the average run time results.
+
+
+## Comments
+
+Document your work thoroughly in the form of comments. Make sure it's clear what and why the code is doing.
+
+Do NOT delete existing comments that are still true when you make changes to the code.
+
+Change existing comments if and only if there are logic changes that make some existing comments become false.

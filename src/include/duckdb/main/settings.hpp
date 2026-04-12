@@ -717,6 +717,16 @@ struct ThcMinCoverageOfBuildSideSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct ThcWarmupCyclesSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "thc_warmup_cycles";
+	static constexpr const char *Description = "Number of collect+eval cycles before the cost-based decision rule activates (default: 2)";
+	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct EnableHTTPMetadataCacheSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "enable_http_metadata_cache";
