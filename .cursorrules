@@ -1,0 +1,3 @@
+# Git Execution Rules
+Never execute "git commit", "git push", "git add", or any destructive git commands automatically.
+Always halt execution and request explicit user confirmation before interacting with the version control system.
