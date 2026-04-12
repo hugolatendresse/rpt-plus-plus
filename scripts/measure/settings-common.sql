@@ -15,7 +15,9 @@ SET thc_l3_budget = 37_748_736; -- 36MB
 SET thc_miss_below_which_skip_collect = 0.1;
 
 
+-- SET join_order_mode = 'duckdb';
 SET join_order_mode = 'exact_left_deep';
+
 SET max_temp_directory_size='0KiB';
 SET threads = 1;
 SET disable_perfect_hashing = true;
