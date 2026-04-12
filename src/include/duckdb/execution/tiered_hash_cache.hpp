@@ -49,7 +49,6 @@ public:
 	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), key_offset_in_row(key_offset_in_row_p),
 	      row_copy_offset(row_copy_offset_p), entry_stride(ComputeEntryStride(row_size_p)),
 	      max_fill(static_cast<idx_t>(static_cast<double>(capacity_p) * max_load_factor_p)), unsafe_fill_count(0) {
-		D_ASSERT(max_load_factor_p >= 1 && max_load_factor_p <= 1);
 		D_ASSERT(IsPowerOfTwo(capacity)); // Needed for bitmask logic
 		D_ASSERT(max_load_factor_p > 0.0 && max_load_factor_p <= 1.0);
 		auto total_bytes = capacity * entry_stride;
