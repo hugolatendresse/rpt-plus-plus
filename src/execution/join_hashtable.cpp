@@ -1,6 +1,7 @@
 #include "duckdb/execution/join_hashtable.hpp"
 
 #include <chrono>
+#include <thread>
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/radix_partitioning.hpp"
@@ -685,6 +686,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// If this thread has abandoned THC (high miss rate), or if first-cycle
 	// multiplicity estimation determined THC is not worthwhile, bypass all
 	// THC logic and use the vanilla DuckDB probe path.
+
 	if (!tiered_hash_cache || state.thc_abandoned) {
 		if (UseSalt()) {
 			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
@@ -762,6 +764,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		}
 		return;
 	}
+
 
 	// =================================================================
 	// COLLECT PHASE
@@ -1586,6 +1589,14 @@ void JoinHashTable::InsertHashes(Vector &hashes_v, const idx_t count, TupleDataC
 }
 
 void JoinHashTable::AllocatePointerTable() {
+#ifdef DEBUG
+	std::this_thread::sleep_for(std::chrono::seconds(1));
+	fprintf(stderr,"////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n");
+	fprintf(stderr,"////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n");
+	fprintf(stderr,"////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n");
+	fprintf(stderr,"////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n");
+#endif
+	
 	idx_t data_collection_row_cnt = Count();
 	capacity = PointerTableCapacity(data_collection_row_cnt);
 	D_ASSERT(IsPowerOfTwo(capacity));
@@ -1646,6 +1657,8 @@ void JoinHashTable::InitializeTieredHashCache() {
 	// Before any early returns, compute and optionally log build-side mu_s estimates
 	// that rely solely on the finalized HT (Build-phase approach and HT sampling approach). These are independent
 	// of whether the THC itself is enabled.
+
+	DEBUG_LOG("Size in mb of hash table is %lu\n", Count() * 8 / (1024 * 1024));
 	if (thc_mu_s_method == "build_count" || thc_mu_s_method == "all") {
 		const idx_t unique_keys_cnt = build_unique_keys_cnt.load(std::memory_order_relaxed);
 		if (unique_keys_cnt > 0) {
@@ -1697,7 +1710,7 @@ void JoinHashTable::InitializeTieredHashCache() {
 	// For chain following (in case there are duplicate keys), need to go to data_collection.
 	// TODO consts below are hacks - generalize!!!
 	const idx_t data_collection_row_size =
-	    pointer_offset + sizeof(data_ptr_t);                    // TODO might be duplicative of logic in FashHashCache
+	    pointer_offset + sizeof(data_ptr_t);                    // TODO might be duplicative of logic in THC
 	const idx_t row_copy_offset = 0;                            // TODO hack?
 	tiered_hash_cache_key_offset = layout_ptr->GetOffsets()[0]; // key after validity bytes // TODO this is a hack!!!
 	thc_capacity = TieredHashCache::ComputeCapacity(data_collection_row_size, thc_budget_bytes);
