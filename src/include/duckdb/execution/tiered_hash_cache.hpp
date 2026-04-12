@@ -7,9 +7,17 @@
 #include "duckdb/common/types/selection_vector.hpp"
 
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 
 namespace duckdb {
+
+//! Deleter for memory obtained via calloc/malloc (must be freed with free, not delete[])
+struct CallocDeleter {
+	void operator()(data_t *p) const {
+		free(p);
+	}
+};
 
 //! TieredHashCache is a hash table that caches recently
 //! matched probe entries to accelerate repeated hash join lookups.
@@ -51,11 +59,14 @@ public:
 	      max_fill(static_cast<idx_t>(static_cast<double>(capacity_p) * max_load_factor_p)), unsafe_fill_count(0) {
 		D_ASSERT(IsPowerOfTwo(capacity)); // Needed for bitmask logic
 		D_ASSERT(max_load_factor_p > 0.0 && max_load_factor_p <= 1.0);
-		auto total_bytes = capacity * entry_stride;
-		// TODO should we use BPM? Or Arena?
-		data = make_unsafe_uniq_array_uninitialized<data_t>(total_bytes);
+		// calloc uses mmap for large allocations, giving us zero-fill-on-demand (ZFOD):
+		// pages are backed by the kernel zero page and only physically allocated + zeroed
+		// on first write.  This avoids the ~20ms upfront memset cost for large THCs.
+		data.reset(static_cast<data_t *>(calloc(capacity, entry_stride)));
+		if (!data) {
+			throw std::bad_alloc();
+		}
 		base_ptr = data.get();
-		memset(base_ptr, 0, total_bytes);
 	}
 
 	//! Find the cache entry whose tag matches an input hash.
@@ -428,9 +439,9 @@ private:
 	idx_t row_copy_offset;
 	idx_t entry_stride;
 	idx_t max_fill;                   //! capacity * max load factor — Insert refuses beyond this
-	idx_t unsafe_fill_count;          //! Non-atomic counter for InsertSafe
-	unsafe_unique_array<data_t> data; // TODO does that get freed() automatically when hash join is done?
-	data_ptr_t base_ptr;              //! Cached raw pointer for data.get()
+	idx_t unsafe_fill_count;                        //! Non-atomic counter for InsertSafe
+	std::unique_ptr<data_t[], CallocDeleter> data;  //! calloc-backed buffer (freed via free())
+	data_ptr_t base_ptr;                            //! Cached raw pointer for data.get()
 };
 
 } // namespace duckdb
