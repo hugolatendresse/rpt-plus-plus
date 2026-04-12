@@ -107,6 +107,7 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_GLOBAL(EnableFSSTVectorsSetting),
     DUCKDB_LOCAL(EnableHTTPLoggingSetting),
     DUCKDB_GLOBAL(EnableHTTPMetadataCacheSetting),
+    DUCKDB_LOCAL(JoinOrderModeSetting),
     DUCKDB_LOCAL(RptForwardOnlySetting),
     DUCKDB_LOCAL(DisableRptSetting),
 	DUCKDB_LOCAL(DisablePerfectHashingSetting),

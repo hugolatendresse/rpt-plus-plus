@@ -10,6 +10,7 @@
 
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/enums/join_order_mode.hpp"
 #include "duckdb/common/enums/output_type.hpp"
 #include "duckdb/common/enums/profiler_format.hpp"
 #include "duckdb/common/progress_bar/progress_bar.hpp"
@@ -72,6 +73,8 @@ struct ClientConfig {
 	bool verify_serializer = false;
 	//! Enable the running of optimizers
 	bool enable_optimizer = true;
+	//! Which join order enumeration strategy to use (default: DuckDB's DPhyp)
+	JoinOrderMode join_order_mode = JoinOrderMode::DPHYP;
 	//! When true, only the forward pass of RPT+ is executed (backward pass is skipped)
 	bool rpt_forward_only = false;
 	//! When true, all of RPT+ is disable (both forward and backware passes are skipped)

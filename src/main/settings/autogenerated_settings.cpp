@@ -9,6 +9,7 @@
 
 #include "duckdb/main/settings.hpp"
 #include "duckdb/common/enum_util.hpp"
+#include "duckdb/common/enums/join_order_mode.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
 
@@ -513,6 +514,23 @@ void EnableHTTPLoggingSetting::ResetLocal(ClientContext &context) {
 Value EnableHTTPLoggingSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
 	return Value::BOOLEAN(config.enable_http_logging);
+}
+
+//===----------------------------------------------------------------------===//
+// Join Order Mode
+//===----------------------------------------------------------------------===//
+void JoinOrderModeSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.join_order_mode = JoinOrderModeFromString(input.GetValue<string>());
+}
+
+void JoinOrderModeSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).join_order_mode = ClientConfig().join_order_mode;
+}
+
+Value JoinOrderModeSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value(JoinOrderModeToString(config.join_order_mode));
 }
 
 //===----------------------------------------------------------------------===//

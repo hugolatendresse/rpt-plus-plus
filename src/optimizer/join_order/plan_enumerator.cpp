@@ -5,9 +5,7 @@
 #include "duckdb/optimizer/join_order/query_graph_manager.hpp"
 
 #include <cmath>
-#if defined(RandomBushy) || defined(RandomLeftDeep)
 #include <random>
-#endif
 
 //SPY: See these commits for when this file diverged RPT->DPT:
 //     JoinNode->DPJoinNode: https://github.com/duckdb/duckdb/commit/1f829be0640d9ec086a67185cf521d93a91a6890
@@ -471,7 +469,7 @@ void PlanEnumerator::InitLeafPlans() {
 		cost_model.cardinality_estimator.InitCardinalityEstimatorProps(&relation_set, stats);
 	}
 }
-#if defined(ExactLeftDeep)
+
 void PlanEnumerator::SolveJoinOrderLeftDeep() {
 	vector<vector<JoinRelationSet*>> join_rels(query_graph_manager.relation_manager.NumRelations());
 	for (int i = 0; i < query_graph_manager.relation_manager.NumRelations(); i++) {
@@ -546,7 +544,7 @@ void PlanEnumerator::SolveJoinOrderLeftDeep() {
 	}
 	//SPY: REMOVED RETURN TYPE CHANGED return std::move(final_plan->second);
 }
-#elif defined(RandomBushy)
+
 void PlanEnumerator::SolveJoinOrderRandom() {
 	std::random_device rd;
 	std::mt19937 g(rd());
@@ -606,7 +604,7 @@ void PlanEnumerator::SolveJoinOrderRandom() {
 	auto final_plan = plans.find(total_relation);
 	//SPY: REMOVED RETURN TYPE CHANGED return std::move(final_plan->second);
 }
-#elif defined(RandomLeftDeep)
+
 void PlanEnumerator::SolveJoinOrderLeftDeepRandom() {
 	std::random_device rd;
 	std::mt19937 g(rd());
@@ -690,7 +688,6 @@ void PlanEnumerator::SolveJoinOrderLeftDeepRandom() {
 	auto final_plan = plans.find(total_relation);
 	//SPY: REMOVED RETURN TYPE CHANGED return std::move(final_plan->second);
 }
-#endif
 
 // the plan enumeration is a straight implementation of the paper "Dynamic Programming Strikes Back" by Guido
 // Moerkotte and Thomas Neumannn, see that paper for additional info/documentation bonus slides:
