@@ -367,3 +367,4 @@ scripts/measure/*.json
 *.tgz
 join-order-benchmark/*.csv
 join-order-benchmark/*.json
+result.json
