@@ -687,7 +687,6 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// multiplicity estimation determined THC is not worthwhile, bypass all
 	// THC logic and use the vanilla DuckDB probe path.
 
-	// state.thc_abandoned = true;
 	if (!tiered_hash_cache || state.thc_abandoned) {
 		if (UseSalt()) {
 			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
@@ -696,7 +695,6 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries,
 			                              pointers_result_v, match_sel, has_sel);
 		}
-		// state.thc_abandoned = true;
 		return;
 	}
 
@@ -767,7 +765,6 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		return;
 	}
 
-	// state.thc_abandoned = true;
 
 	// =================================================================
 	// COLLECT PHASE
@@ -1592,6 +1589,14 @@ void JoinHashTable::InsertHashes(Vector &hashes_v, const idx_t count, TupleDataC
 }
 
 void JoinHashTable::AllocatePointerTable() {
+#ifdef DEBUG
+	std::this_thread::sleep_for(std::chrono::seconds(1));
+	fprintf(stderr,"////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n");
+	fprintf(stderr,"////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n");
+	fprintf(stderr,"////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n");
+	fprintf(stderr,"////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n");
+#endif
+	
 	idx_t data_collection_row_cnt = Count();
 	capacity = PointerTableCapacity(data_collection_row_cnt);
 	D_ASSERT(IsPowerOfTwo(capacity));
@@ -1653,16 +1658,7 @@ void JoinHashTable::InitializeTieredHashCache() {
 	// that rely solely on the finalized HT (Build-phase approach and HT sampling approach). These are independent
 	// of whether the THC itself is enabled.
 
-#ifdef DEBUG
-	std::this_thread::sleep_for(std::chrono::seconds(1));
-	fprintf(stderr,"////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n");
-	fprintf(stderr,"////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n");
-	fprintf(stderr,"////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n");
-	fprintf(stderr,"////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n");
-	std::this_thread::sleep_for(std::chrono::seconds(1));
-#endif
-
-	fprintf(stderr, "Size in mb of hash table is %lu\n", Count() * 8 / (1024 * 1024));
+	DEBUG_LOG("Size in mb of hash table is %lu\n", Count() * 8 / (1024 * 1024));
 	if (thc_mu_s_method == "build_count" || thc_mu_s_method == "all") {
 		const idx_t unique_keys_cnt = build_unique_keys_cnt.load(std::memory_order_relaxed);
 		if (unique_keys_cnt > 0) {
