@@ -1022,7 +1022,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// Also apply three-way decision rule and decide whether to drop, freeze, or continue.
 	// ----------------------------------------------------------
 	if (state.read_only_rows_processed < state.read_only_rows_target) {
-		DEBUG_LOG("Staying in read-only made since haven't reached row count target\n");
+		// DEBUG_LOG("Staying in read-only made since haven't reached row count target\n");
 		return;
 	}
 	// We have reached our read-only row count target.
