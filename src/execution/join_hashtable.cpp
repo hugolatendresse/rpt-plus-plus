@@ -27,11 +27,14 @@ JoinHashTable::SharedState::SharedState()
     : salt_v(LogicalType::UBIGINT), keys_to_compare_sel(STANDARD_VECTOR_SIZE), keys_no_match_sel(STANDARD_VECTOR_SIZE) {
 }
 
-JoinHashTable::ProbeState::ProbeState()
+JoinHashTable::ProbeState::ProbeState(idx_t collected_entries_capacity)
     : SharedState(), ht_offsets_v(LogicalType::UBIGINT), hashes_dense_v(LogicalType::HASH),
       non_empty_sel(STANDARD_VECTOR_SIZE), cache_rhs_row_locations(LogicalType::POINTER),
       cache_result_pointers(LogicalType::POINTER), cache_candidates_sel(STANDARD_VECTOR_SIZE),
       cache_miss_sel(STANDARD_VECTOR_SIZE) {
+	if (collected_entries_capacity > 0) {
+		collected_entries.reserve(collected_entries_capacity);
+	}
 }
 
 JoinHashTable::InsertState::InsertState(const JoinHashTable &ht)
