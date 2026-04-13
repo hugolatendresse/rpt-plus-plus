@@ -22,6 +22,16 @@ unique_ptr<LogicalOperator> PredicateTransferOptimizer::PreOptimize(unique_ptr<L
 unique_ptr<LogicalOperator> PredicateTransferOptimizer::Optimize(unique_ptr<LogicalOperator> plan) {
 	auto &config = ClientConfig::GetConfig(graph_manager.context);
 	if (!config.disable_rpt) {
+		// SPY root selection: rebuild the transfer graph with the first probe
+		// table as root so the forward pass alone pushes all needed BFs.
+		// 
+		// We must "rebuild" the transfer graph here because RPT+'s transfer graph
+		// is built in the PT.PreOptimize call in optimizer.cpp, which runs before the 
+		// join order is known. 
+		if (config.rpt_forward_only && config.spy_root_selection) {
+			graph_manager.RebuildForTHC(*plan);
+		}
+
 		auto &ordered_nodes = graph_manager.transfer_order;
 
 		// **Forward pass**: Process nodes in reverse order (from last to first)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Allows running the JOB benchmark
 # Usage:
-# scripts/measure/run_job.sh --case <1|2|3|4> [--perf] [--debug] [--job-query NX]
+# scripts/measure/run_job.sh --case <1|2o|2t|3|4> [--perf] [--debug] [--job-query NX]
 set -euo pipefail
 
 CASE=""
@@ -12,10 +12,17 @@ PERF_EVENTS="cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,mem_
 
 usage() {
     cat <<'USAGE'
-Usage: scripts/measure/run_job.sh --case <1|2|3|4> [options]
+Usage: scripts/measure/run_job.sh --case <1|2o|2t|3|4> [options]
+
+Cases:
+  1     RPT disabled, THC disabled
+  2o    Forward-pass only (RPT+ root), THC disabled
+  2t    Forward-pass only (SPY root), THC disabled
+  3     Forward-pass only (SPY root), THC enabled
+  4     Full RPT+ (forward + backward), THC disabled
 
 Options:
-  --case <1|2|3|4>      Optimizer case (required)
+  --case <CASE>         Optimizer case (required)
   --job-query <id>      Run one JOB query (e.g. 10a, 24a, or 10a.sql)
   --perf                Run query/queries under perf stat
   --debug               Use debug build (build/debug/duckdb)
@@ -42,18 +49,22 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$CASE" ]]; then
-    echo "Error: --case is required (1, 2, 3, or 4)." >&2
+    echo "Error: --case is required (1, 2o, 2t, 3, or 4)." >&2
     exit 1
 fi
 
 case "$CASE" in
     1) CASE_SETTINGS="SET disable_rpt = true;
 SET disable_tiered_hash_cache = true;" ;;
-    2) CASE_SETTINGS="SET rpt_forward_only = true;
+    2o) CASE_SETTINGS="SET rpt_forward_only = true;
 SET disable_tiered_hash_cache = true;" ;;
-    3) CASE_SETTINGS="SET rpt_forward_only = true;" ;;
+    2t) CASE_SETTINGS="SET rpt_forward_only = true;
+SET disable_tiered_hash_cache = true;
+SET spy_root_selection = true;" ;;
+    3) CASE_SETTINGS="SET rpt_forward_only = true;
+SET spy_root_selection = true;" ;;
     4) CASE_SETTINGS="SET disable_tiered_hash_cache = true;" ;;
-    *) echo "Error: --case must be 1, 2, 3, or 4 (got: $CASE)" >&2; exit 1 ;;
+    *) echo "Error: --case must be 1, 2o, 2t, 3, or 4 (got: $CASE)" >&2; exit 1 ;;
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

@@ -30,7 +30,7 @@ Options:
   --tpcds-only           Run only TPC-DS
   --tpch-query <1..22>   Run one TPC-H query (implies --tpch-only)
   --runs <N>             Number of benchmark runs (default: 1)
-  --case <1|2|3|4>       Optimizer case (required)
+  --case <1|2o|2t|3|4>   Optimizer case (required)
   --perf                 Run each query under perf stat
   -h, --help             Show this help
 USAGE
@@ -60,18 +60,22 @@ if ! [[ "$RUNS" =~ ^[0-9]+$ ]] || [[ "$RUNS" -lt 1 ]]; then
 fi
 
 if [[ -z "$CASE" ]]; then
-    echo "Error: --case is required (1, 2, 3, or 4)." >&2
+    echo "Error: --case is required (1, 2o, 2t, 3, or 4)." >&2
     exit 1
 fi
 
 case "$CASE" in
     1) CASE_SETTINGS="SET disable_rpt = true;
 SET disable_tiered_hash_cache = true;" ;;
-    2) CASE_SETTINGS="SET rpt_forward_only = true;
+    2o) CASE_SETTINGS="SET rpt_forward_only = true;
 SET disable_tiered_hash_cache = true;" ;;
-    3) CASE_SETTINGS="SET rpt_forward_only = true;" ;;
+    2t) CASE_SETTINGS="SET rpt_forward_only = true;
+SET disable_tiered_hash_cache = true;
+SET spy_root_selection = true;" ;;
+    3) CASE_SETTINGS="SET rpt_forward_only = true;
+SET spy_root_selection = true;" ;;
     4) CASE_SETTINGS="SET disable_tiered_hash_cache = true;" ;;
-    *) echo "Error: --case must be 1, 2, 3, or 4 (got: $CASE)" >&2; exit 1 ;;
+    *) echo "Error: --case must be 1, 2o, 2t, 3, or 4 (got: $CASE)" >&2; exit 1 ;;
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

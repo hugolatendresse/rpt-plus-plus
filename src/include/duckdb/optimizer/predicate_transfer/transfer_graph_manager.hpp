@@ -89,12 +89,18 @@ public:
 	void AddFilterPlan(idx_t create_table, const shared_ptr<FilterPlan> &filter_plan, bool reverse);
 	void PrintTransferPlan();
 
+	//! Rebuild the transfer graph with the first probe table as root (SPY root selection).
+	//! Called after join ordering when spy_root_selection is enabled.
+	void RebuildForTHC(LogicalOperator &plan);
+
 private:
 	void ExtractEdgesInfo(const vector<reference<LogicalOperator>> &join_operators);
 	void CreateOriginTransferPlan();
 	void CreateTransferPlanUpdated();
+	void CreateTransferPlanTHC(idx_t first_probe_id);
 	void LargestRoot(vector<LogicalOperator *> &sorted_nodes);
 	void LargestRootUpdated(vector<LogicalOperator *> &sorted_nodes);
+	void THCPickRoot(vector<LogicalOperator *> &sorted_nodes, idx_t forced_root_id);
 
 	pair<idx_t, idx_t> FindEdge(const unordered_set<idx_t> &constructed_set,
 	                            const unordered_set<idx_t> &unconstructed_set);

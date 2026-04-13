@@ -625,6 +625,81 @@ void TransferGraphManager::LargestRootUpdated(vector<LogicalOperator *> &sorted_
 	}
 }
 
+void TransferGraphManager::THCPickRoot(vector<LogicalOperator *> &sorted_nodes, idx_t forced_root_id) {
+	unordered_set<idx_t> constructed_set, unconstructed_set;
+	int prior_flag = static_cast<int>(table_operator_manager.table_operators.size()) - 1;
+
+	// Use the forced root (first probe table) if it is still in table_operators;
+	// otherwise fall back to LargestRootUpdated behaviour.
+	idx_t root = std::numeric_limits<idx_t>::max();
+	if (table_operator_manager.table_operators.count(forced_root_id)) {
+		root = forced_root_id;
+	}
+
+	if (root == std::numeric_limits<idx_t>::max()) {
+		// Forced root already consumed by a previous component; use default heuristic.
+		for (auto it = sorted_nodes.rbegin(); it != sorted_nodes.rend(); ++it) {
+			auto id = table_operator_manager.GetScalarTableIndex(*it);
+			if (filtered_table.count(id) || intermediate_table.count(id)) {
+				root = id;
+				break;
+			}
+		}
+		if (root == std::numeric_limits<idx_t>::max()) {
+			root = table_operator_manager.GetScalarTableIndex(sorted_nodes.back());
+		}
+	}
+
+	// Initialize nodes
+	for (auto &entry : table_operator_manager.table_operators) {
+		idx_t id = entry.first;
+		if (id == root) {
+			constructed_set.insert(id);
+		} else {
+			unconstructed_set.insert(id);
+		}
+
+		auto node = make_uniq<GraphNode>(id, prior_flag--);
+		transfer_graph[id] = std::move(node);
+	}
+
+	// Add root
+	transfer_order.push_back(table_operator_manager.GetTableOperator(root));
+	table_operator_manager.table_operators.erase(root);
+	for (auto &col_binding : table_join_keys[root]) {
+		auto &group = table_groups[col_binding];
+		if (group) {
+			group->RegisterLeader(root, col_binding);
+		}
+	}
+
+	// Build spanning tree using the same greedy largest-neighbour strategy
+	while (!unconstructed_set.empty()) {
+		auto selected_edge = FindEdge(constructed_set, unconstructed_set);
+		if (selected_edge.first == std::numeric_limits<idx_t>::max()) {
+			break;
+		}
+
+		auto &edge = neighbor_matrix[selected_edge.first][selected_edge.second];
+		selected_edges.emplace_back(std::move(edge));
+
+		auto node = transfer_graph[selected_edge.second].get();
+		node->cardinality_order = prior_flag--;
+
+		transfer_order.push_back(table_operator_manager.GetTableOperator(node->id));
+		table_operator_manager.table_operators.erase(node->id);
+		for (auto &col_binding : table_join_keys[node->id]) {
+			auto &group = table_groups[col_binding];
+			if (group) {
+				group->RegisterLeader(node->id, col_binding);
+			}
+		}
+
+		unconstructed_set.erase(selected_edge.second);
+		constructed_set.insert(selected_edge.second);
+	}
+}
+
 void TransferGraphManager::CreateOriginTransferPlan() {
 	auto saved_nodes = table_operator_manager.table_operators;
 	while (!table_operator_manager.table_operators.empty()) {
@@ -731,6 +806,114 @@ void TransferGraphManager::CreateTransferPlanUpdated() {
 			}
 		}
 	}
+}
+
+void TransferGraphManager::CreateTransferPlanTHC(idx_t first_probe_id) {
+	auto saved_nodes = table_operator_manager.table_operators;
+
+	// First component: use THCPickRoot with the forced first-probe root.
+	// Subsequent components (disconnected tables): fall back to LargestRootUpdated.
+	bool first_component = true;
+	while (!table_operator_manager.table_operators.empty()) {
+		if (first_component) {
+			THCPickRoot(table_operator_manager.sorted_table_operators, first_probe_id);
+			first_component = false;
+		} else {
+			LargestRootUpdated(table_operator_manager.sorted_table_operators);
+		}
+		table_operator_manager.SortTableOperators();
+	}
+	table_operator_manager.table_operators = saved_nodes;
+
+	// Wire edges -- identical logic to CreateTransferPlanUpdated
+	for (auto &edge : selected_edges) {
+		if (!edge) {
+			continue;
+		}
+
+		idx_t left_idx = TableOperatorManager::GetScalarTableIndex(&edge->left_table);
+		idx_t right_idx = TableOperatorManager::GetScalarTableIndex(&edge->right_table);
+
+		D_ASSERT(left_idx != std::numeric_limits<idx_t>::max() && right_idx != std::numeric_limits<idx_t>::max());
+
+		auto &type = edge->return_type;
+		auto left_node = transfer_graph[left_idx].get();
+		auto right_node = transfer_graph[right_idx].get();
+
+		auto left_cols = edge->left_binding;
+		auto right_cols = edge->right_binding;
+
+		auto protect_left = edge->protect_left;
+		auto protect_right = edge->protect_right;
+
+		// smaller table is in the left
+		if (left_node->cardinality_order > right_node->cardinality_order) {
+			std::swap(left_node, right_node);
+			std::swap(left_cols, right_cols);
+			std::swap(protect_left, protect_right);
+		}
+
+		// forward: from the smaller to the larger
+		if (!protect_right) {
+			left_node->Add(right_node->id, {left_cols}, {right_cols}, {type}, true, false);
+			right_node->Add(left_node->id, {left_cols}, {right_cols}, {type}, true, true);
+		}
+
+		// backward: from the larger to the smaller
+		if (!protect_left) {
+			auto &group = table_groups[right_cols];
+			if (group) {
+				auto group_leader = group->leader_id;
+				auto &leader_cols = group->leader_column_binding;
+				auto leader = transfer_graph[group_leader].get();
+
+				left_node->Add(group_leader, {left_cols}, {leader_cols}, {type}, false, true);
+				leader->Add(left_node->id, {left_cols}, {leader_cols}, {type}, false, false);
+			} else {
+				left_node->Add(right_node->id, {left_cols}, {right_cols}, {type}, false, true);
+				right_node->Add(left_node->id, {left_cols}, {right_cols}, {type}, false, false);
+			}
+		}
+	}
+}
+
+void TransferGraphManager::RebuildForTHC(LogicalOperator &plan) {
+	// 1. Walk children[0] down to find the leftmost leaf (first probe table)
+	LogicalOperator *current = &plan;
+	while (!current->children.empty()) {
+		current = current->children[0].get();
+	}
+	idx_t first_probe_id = TableOperatorManager::GetScalarTableIndex(current);
+	if (first_probe_id == std::numeric_limits<idx_t>::max()) {
+		return;
+	}
+
+	// 2. Restore selected_edges back into neighbor_matrix so FindEdge can
+	//    re-select them under a different spanning tree.
+	for (auto &edge : selected_edges) {
+		if (!edge) {
+			continue;
+		}
+		idx_t i = edge->left_binding.table_index;
+		idx_t j = edge->right_binding.table_index;
+		neighbor_matrix[i][j] = edge;
+		neighbor_matrix[j][i] = edge;
+	}
+
+	// 3. Clear state produced by the previous CreateTransferPlanUpdated call
+	transfer_order.clear();
+	selected_edges.clear();
+	transfer_graph.clear();
+
+	// 4. Reset table_groups leaders so RegisterLeader picks the new root first
+	for (auto &pair : table_groups) {
+		if (pair.second) {
+			pair.second->leader_id = std::numeric_limits<idx_t>::max();
+		}
+	}
+
+	// 5. Rebuild the transfer graph with the first probe table as root
+	CreateTransferPlanTHC(first_probe_id);
 }
 
 pair<idx_t, idx_t> TransferGraphManager::FindEdge(const unordered_set<idx_t> &constructed_set,
