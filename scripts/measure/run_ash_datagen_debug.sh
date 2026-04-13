@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run table generation (release) + benchmark query (debug).
-# Usage: run_ash_datagen_debug.sh [--perf] [--no-taskset] [--runs N] --case <1|2|3|4> rs|rst
+# Usage: run_ash_datagen_debug.sh [--perf] [--no-taskset] [--runs N] --case <1|2o|2t|3|4> rs|rst
 set -euo pipefail
 
 PERF=false
@@ -18,7 +18,7 @@ while [[ "${1:-}" == --* ]]; do
         --runs) RUNS="$2"; shift 2 ;;
         --case) CASE="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--perf] [--no-taskset] [--runs N] --case <1|2|3|4> rs|rst"
+            echo "Usage: $0 [--perf] [--no-taskset] [--runs N] --case <1|2o|2t|3|4> rs|rst"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -26,18 +26,22 @@ while [[ "${1:-}" == --* ]]; do
 done
 
 if [[ -z "${CASE}" ]]; then
-    echo "Error: --case is required (1, 2, 3, or 4)." >&2
+    echo "Error: --case is required (1, 2o, 2t, 3, or 4)." >&2
     exit 1
 fi
 
 case "$CASE" in
     1) CASE_SETTINGS="SET disable_rpt = true;
 SET disable_tiered_hash_cache = true;" ;;
-    2) CASE_SETTINGS="SET rpt_forward_only = true;
+    2o) CASE_SETTINGS="SET rpt_forward_only = true;
 SET disable_tiered_hash_cache = true;" ;;
-    3) CASE_SETTINGS="SET rpt_forward_only = true;" ;;
+    2t) CASE_SETTINGS="SET rpt_forward_only = true;
+SET disable_tiered_hash_cache = true;
+SET spy_root_selection = true;" ;;
+    3) CASE_SETTINGS="SET rpt_forward_only = true;
+SET spy_root_selection = true;" ;;
     4) CASE_SETTINGS="SET disable_tiered_hash_cache = true;" ;;
-    *) echo "Error: --case must be 1, 2, 3, or 4 (got: $CASE)" >&2; exit 1 ;;
+    *) echo "Error: --case must be 1, 2o, 2t, 3, or 4 (got: $CASE)" >&2; exit 1 ;;
 esac
 
 if ! [[ "$RUNS" =~ ^[0-9]+$ ]] || [[ "$RUNS" -lt 1 ]]; then
@@ -49,7 +53,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
-QUERY="${1:?Usage: $0 [--perf] [--no-taskset] [--runs N] --case <1|2|3|4> rs|rst}"
+QUERY="${1:?Usage: $0 [--perf] [--no-taskset] [--runs N] --case <1|2o|2t|3|4> rs|rst}"
 DB="ASH-datagen/bench.duckdb"
 
 if [[ ! -f "$COMMON_SETTINGS_SQL" ]]; then

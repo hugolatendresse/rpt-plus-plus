@@ -606,6 +606,16 @@ struct DisableTieredHashCacheSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct SpyRootSelectionSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "spy_root_selection";
+	static constexpr const char *Description = "When enabled, use SPY root selection (first probe table as Yannakakis root) instead of RPT+ root";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct ThcL3BudgetSetting {
 	using RETURN_TYPE = int64_t;
 	static constexpr const char *Name = "thc_l3_budget";

@@ -81,6 +81,10 @@ struct ClientConfig {
 	bool disable_rpt = false;
 	//! When true, skip initializing the tiered hash cache
 	bool disable_tiered_hash_cache = false;
+	//! When true, use SPY root selection (first probe table as Yannakakis root)
+	//! instead of the default RPT+ root (largest filtered/intermediate table).
+	//! Only effective when rpt_forward_only is also true.
+	bool spy_root_selection = false;
 	//! When true, never use perfect hash join
 	bool disable_perfect_hashing = false;
 	//! Memory budget (in bytes) for the Tiered Hash Cache.

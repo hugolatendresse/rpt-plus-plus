@@ -8,10 +8,11 @@
 #   --cold N        Cold-to-hot ratio: 1, 5, 10, 100  (default: 10)
 #   --layout L      Layout: interleaved, segmented     (default: interleaved)
 #   --case N        Optimizer case (required):
-#                     1 = Old DuckDB (no RPT, no THC)
-#                     2 = RPT+ Forward Pass Only
-#                     3 = RPT+ Forward + THC
-#                     4 = RPT+ Forward + Backward
+#                     1  = Old DuckDB (no RPT, no THC)
+#                     2o = Forward-pass only (RPT+ root), THC disabled
+#                     2t = Forward-pass only (SPY root), THC disabled
+#                     3  = Forward-pass only (SPY root), THC enabled
+#                     4  = Full RPT+ (forward + backward), THC disabled
 #   --runs N        Run the query N times with a warmup and print average (default: 1)
 #   --generate      (Re)generate the data before running the query
 #   --perf          Run under perf stat
@@ -62,16 +63,20 @@ case "$LAYOUT" in
     *) echo "Error: --layout must be interleaved or segmented (got: $LAYOUT)"; exit 1 ;;
 esac
 if [[ -z "$CASE" ]]; then
-    echo "Error: --case is required (1, 2, 3, or 4). See --help."; exit 1
+    echo "Error: --case is required (1, 2o, 2t, 3, or 4). See --help."; exit 1
 fi
 case "$CASE" in
     1) CASE_SETTINGS="SET disable_rpt = true;
 SET disable_tiered_hash_cache = true;" ;;
-    2) CASE_SETTINGS="SET rpt_forward_only = true;
+    2o) CASE_SETTINGS="SET rpt_forward_only = true;
 SET disable_tiered_hash_cache = true;" ;;
-    3) CASE_SETTINGS="SET rpt_forward_only = true;" ;;
+    2t) CASE_SETTINGS="SET rpt_forward_only = true;
+SET disable_tiered_hash_cache = true;
+SET spy_root_selection = true;" ;;
+    3) CASE_SETTINGS="SET rpt_forward_only = true;
+SET spy_root_selection = true;" ;;
     4) CASE_SETTINGS="SET disable_tiered_hash_cache = true;" ;;
-    *) echo "Error: --case must be 1, 2, 3, or 4 (got: $CASE)"; exit 1 ;;
+    *) echo "Error: --case must be 1, 2o, 2t, 3, or 4 (got: $CASE)"; exit 1 ;;
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

@@ -602,6 +602,23 @@ Value DisableTieredHashCacheSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// SPY Root Selection
+//===----------------------------------------------------------------------===//
+void SpyRootSelectionSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.spy_root_selection = input.GetValue<bool>();
+}
+
+void SpyRootSelectionSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).spy_root_selection = ClientConfig().spy_root_selection;
+}
+
+Value SpyRootSelectionSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.spy_root_selection);
+}
+
+//===----------------------------------------------------------------------===//
 // THC L3 Budget
 //===----------------------------------------------------------------------===//
 void ThcL3BudgetSetting::SetLocal(ClientContext &context, const Value &input) {
