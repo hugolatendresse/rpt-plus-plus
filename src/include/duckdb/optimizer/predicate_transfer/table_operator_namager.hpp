@@ -3,6 +3,8 @@
 #include "duckdb/main/client_context.hpp"
 
 namespace duckdb {
+
+//! This helps answer questions such as "Which logical op produces rows for a given table"
 class TableOperatorManager {
 public:
 	explicit TableOperatorManager(ClientContext &context) : context(context) {
@@ -10,7 +12,11 @@ public:
 
 	ClientContext &context;
 
+	//! All operators that produce rows (Scans, etc.) sorted by estimated cardinality
 	vector<LogicalOperator *> sorted_table_operators;
+	
+	//! key: DuckDB's table_index
+	//! value: the LogicalOperator that produces the rows for that table 
 	unordered_map<idx_t, LogicalOperator *> table_operators;
 
 public:

@@ -81,6 +81,19 @@ struct ClientConfig {
 	bool disable_rpt = false;
 	//! When true, skip initializing the tiered hash cache
 	bool disable_tiered_hash_cache = false;
+	// TODO add the three settings below to settings-common.sql etc
+	//! Transfer-order mode used by predicate transfer.
+	//! False (default): RPT+ transfer order via LargestRootUpdated (paper behavior).
+	//! True:            THC transfer order via THCRootAndTransferGraph, driven by
+	//!                  thc_transfer_graph_seed for deterministic enumeration.
+	bool use_seeded_transfer_order = false;
+	//! Seed driving THCRootAndTransferGraph. Only consulted when
+	//! use_seeded_transfer_order is true. Seed = 0 is a valid value and
+	//! will deterministically pick the first option at each step. // TODO shouldn't we use a hash at each step???
+	idx_t thc_transfer_graph_seed = 0;
+	//! Whether SkipUnfilteredTable is executed during transfer-graph
+	//! construction. True matches the RPT+ paper / current behavior.
+	bool skip_unfiltered_tables = true;
 	//! When true, never use perfect hash join
 	bool disable_perfect_hashing = false;
 	//! Memory budget (in bytes) for the Tiered Hash Cache.

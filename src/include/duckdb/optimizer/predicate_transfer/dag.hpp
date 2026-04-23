@@ -46,6 +46,8 @@ struct Edges {
 	vector<unique_ptr<GraphEdge>> out;
 };
 
+//! A node in the transfer_graph TransferGraphManager produces
+//! Each GraphNode corresponds to a table
 class GraphNode {
 public:
 	GraphNode(idx_t id, int32_t priority) : id(id), cardinality_order(priority) {

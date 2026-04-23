@@ -34,7 +34,7 @@ enum class LogicalOperatorType : uint8_t {
 	// -----------------------------
 	// Data sources
 	// -----------------------------
-	LOGICAL_GET = 25,
+	LOGICAL_GET = 25, // A scan
 	LOGICAL_CHUNK_GET = 26,
 	LOGICAL_DELIM_GET = 27,
 	LOGICAL_EXPRESSION_GET = 28,
