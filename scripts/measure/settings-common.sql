@@ -23,4 +23,6 @@ SET threads = 1;
 SET disable_perfect_hashing = true;
 SET pin_threads = 'on';
 
-
+SET use_seeded_transfer_order = true;
+SET thc_transfer_graph_seed = 0;
+SET skip_unfiltered_tables = true;
