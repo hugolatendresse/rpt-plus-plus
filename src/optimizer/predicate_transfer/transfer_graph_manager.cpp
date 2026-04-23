@@ -740,7 +740,7 @@ void TransferGraphManager::THCRootAndTransferGraph(uint64_t &seed) {
 	// cardinality_order to prior_flag, before decrementing prior_flag. 
 	int prior_flag = static_cast<int>(table_operator_manager.table_operators.size()) - 1;
 	
-	// 1. Initialize GraphNodes for every remaining table. Each node starts
+	// 1. Initialize GraphNodes for all table. Each node starts
 	//    with a distinct `prior_flag` value; children added later will
 	//    overwrite this to a smaller value. Root's initial value is never
 	//    overwritten, matching LargestRootUpdated's behavior.
@@ -748,12 +748,20 @@ void TransferGraphManager::THCRootAndTransferGraph(uint64_t &seed) {
 	all_ids.reserve(table_operator_manager.table_operators.size());
 	for (auto &entry : table_operator_manager.table_operators) {
 		all_ids.push_back(entry.first);
+		
+		// There are two situations in which the prior_flag assigned here will remain the final
+		// cardinality value:
+		//  1. The root (since it's never added as a child)
+		//  2. Other roots (of disconnected components)
 		auto node = make_uniq<GraphNode>(entry.first, prior_flag--);
 		transfer_graph[entry.first] = std::move(node);
 	}
 	std::sort(all_ids.begin(), all_ids.end(), LessByName);
 
+	// Table indices that have been attached to the spanning tree
 	unordered_set<idx_t> constructed_set;
+
+	// Table indices that have not been attached to the spanning tree yet
 	unordered_set<idx_t> unconstructed_set(all_ids.begin(), all_ids.end());
 
 	// 2. Root pick over the full deterministic candidate list.
