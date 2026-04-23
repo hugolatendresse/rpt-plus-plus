@@ -81,7 +81,6 @@ struct ClientConfig {
 	bool disable_rpt = false;
 	//! When true, skip initializing the tiered hash cache
 	bool disable_tiered_hash_cache = false;
-	// TODO add the three settings below to settings-common.sql etc
 	//! Transfer-order mode used by predicate transfer.
 	//! False (default): RPT+ transfer order via LargestRootUpdated (paper behavior).
 	//! True:            THC transfer order via THCRootAndTransferGraph, driven by

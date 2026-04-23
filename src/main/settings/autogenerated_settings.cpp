@@ -602,6 +602,57 @@ Value DisableTieredHashCacheSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// Use Seeded Transfer Order
+//===----------------------------------------------------------------------===//
+void UseSeededTransferOrderSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.use_seeded_transfer_order = input.GetValue<bool>();
+}
+
+void UseSeededTransferOrderSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).use_seeded_transfer_order = ClientConfig().use_seeded_transfer_order;
+}
+
+Value UseSeededTransferOrderSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.use_seeded_transfer_order);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Transfer Graph Seed
+//===----------------------------------------------------------------------===//
+void ThcTransferGraphSeedSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_transfer_graph_seed = static_cast<idx_t>(input.GetValue<int64_t>());
+}
+
+void ThcTransferGraphSeedSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_transfer_graph_seed = ClientConfig().thc_transfer_graph_seed;
+}
+
+Value ThcTransferGraphSeedSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BIGINT(static_cast<int64_t>(config.thc_transfer_graph_seed));
+}
+
+//===----------------------------------------------------------------------===//
+// Skip Unfiltered Tables
+//===----------------------------------------------------------------------===//
+void SkipUnfilteredTablesSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.skip_unfiltered_tables = input.GetValue<bool>();
+}
+
+void SkipUnfilteredTablesSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).skip_unfiltered_tables = ClientConfig().skip_unfiltered_tables;
+}
+
+Value SkipUnfilteredTablesSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.skip_unfiltered_tables);
+}
+
+//===----------------------------------------------------------------------===//
 // THC L3 Budget
 //===----------------------------------------------------------------------===//
 void ThcL3BudgetSetting::SetLocal(ClientContext &context, const Value &input) {

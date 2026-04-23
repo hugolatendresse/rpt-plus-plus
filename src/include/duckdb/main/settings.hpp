@@ -606,6 +606,38 @@ struct DisableTieredHashCacheSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct UseSeededTransferOrderSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "use_seeded_transfer_order";
+	static constexpr const char *Description =
+	    "When enabled, use THC transfer-order enumeration instead of the default RPT+ order";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcTransferGraphSeedSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "thc_transfer_graph_seed";
+	static constexpr const char *Description = "Seed used for deterministic THC transfer-order enumeration";
+	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct SkipUnfilteredTablesSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "skip_unfiltered_tables";
+	static constexpr const char *Description =
+	    "When enabled, skip transfer-graph generation from unfiltered tables";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct ThcL3BudgetSetting {
 	using RETURN_TYPE = int64_t;
 	static constexpr const char *Name = "thc_l3_budget";
