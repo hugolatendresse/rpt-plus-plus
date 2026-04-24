@@ -36,6 +36,7 @@
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/planner.hpp"
 #include "duckdb/optimizer/predicate_transfer/predicate_transfer_optimizer.hpp"
+#include "duckdb/optimizer/predicate_transfer/table_operator_namager.hpp"
 
 namespace duckdb {
 
@@ -177,6 +178,21 @@ void Optimizer::RunBuiltInOptimizers() {
 		// performs filter pushdowns
 		RunOptimizer(OptimizerType::JOIN_ORDER, [&]() {
 			JoinOrderOptimizer optimizer(context);
+			// When JoinOrderMode::SEEDED_LEFT_DEEP is active, feed the RPT+
+			// transfer order (a vector of LogicalOperator* for the base tables,
+			// produced by TransferGraphManager::PickRootAndOrderWithSeed) into
+			// the join-order optimizer as a forced ordering of scalar table
+			// indices. The plan enumerator will then construct a strictly
+			// left-deep plan following that order instead of doing any cost
+			// enumeration. See PlanEnumerator::SolveJoinOrderFromTransferOrder.
+			if (context.config.join_order_mode == JoinOrderMode::SEEDED_LEFT_DEEP) {
+				vector<idx_t> forced_table_indices;
+				forced_table_indices.reserve(PT.graph_manager.transfer_order.size());
+				for (auto *op : PT.graph_manager.transfer_order) {
+					forced_table_indices.push_back(TableOperatorManager::GetScalarTableIndex(op));
+				}
+				optimizer.SetForcedTableOrder(std::move(forced_table_indices));
+			}
 			plan = optimizer.Optimize(std::move(plan));
 		});
 

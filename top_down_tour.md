@@ -192,7 +192,7 @@ I don't want seed = 0 to stay on current path. It's a good idea to keep the curr
 Plan updated. Summary of the change:
 
 - Replaced the seed-sentinel dispatch with an explicit `thc_use_thc_transfer_order` bool (default `false` = current RPT+ / LargestRootUpdated path).
-- `thc_transfer_graph_seed` is now consulted only when `thc_use_thc_transfer_order == true`, and `seed = 0` is a fully valid THC-path configuration (picks the first option at each step).
+- `transfer_graph_seed` is now consulted only when `thc_use_thc_transfer_order == true`, and `seed = 0` is a fully valid THC-path configuration (picks the first option at each step).
 - `thc_skip_unfiltered_tables` remains an independent toggle that applies to both modes.
 - Dispatch, diagram, and scope-boundaries sections updated to match.
 
@@ -230,7 +230,7 @@ Full release build succeeds. Let me mark the final todo as completed.
 
 All five todos are done and a full release build completes cleanly. Summary of changes:
 
-- `src/include/duckdb/main/client_config.hpp`: three new toggles — `thc_use_thc_transfer_order` (RPT+ vs THC mode), `thc_transfer_graph_seed` (determinism seed), and `thc_skip_unfiltered_tables` (independent control of `SkipUnfilteredTable`).
+- `src/include/duckdb/main/client_config.hpp`: three new toggles — `thc_use_thc_transfer_order` (RPT+ vs THC mode), `transfer_graph_seed` (determinism seed), and `thc_skip_unfiltered_tables` (independent control of `SkipUnfilteredTable`).
 - `src/include/duckdb/optimizer/predicate_transfer/transfer_graph_manager.hpp`: declared `CreateTransferPlanSeeded(uint64_t)` and `THCRootAndTransferGraph(uint64_t &)` in the private section.
 - `src/optimizer/predicate_transfer/transfer_graph_manager.cpp`:
   - Added `#include "duckdb/common/types/hash.hpp"`, `duckdb/main/client_config.hpp`, and `<algorithm>`.

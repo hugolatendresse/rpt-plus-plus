@@ -93,15 +93,27 @@ struct ClientConfig {
 	//! Transfer-order mode used by predicate transfer.
 	//! False (default): RPT+ transfer order via LargestRootUpdated (paper behavior).
 	//! True:            THC transfer order via THCRootAndTransferGraph, driven by
-	//!                  thc_transfer_graph_seed for deterministic enumeration.
+	//!                  transfer_graph_seed for deterministic enumeration.
 	bool use_seeded_transfer_order = false;
 	//! Seed driving THCRootAndTransferGraph. Only consulted when
 	//! use_seeded_transfer_order is true. Seed = 0 is a valid value and
 	//! will deterministically pick the first option at each step. // TODO shouldn't we use a hash at each step???
-	idx_t thc_transfer_graph_seed = 0;
+	idx_t transfer_graph_seed = 0;
 	//! Whether SkipUnfilteredTable is executed during transfer-graph
 	//! construction. True matches the RPT+ paper / current behavior.
 	bool skip_unfiltered_tables = false;
+	//! Controls the cost-based build/probe side swap performed by
+	//! BuildProbeSideOptimizer::TryFlipJoinChildren. When false, that
+	//! optimizer leaves the (left=probe, right=build) assignment that
+	//! comes out of the join-order optimizer untouched. The semantic
+	//! flipping paths (DELIM join delim_flipped bookkeeping, RIGHT->LEFT
+	//! conversion in the binder) are not affected by this flag -- those
+	//! are required for correctness, not a performance swap.
+	//!
+	//! Default true matches the upstream DuckDB behavior. Set to false
+	//! together with `join_order_mode = 'seeded_left_deep'` to guarantee
+	//! the left-deep shape survives all of the optimizer pipeline.
+	bool allow_build_probe_side_swap = true;
 	//! When true, never use perfect hash join
 	bool disable_perfect_hashing = false;
 	//! Memory budget (in bytes) for the Tiered Hash Cache.

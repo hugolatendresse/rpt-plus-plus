@@ -1,5 +1,6 @@
 ------------------------- Common Settings -----------------------------
 
+-- THC
 SET thc_activation_threshold = 1_000_000;
 SET thc_collect_budget_fraction = 0.25;
 SET thc_collect_phase_rows = 1_000_000;
@@ -15,15 +16,17 @@ SET thc_l3_budget = 37_748_736; -- 36MB
 SET thc_miss_below_which_skip_collect = 0.1;
 
 
--- SET join_order_mode = 'duckdb';
-SET join_order_mode = 'exact_left_deep';
-
+-- General Parameters
 SET max_temp_directory_size='0KiB';
 SET threads = 1;
 SET disable_perfect_hashing = true;
 SET pin_threads = 'on';
 
+
+-- Optimizer
+SET join_order_mode = 'seeded_left_deep';
+SET allow_build_probe_side_swap = false;
 SET use_seeded_transfer_order = true;
-SET thc_transfer_graph_seed = 0;
-SET skip_unfiltered_tables = true;
+SET transfer_graph_seed = 0;
+SET skip_unfiltered_tables = false;
 SET disable_bf_dropping = true;

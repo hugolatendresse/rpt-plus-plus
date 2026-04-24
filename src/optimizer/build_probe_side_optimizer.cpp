@@ -157,6 +157,16 @@ idx_t BuildProbeSideOptimizer::ChildHasJoins(LogicalOperator &op) {
 }
 
 void BuildProbeSideOptimizer::TryFlipJoinChildren(LogicalOperator &op) const {
+	// Early-out when the user has disabled the cost-based build/probe side swap
+	// (e.g. because they want the (left=probe, right=build) ordering produced
+	// by JoinOrderMode::SEEDED_LEFT_DEEP to survive untouched). The other swap
+	// paths in the optimizer pipeline are semantic, not performance: the
+	// DELIM join `delim_flipped` bookkeeping in VisitOperator below and the
+	// RIGHT->LEFT conversion in plan_joinref.cpp are required for correctness
+	// and therefore intentionally NOT guarded by this flag.
+	if (!context.config.allow_build_probe_side_swap) {
+		return;
+	}
 	auto &left_child = *op.children[0];
 	auto &right_child = *op.children[1];
 	const auto lhs_cardinality = left_child.has_estimated_cardinality ? left_child.estimated_cardinality

@@ -1,9 +1,12 @@
 #include "duckdb/optimizer/join_order/plan_enumerator.hpp"
 
+#include "duckdb/common/debug_log.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/optimizer/join_order/join_node.hpp"
 #include "duckdb/optimizer/join_order/query_graph_manager.hpp"
+#include "duckdb/optimizer/join_order/relation_manager.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <random>
 
@@ -687,6 +690,101 @@ void PlanEnumerator::SolveJoinOrderLeftDeepRandom() {
 	auto &total_relation = query_graph_manager.set_manager.GetJoinRelation(bindings);
 	auto final_plan = plans.find(total_relation);
 	//SPY: REMOVED RETURN TYPE CHANGED return std::move(final_plan->second);
+}
+
+//! Build a left-deep plan whose base-table ordering is taken from
+//! `forced_table_order`. See the header comment for the exact shape contract.
+//!
+//! Implementation notes:
+//!   - We map every entry of `forced_table_order` through
+//!     RelationManager::relation_mapping to find the corresponding
+//!     relation_id. Entries that cannot be mapped (e.g. a table operator
+//!     that the join-order optimizer treated as part of a non-reorderable
+//!     subtree) are silently skipped.
+//!   - After mapping, any relation_id the join-order optimizer knows about
+//!     but that the forced order does not mention is appended at the end.
+//!     This guarantees the final JoinRelationSet covers every relation so
+//!     `QueryGraphManager::Reconstruct` can find a plan entry for the full
+//!     set.
+//!   - At every step we join the running left subtree (the "accumulator")
+//!     with one additional base relation on the right. That means the
+//!     resulting DP tree has the shape
+//!         (((((T0 |><| T1) |><| T2) |><| T3) ... ) |><| Tn-1)
+//!     which is exactly left-deep with the requested ordering.
+//!   - If the accumulator has no query-graph edge to the next relation we
+//!     insert a cross-product edge on-the-fly via
+//!     CreateQueryGraphCrossProduct. This mirrors what SolveJoinOrder does
+//!     when it discovers a disconnected component.
+//!   - EmitPair stores every intermediate plan in the `plans` map keyed by
+//!     JoinRelationSet, which is what `QueryGraphManager::Reconstruct`
+//!     later looks up for the full relation set.
+void PlanEnumerator::SolveJoinOrderFromTransferOrder(const vector<idx_t> &forced_table_order) {
+	auto &relation_manager = query_graph_manager.relation_manager;
+	idx_t num_relations = relation_manager.NumRelations();
+	if (num_relations == 0) {
+		return;
+	}
+
+	// 1. Map base-table indices from the transfer order to relation ids.
+	//    We keep a `seen` set to detect which relations still need to be
+	//    appended at the end (e.g. aggregate/materialized-CTE relations that
+	//    are not base tables and therefore not in the transfer graph).
+	vector<idx_t> relation_ids;
+	relation_ids.reserve(num_relations);
+	unordered_set<idx_t> seen;
+	for (auto &table_index : forced_table_order) {
+		auto it = relation_manager.relation_mapping.find(table_index);
+		if (it == relation_manager.relation_mapping.end()) {
+			// Table operator is not a relation in this JOO scope (it lives
+			// in a non-reorderable subtree). That's fine -- just skip it.
+			continue;
+		}
+		idx_t rel_id = it->second;
+		if (seen.insert(rel_id).second) {
+			relation_ids.push_back(rel_id);
+		}
+	}
+
+	// 2. Append every relation the forced order did not already cover.
+	//    Sorted by relation id so the result is deterministic.
+	vector<idx_t> leftover;
+	for (idx_t rel_id = 0; rel_id < num_relations; ++rel_id) {
+		if (seen.count(rel_id) == 0) {
+			leftover.push_back(rel_id);
+		}
+	}
+	std::sort(leftover.begin(), leftover.end());
+	for (auto rel_id : leftover) {
+		relation_ids.push_back(rel_id);
+	}
+
+	DEBUG_LOG("[SolveJoinOrderFromTransferOrder] num_relations=%zu forced_size=%zu mapped_size=%zu\n",
+	          static_cast<size_t>(num_relations), forced_table_order.size(), relation_ids.size());
+
+	D_ASSERT(relation_ids.size() == num_relations);
+
+	// 3. Start the accumulator at the very first relation. This is the
+	//    probe side of the bottom-most join in the resulting plan.
+	auto *current = &query_graph_manager.set_manager.GetJoinRelation(relation_ids[0]);
+
+	// 4. Walk the remaining relations in order, joining each onto the right
+	//    side of the accumulator. EmitPair both constructs the join tree
+	//    and inserts it into the DP table used by Reconstruct().
+	for (idx_t i = 1; i < relation_ids.size(); ++i) {
+		auto &right = query_graph_manager.set_manager.GetJoinRelation(relation_ids[i]);
+
+		auto connections = query_graph.GetConnections(*current, right);
+		if (connections.empty()) {
+			// No direct query-graph edge -- insert a cross-product edge so
+			// we still have something for EmitPair / CreateJoinTree to use.
+			query_graph_manager.CreateQueryGraphCrossProduct(*current, right);
+			connections = query_graph.GetConnections(*current, right);
+			D_ASSERT(!connections.empty());
+		}
+
+		auto &node = EmitPair(*current, right, connections);
+		current = &node.set;
+	}
 }
 
 // the plan enumeration is a straight implementation of the paper "Dynamic Programming Strikes Back" by Guido

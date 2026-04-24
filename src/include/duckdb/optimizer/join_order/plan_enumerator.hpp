@@ -40,6 +40,28 @@ public:
 	void SolveJoinOrderRandom();
 	void SolveJoinOrderLeftDeepRandom();
 	void SolveJoinOrder();
+	//! Build a strictly left-deep plan whose base-table ordering is dictated
+	//! by `forced_table_order` (a sequence of base-table indices, typically
+	//! TransferGraphManager::transfer_order mapped through
+	//! TableOperatorManager::GetScalarTableIndex).
+	//!
+	//! Semantics:
+	//!   - forced_table_order[0] becomes the probe (children[0]) of the
+	//!     bottom-most join in the resulting plan.
+	//!   - forced_table_order[1] becomes the build (children[1]) of the
+	//!     bottom-most join.
+	//!   - forced_table_order[i] (for i >= 2) becomes the build side of the
+	//!     join one level higher than the previous one.
+	//!
+	//! Relation indices not present in `forced_table_order` (e.g. aggregate
+	//! or union relations that are not base tables tracked by the transfer
+	//! graph) are appended at the end in ascending relation-id order, so the
+	//! final plan still covers every relation in the query graph. When the
+	//! accumulator and the next relation have no direct query-graph edge, a
+	//! cross-product edge is inserted via
+	//! QueryGraphManager::CreateQueryGraphCrossProduct so EmitPair has a
+	//! valid connection to use.
+	void SolveJoinOrderFromTransferOrder(const vector<idx_t> &forced_table_order);
 	void InitLeafPlans();
 
 	const reference_map_t<JoinRelationSet, unique_ptr<DPJoinNode>> &GetPlans() const;

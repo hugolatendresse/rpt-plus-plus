@@ -85,7 +85,7 @@ bool TransferGraphManager::Build(LogicalOperator &plan) {
 	//    CreateTransferPlanSeeded. The seed value itself (including 0) only
 	//    affects which plan is enumerated within the seeded mode.
 	if (cfg.use_seeded_transfer_order) {
-		CreateTransferPlanSeeded(cfg.thc_transfer_graph_seed);
+		CreateTransferPlanSeeded(cfg.transfer_graph_seed);
 	} else {
 		CreateTransferPlanUpdated();
 	}

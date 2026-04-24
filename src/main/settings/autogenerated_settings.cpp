@@ -640,16 +640,16 @@ Value UseSeededTransferOrderSetting::GetSetting(const ClientContext &context) {
 //===----------------------------------------------------------------------===//
 void ThcTransferGraphSeedSetting::SetLocal(ClientContext &context, const Value &input) {
 	auto &config = ClientConfig::GetConfig(context);
-	config.thc_transfer_graph_seed = static_cast<idx_t>(input.GetValue<int64_t>());
+	config.transfer_graph_seed = static_cast<idx_t>(input.GetValue<int64_t>());
 }
 
 void ThcTransferGraphSeedSetting::ResetLocal(ClientContext &context) {
-	ClientConfig::GetConfig(context).thc_transfer_graph_seed = ClientConfig().thc_transfer_graph_seed;
+	ClientConfig::GetConfig(context).transfer_graph_seed = ClientConfig().transfer_graph_seed;
 }
 
 Value ThcTransferGraphSeedSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
-	return Value::BIGINT(static_cast<int64_t>(config.thc_transfer_graph_seed));
+	return Value::BIGINT(static_cast<int64_t>(config.transfer_graph_seed));
 }
 
 //===----------------------------------------------------------------------===//
@@ -667,6 +667,23 @@ void SkipUnfilteredTablesSetting::ResetLocal(ClientContext &context) {
 Value SkipUnfilteredTablesSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
 	return Value::BOOLEAN(config.skip_unfiltered_tables);
+}
+
+//===----------------------------------------------------------------------===//
+// Allow Build Probe Side Swap
+//===----------------------------------------------------------------------===//
+void AllowBuildProbeSideSwapSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.allow_build_probe_side_swap = input.GetValue<bool>();
+}
+
+void AllowBuildProbeSideSwapSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).allow_build_probe_side_swap = ClientConfig().allow_build_probe_side_swap;
+}
+
+Value AllowBuildProbeSideSwapSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.allow_build_probe_side_swap);
 }
 
 //===----------------------------------------------------------------------===//

@@ -116,6 +116,7 @@ static const ConfigurationOption internal_options[] = {
 	DUCKDB_LOCAL(UseSeededTransferOrderSetting),
 	DUCKDB_LOCAL(ThcTransferGraphSeedSetting),
 	DUCKDB_LOCAL(SkipUnfilteredTablesSetting),
+	DUCKDB_LOCAL(AllowBuildProbeSideSwapSetting),
 	DUCKDB_LOCAL(ThcL3BudgetSetting),
 	DUCKDB_LOCAL(ThcCollectPhaseRowsSetting),
 	DUCKDB_LOCAL(ThcFirstReadOnlyPhaseRowsSetting),

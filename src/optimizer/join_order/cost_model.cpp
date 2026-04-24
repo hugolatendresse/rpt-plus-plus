@@ -13,9 +13,11 @@ double CostModel::ComputeCost(DPJoinNode &left, DPJoinNode &right) {
 	auto &combination = query_graph_manager.set_manager.Union(left.set, right.set);
 	auto join_card = cardinality_estimator.EstimateCardinalityWithSet<double>(combination);
 	auto join_cost = join_card;
-	// ExactLeftDeep uses an asymmetric cost model that penalizes the right (build) side
-	// to encourage plans where the smaller relation is on the build side.
-	if (query_graph_manager.context.config.join_order_mode == JoinOrderMode::EXACT_LEFT_DEEP) {
+	// BEST_LEFT_DEEP uses an asymmetric cost model that penalizes the right (build) side
+	// to encourage plans where the smaller relation is on the build side. SEEDED_LEFT_DEEP
+	// does no cost-based enumeration at all (the order is fixed by the transfer graph) so
+	// the penalty deliberately does not apply there.
+	if (query_graph_manager.context.config.join_order_mode == JoinOrderMode::BEST_LEFT_DEEP) {
 		return join_cost + left.cost + 1.2 * right.cost;
 	}
 	return join_cost + left.cost + right.cost;

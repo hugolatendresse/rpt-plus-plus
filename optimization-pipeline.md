@@ -290,9 +290,10 @@ After `QueryGraphManager::Build`, if the query is reorderable, a
 | Mode | Method | Description |
 |---|---|---|
 | `DPHYP` (default) | `SolveJoinOrder()` | DPhyp algorithm ("Dynamic Programming Strikes Back" by Moerkotte & Neumann). Explores connected subgraph pairs (CSG-CMP enumeration). Falls back to greedy if >= 12 relations or 10K pairs exceeded. |
-| `EXACT_LEFT_DEEP` | `SolveJoinOrderLeftDeep()` | Only considers plans where each join combines an accumulated partial plan with a single base relation (forces left-deep shape). |
+| `BEST_LEFT_DEEP` | `SolveJoinOrderLeftDeep()` | Only considers plans where each join combines an accumulated partial plan with a single base relation (forces left-deep shape). Still cost-based; uses the 1.2x right-side penalty below. |
 | `RANDOM_BUSHY` | `SolveJoinOrderRandom()` | Randomly picks valid join pairs until one tree remains. |
 | `RANDOM_LEFT_DEEP` | `SolveJoinOrderLeftDeepRandom()` | Random first pair, then always joins accumulated tree with a remaining base relation. |
+| `SEEDED_LEFT_DEEP` | `SolveJoinOrderFromTransferOrder()` | Strictly left-deep plan whose base-table ordering is taken from `TransferGraphManager::transfer_order` (populated by the RPT+ `PickRootAndOrderWithSeed`). No cost enumeration; the probe side of the bottom join is `transfer_order[0]` and every subsequent entry becomes the build side of the next join up. Falls back to `SolveJoinOrderLeftDeep()` if no forced order is set (e.g. in non-reorderable child subtrees). Pair with `allow_build_probe_side_swap = false` to prevent the downstream `BuildProbeSideOptimizer` from flipping the assignment. |
 
 **Implementation:** `src/optimizer/join_order/plan_enumerator.cpp`
 
@@ -314,15 +315,17 @@ double CostModel::ComputeCost(DPJoinNode &left, DPJoinNode &right) {
     auto join_card = cardinality_estimator.EstimateCardinalityWithSet<double>(combination);
     auto join_cost = join_card;
     // Asymmetric cost for left-deep mode
-    if (context.config.join_order_mode == JoinOrderMode::EXACT_LEFT_DEEP) {
+    if (context.config.join_order_mode == JoinOrderMode::BEST_LEFT_DEEP) {
         return join_cost + left.cost + 1.2 * right.cost;
     }
     return join_cost + left.cost + right.cost;
 }
 ```
 
-In `EXACT_LEFT_DEEP` mode, the right (build) side gets a 1.2x penalty to
-encourage placing the smaller relation there.
+In `BEST_LEFT_DEEP` mode, the right (build) side gets a 1.2x penalty to
+encourage placing the smaller relation there. `SEEDED_LEFT_DEEP` does not
+invoke the DP cost model at all (the order is dictated by the transfer graph)
+so this penalty deliberately does not apply to it.
 
 **Reconstruction:** After enumeration, `QueryGraphManager::Reconstruct` calls
 `GenerateJoins` (`src/optimizer/join_order/query_graph_manager.cpp`, lines
@@ -334,13 +337,20 @@ table. The final plan covers all relations (the entry for the full
 
 - **DPhyp (default)** explores arbitrary connected-subgraph pairs, so it
   produces **bushy** trees (any binary join tree shape).
-- **`EXACT_LEFT_DEEP`** only joins partial plans with base relations, forcing
-  a **left-deep** chain.
+- **`BEST_LEFT_DEEP`** only joins partial plans with base relations, forcing
+  a **left-deep** chain; it still runs the DP with the 1.2x right-side
+  penalty to pick the best ordering.
 - **`RANDOM_BUSHY`** can produce any shape.
 - **`RANDOM_LEFT_DEEP`** forces left-deep.
+- **`SEEDED_LEFT_DEEP`** also forces left-deep, but the base-table ordering
+  is fixed up-front by the RPT+ predicate-transfer pass (via
+  `PickRootAndOrderWithSeed`) and not re-examined by the DP enumerator.
 - There is **no dedicated right-deep enumerator**. However, the
   `BuildProbeSideOptimizer` can swap children after the fact, which can
-  effectively mirror parts of the tree.
+  effectively mirror parts of the tree. The
+  `allow_build_probe_side_swap` client-config flag turns this post-hoc
+  swap off -- useful in combination with `SEEDED_LEFT_DEEP` to guarantee
+  the forced `(left=probe, right=build)` assignment survives.
 
 ### Build Side vs Probe Side
 

@@ -559,7 +559,8 @@ struct EnableHTTPLoggingSetting {
 struct JoinOrderModeSetting {
 	using RETURN_TYPE = string;
 	static constexpr const char *Name = "join_order_mode";
-	static constexpr const char *Description = "Join order enumeration strategy: duckdb, exact_left_deep, random_bushy, random_left_deep";
+	static constexpr const char *Description =
+	    "Join order enumeration strategy: duckdb, best_left_deep, random_bushy, random_left_deep, seeded_left_deep";
 	static constexpr const char *InputType = "VARCHAR";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
@@ -631,7 +632,7 @@ struct UseSeededTransferOrderSetting {
 
 struct ThcTransferGraphSeedSetting {
 	using RETURN_TYPE = int64_t;
-	static constexpr const char *Name = "thc_transfer_graph_seed";
+	static constexpr const char *Name = "transfer_graph_seed";
 	static constexpr const char *Description = "Seed used for deterministic THC transfer-order enumeration";
 	static constexpr const char *InputType = "BIGINT";
 	static void SetLocal(ClientContext &context, const Value &parameter);
@@ -644,6 +645,19 @@ struct SkipUnfilteredTablesSetting {
 	static constexpr const char *Name = "skip_unfiltered_tables";
 	static constexpr const char *Description =
 	    "When enabled, skip transfer-graph generation from unfiltered tables";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct AllowBuildProbeSideSwapSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "allow_build_probe_side_swap";
+	static constexpr const char *Description =
+	    "When disabled, BuildProbeSideOptimizer will not swap a join's build and probe children "
+	    "based on estimated build cost (the (left=probe, right=build) ordering from the join-order "
+	    "optimizer is preserved instead)";
 	static constexpr const char *InputType = "BOOLEAN";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);

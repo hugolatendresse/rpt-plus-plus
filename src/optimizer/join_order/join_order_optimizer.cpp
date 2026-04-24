@@ -18,6 +18,17 @@ JoinOrderOptimizer JoinOrderOptimizer::CreateChildOptimizer() {
 	JoinOrderOptimizer child_optimizer(context);
 	child_optimizer.materialized_cte_stats = materialized_cte_stats;
 	child_optimizer.delim_scan_stats = delim_scan_stats;
+	// Propagate the forced table order so that JoinOrderMode::SEEDED_LEFT_DEEP
+	// works even when the reorderable join block sits below non-reorderable
+	// operators (ORDER BY / AGGREGATE / PROJECTION / ...). In that setup the
+	// top-level Optimize() call descends through a chain of child optimizers
+	// before it reaches the actual join subtree, so every child needs to know
+	// about the forced order too. PlanEnumerator::SolveJoinOrderFromTransferOrder
+	// only uses the subset of forced entries that the child's RelationManager
+	// actually knows about (the rest are silently skipped), and appends any
+	// child-local relations that were not in the forced order at the end, so
+	// unconditional propagation is safe for disjoint / partial subtrees.
+	child_optimizer.forced_table_order = forced_table_order;
 	return child_optimizer;
 }
 
@@ -46,7 +57,7 @@ unique_ptr<LogicalOperator> JoinOrderOptimizer::Optimize(unique_ptr<LogicalOpera
 		// Initialize the leaf/single node plans
 		plan_enumerator.InitLeafPlans();
 		switch (context.config.join_order_mode) {
-		case JoinOrderMode::EXACT_LEFT_DEEP:
+		case JoinOrderMode::BEST_LEFT_DEEP:
 			plan_enumerator.SolveJoinOrderLeftDeep();
 			break;
 		case JoinOrderMode::RANDOM_BUSHY:
@@ -54,6 +65,21 @@ unique_ptr<LogicalOperator> JoinOrderOptimizer::Optimize(unique_ptr<LogicalOpera
 			break;
 		case JoinOrderMode::RANDOM_LEFT_DEEP:
 			plan_enumerator.SolveJoinOrderLeftDeepRandom();
+			break;
+		case JoinOrderMode::SEEDED_LEFT_DEEP:
+			// The forced order is installed on the top-level optimizer from
+			// optimizer.cpp and propagated to child optimizers via
+			// CreateChildOptimizer(). If we still end up with an empty forced
+			// order (e.g. the RPT+ transfer graph early-exited because there
+			// were fewer than 2 base tables, or the user set SEEDED_LEFT_DEEP
+			// without use_seeded_transfer_order actually producing anything)
+			// fall back to SolveJoinOrderLeftDeep() so we still produce a
+			// left-deep shape instead of crashing.
+			if (forced_table_order.empty()) {
+				plan_enumerator.SolveJoinOrderLeftDeep();
+			} else {
+				plan_enumerator.SolveJoinOrderFromTransferOrder(forced_table_order);
+			}
 			break;
 		case JoinOrderMode::DPHYP:
 		default:
@@ -112,6 +138,10 @@ RelationStats JoinOrderOptimizer::GetDelimScanStats() {
 		throw InternalException("Unable to find delim scan stats!");
 	}
 	return *delim_scan_stats;
+}
+
+void JoinOrderOptimizer::SetForcedTableOrder(vector<idx_t> order) {
+	forced_table_order = std::move(order);
 }
 
 } // namespace duckdb
