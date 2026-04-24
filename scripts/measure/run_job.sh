@@ -8,6 +8,7 @@ CASE=""
 JOB_QUERY=""
 USE_PERF=false
 USE_DEBUG=false
+USE_DUCKDB_PROFILING=false
 PERF_EVENTS="cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,mem_access,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd,branch-instructions,branch-misses,br_retired,br_mis_pred_retired"
 
 usage() {
@@ -19,6 +20,7 @@ Options:
   --job-query <id>      Run one JOB query (e.g. 10a, 24a, or 10a.sql)
   --perf                Run query/queries under perf stat
   --debug               Use debug build (build/debug/duckdb)
+  --duckdb-profiling    Enable DuckDB JSON profiling, output to job_results.json
   -h, --help            Show this help
 USAGE
 }
@@ -29,6 +31,7 @@ while [[ $# -gt 0 ]]; do
         --job-query) JOB_QUERY="$2"; shift 2 ;;
         --perf) USE_PERF=true; shift ;;
         --debug) USE_DEBUG=true; shift ;;
+        --duckdb-profiling) USE_DUCKDB_PROFILING=true; shift ;;
         -h|--help)
             usage
             exit 0
@@ -61,6 +64,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 JOB_DIR="$REPO_ROOT/join-order-benchmark"
 COMMON_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-common.sql"
 RUN_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-run_job.sql"
+# Absolute path so the file is easy to locate regardless of the script's CWD.
+PROFILING_OUTPUT="$REPO_ROOT/job_results.json"
+# See https://duckdb.org/docs/stable/dev/profiling
+PROFILING_PRAGMAS="PRAGMA enable_profiling = 'json';
+PRAGMA profiling_output = '$PROFILING_OUTPUT';
+PRAGMA profiling_coverage = 'SELECT';"
 if $USE_DEBUG; then
     DUCKDB_BIN="$REPO_ROOT/build/debug/duckdb"
 else
@@ -100,6 +109,7 @@ run_query() {
     local query_file="$1"
     if $USE_PERF; then
         {
+            if $USE_DUCKDB_PROFILING; then printf '%s\n' "$PROFILING_PRAGMAS"; fi
             grep '^SET ' "$COMMON_SETTINGS_SQL" || true
             grep '^SET ' "$RUN_SETTINGS_SQL" || true
             printf '%s\n' "$CASE_SETTINGS"
@@ -107,6 +117,7 @@ run_query() {
         } | sudo perf stat -e "$PERF_EVENTS" -- "$DUCKDB_BIN" "$DB_FILE"
     else
         {
+            if $USE_DUCKDB_PROFILING; then printf '%s\n' "$PROFILING_PRAGMAS"; fi
             grep '^SET ' "$COMMON_SETTINGS_SQL" || true
             grep '^SET ' "$RUN_SETTINGS_SQL" || true
             printf '%s\n' "$CASE_SETTINGS"
@@ -129,3 +140,6 @@ time {
     done
 }
 echo "Benchmark execution complete."
+if $USE_DUCKDB_PROFILING; then
+    echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
+fi

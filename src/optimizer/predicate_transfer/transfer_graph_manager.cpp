@@ -10,6 +10,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <queue>
 
 namespace duckdb {
@@ -59,6 +60,9 @@ bool TransferGraphManager::Build(LogicalOperator &plan) {
 	}
 
 	// 2. Getting graph edges information from join operators
+	// NOTE: the FILTER_PUSHDOWN optimization (using FilterCombiner) creates join conditions
+	// based on equivalence classes. Hence, we might see edges below that are not in the 
+	// original plan. 
 	ExtractEdgesInfo(joins);
 	if (neighbor_matrix.empty()) {
 		return false;
@@ -695,20 +699,6 @@ void TransferGraphManager::PickRootAndOrderWithSeed(uint64_t &seed) {
 		return string("Unknown");
 	};
 
-	// Order by (name, table_index). The table_index tiebreaker guarantees a
-	// total order even when multiple operators share the same displayed name
-	// (e.g. two scans of the same physical table).
-	auto LessByName = [&](idx_t a, idx_t b) {
-		auto *op_a = table_operator_manager.GetTableOperator(a);
-		auto *op_b = table_operator_manager.GetTableOperator(b);
-		auto name_a = GetName(op_a);
-		auto name_b = GetName(op_b);
-		if (name_a != name_b) {
-			return name_a < name_b;
-		}
-		return a < b;
-	};
-
 	// Use the current seed to pick an index in [0, n), then advance the seed.
 	// Advance-after-use means the very first call consumes the original seed
 	// directly (so the root pick is `seed % N_root`), which matches the plan.
@@ -734,12 +724,13 @@ void TransferGraphManager::PickRootAndOrderWithSeed(uint64_t &seed) {
 		return;
 	}
 
-	// Debug-only trace of the seeded root + spanning-tree enumeration. Compiles
-	// to a no-op in release builds. Each line is prefixed with [PickRootAndOrderWithSeed]
-	// so the full transfer-order decision chain can be grep'ed out of stderr.
 	// Snapshot table-id -> name NOW, because table_operator_manager.table_operators
 	// gets erased as we attach each table to the spanning tree; subsequent calls
-	// to GetTableOperator(parent_id) would return nullptr.
+	// to GetTableOperator(id) for already-placed tables would return nullptr.
+	// This snapshot backs both LessByName (used to sort deterministically) and
+	// LookupName (used for DEBUG_LOG trace output). Without the snapshot, the
+	// `parents` sort later in this function would call GetName on nullptr for
+	// already-attached parents and segfault.
 	unordered_map<idx_t, string> name_by_id;
 	for (auto &entry : table_operator_manager.table_operators) {
 		name_by_id.emplace(entry.first, GetName(entry.second));
@@ -748,6 +739,25 @@ void TransferGraphManager::PickRootAndOrderWithSeed(uint64_t &seed) {
 		auto it = name_by_id.find(id);
 		return it == name_by_id.end() ? "Unknown" : it->second.c_str();
 	};
+
+	// Order by (name, table_index). The table_index tiebreaker guarantees a
+	// total order even when multiple operators share the same displayed name
+	// (e.g. two scans of the same physical table). Uses the `name_by_id`
+	// snapshot above so it stays valid after tables have been erased from
+	// table_operator_manager.table_operators.
+	auto LessByName = [&](idx_t a, idx_t b) {
+		const char *name_a = LookupName(a);
+		const char *name_b = LookupName(b);
+		int cmp = std::strcmp(name_a, name_b);
+		if (cmp != 0) {
+			return cmp < 0;
+		}
+		return a < b;
+	};
+
+	// Debug-only trace of the seeded root + spanning-tree enumeration. Compiles
+	// to a no-op in release builds. Each line is prefixed with [PickRootAndOrderWithSeed]
+	// so the full transfer-order decision chain can be grep'ed out of stderr.
 	DEBUG_LOG("[PickRootAndOrderWithSeed] seed=%llu num_tables=%zu\n",
 	          static_cast<unsigned long long>(seed),
 	          table_operator_manager.table_operators.size());
