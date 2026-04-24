@@ -586,6 +586,18 @@ struct DisableRptSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct DisableBfDroppingSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "disable_bf_dropping";
+	static constexpr const char *Description =
+	    "When enabled, PhysicalCreateBF never gives up building a bloom filter based on observed "
+	    "selectivity or memory-pressure heuristics (all three give-up branches are bypassed)";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct DisablePerfectHashingSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "disable_perfect_hashing";

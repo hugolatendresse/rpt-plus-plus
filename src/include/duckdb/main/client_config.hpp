@@ -81,6 +81,15 @@ struct ClientConfig {
 	bool disable_rpt = false;
 	//! When true, skip initializing the tiered hash cache
 	bool disable_tiered_hash_cache = false;
+	//! When true, PhysicalCreateBF never gives up constructing a bloom filter based on
+	//! observed selectivity or estimated/actual memory pressure. All three give-up
+	//! branches in PhysicalCreateBF::GiveUpBFCreation (OOM against the temp-memory
+	//! reservation, unselective base-table pipeline, and projected OOM) are bypassed,
+	//! so every BF scheduled by RPT+ is built to completion. Intended for
+	//! benchmarking / A-B comparisons where we want the BF set to be independent of
+	//! the runtime heuristics; may increase memory use and slow queries when the
+	//! heuristics would otherwise have correctly discarded a useless BF.
+	bool disable_bf_dropping = false;
 	//! Transfer-order mode used by predicate transfer.
 	//! False (default): RPT+ transfer order via LargestRootUpdated (paper behavior).
 	//! True:            THC transfer order via THCRootAndTransferGraph, driven by
@@ -92,7 +101,7 @@ struct ClientConfig {
 	idx_t thc_transfer_graph_seed = 0;
 	//! Whether SkipUnfilteredTable is executed during transfer-graph
 	//! construction. True matches the RPT+ paper / current behavior.
-	bool skip_unfiltered_tables = true;
+	bool skip_unfiltered_tables = false;
 	//! When true, never use perfect hash join
 	bool disable_perfect_hashing = false;
 	//! Memory budget (in bytes) for the Tiered Hash Cache.

@@ -111,7 +111,7 @@ private:
 	//! Root and neighbor picks are deterministic given the seed; seed is
 	//! advanced via MurmurHash64 after each pick so callers passing the same
 	//! initial seed always get the same transfer order.
-	void THCRootAndTransferGraph(uint64_t &seed);
+	void PickRootAndOrderWithSeed(uint64_t &seed);
 
 	pair<idx_t, idx_t> FindEdge(const unordered_set<idx_t> &constructed_set,
 	                            const unordered_set<idx_t> &unconstructed_set);

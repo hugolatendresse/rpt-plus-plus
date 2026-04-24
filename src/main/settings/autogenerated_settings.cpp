@@ -568,6 +568,23 @@ Value DisableRptSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// Disable BF Dropping
+//===----------------------------------------------------------------------===//
+void DisableBfDroppingSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.disable_bf_dropping = input.GetValue<bool>();
+}
+
+void DisableBfDroppingSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).disable_bf_dropping = ClientConfig().disable_bf_dropping;
+}
+
+Value DisableBfDroppingSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.disable_bf_dropping);
+}
+
+//===----------------------------------------------------------------------===//
 // Disable Perfect Hashing
 //===----------------------------------------------------------------------===//
 void DisablePerfectHashingSetting::SetLocal(ClientContext &context, const Value &input) {

@@ -1,5 +1,6 @@
 #include "duckdb/optimizer/predicate_transfer/transfer_graph_manager.hpp"
 
+#include "duckdb/common/debug_log.hpp"
 #include "duckdb/common/types/hash.hpp"
 #include "duckdb/main/client_config.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
@@ -683,7 +684,7 @@ void TransferGraphManager::LargestRootUpdated(vector<LogicalOperator *> &sorted_
 //! with a smaller `prior_flag--`. This preserves the invariant that the
 //! parent's cardinality_order is strictly greater than the child's, which
 //! the "smaller table is in the left" swap in CreateTransferPlan* relies on.
-void TransferGraphManager::THCRootAndTransferGraph(uint64_t &seed) {
+void TransferGraphManager::PickRootAndOrderWithSeed(uint64_t &seed) {
 	// Deterministic name lookup. Matches the pattern used by PrintTransferPlan
 	// so the enumeration is anchored on table names when available.
 	auto GetName = [](LogicalOperator *op) -> string {
@@ -733,6 +734,24 @@ void TransferGraphManager::THCRootAndTransferGraph(uint64_t &seed) {
 		return;
 	}
 
+	// Debug-only trace of the seeded root + spanning-tree enumeration. Compiles
+	// to a no-op in release builds. Each line is prefixed with [PickRootAndOrderWithSeed]
+	// so the full transfer-order decision chain can be grep'ed out of stderr.
+	// Snapshot table-id -> name NOW, because table_operator_manager.table_operators
+	// gets erased as we attach each table to the spanning tree; subsequent calls
+	// to GetTableOperator(parent_id) would return nullptr.
+	unordered_map<idx_t, string> name_by_id;
+	for (auto &entry : table_operator_manager.table_operators) {
+		name_by_id.emplace(entry.first, GetName(entry.second));
+	}
+	auto LookupName = [&](idx_t id) -> const char * {
+		auto it = name_by_id.find(id);
+		return it == name_by_id.end() ? "Unknown" : it->second.c_str();
+	};
+	DEBUG_LOG("[PickRootAndOrderWithSeed] seed=%llu num_tables=%zu\n",
+	          static_cast<unsigned long long>(seed),
+	          table_operator_manager.table_operators.size());
+
 	// This decreasing counter is used to hand out distinct cardinality_order values to each GraphNode 	
 	// The meaning of the cardinality_order is "which end of this edge is the parent in the spanning tree"
 	// "Parent" means "added to the tree earlier" and "child" means "added to the tree later"
@@ -767,6 +786,9 @@ void TransferGraphManager::THCRootAndTransferGraph(uint64_t &seed) {
 	// 2. Root pick over the full deterministic candidate list.
 	size_t root_idx = PickMod(all_ids.size());
 	idx_t root = all_ids[root_idx];
+
+	DEBUG_LOG("[PickRootAndOrderWithSeed] root=%s (table_index=%zu, candidate_idx=%zu/%zu)\n",
+	          LookupName(root), static_cast<size_t>(root), root_idx, all_ids.size());
 
 	transfer_order.push_back(table_operator_manager.GetTableOperator(root));
 	table_operator_manager.table_operators.erase(root);
@@ -826,6 +848,12 @@ void TransferGraphManager::THCRootAndTransferGraph(uint64_t &seed) {
 			size_t p_idx = PickMod(parents.size());
 			idx_t parent = parents[p_idx];
 
+			DEBUG_LOG("[PickRootAndOrderWithSeed] step=%zu attach child=%s (table_index=%zu, "
+			          "neighbor_idx=%zu/%zu) <- parent=%s (table_index=%zu, parent_idx=%zu/%zu)\n",
+			          constructed_set.size(),
+			          LookupName(t), static_cast<size_t>(t), idx, neighbors.size(),
+			          LookupName(parent), static_cast<size_t>(parent), p_idx, parents.size());
+
 			auto &edge = neighbor_matrix[parent][t];
 			selected_edges.emplace_back(std::move(edge));
 
@@ -852,6 +880,11 @@ void TransferGraphManager::THCRootAndTransferGraph(uint64_t &seed) {
 			size_t new_root_idx = PickMod(remaining.size());
 			idx_t new_root = remaining[new_root_idx];
 
+			DEBUG_LOG("[PickRootAndOrderWithSeed] step=%zu disconnected-component new_root=%s "
+			          "(table_index=%zu, candidate_idx=%zu/%zu)\n",
+			          constructed_set.size(),
+			          LookupName(new_root), static_cast<size_t>(new_root), new_root_idx, remaining.size());
+
 			transfer_order.push_back(table_operator_manager.GetTableOperator(new_root));
 			table_operator_manager.table_operators.erase(new_root);
 			RegisterLeaders(new_root);
@@ -859,6 +892,18 @@ void TransferGraphManager::THCRootAndTransferGraph(uint64_t &seed) {
 			constructed_set.insert(new_root);
 			unconstructed_set.erase(new_root);
 		}
+	}
+
+	// Final summary so the full order is visible on one block without having
+	// to stitch the per-step lines back together. Iterates over transfer_order
+	// (which holds the LogicalOperator* directly and therefore remains valid
+	// after the table_operators erases above).
+	DEBUG_LOG("[PickRootAndOrderWithSeed] done. transfer_order size=%zu\n", transfer_order.size());
+	for (size_t i = 0; i < transfer_order.size(); ++i) {
+		auto *op = transfer_order[i];
+		idx_t tid = TableOperatorManager::GetScalarTableIndex(op);
+		DEBUG_LOG("[PickRootAndOrderWithSeed]   [%zu] %s (table_index=%zu)\n",
+		          i, op ? GetName(op).c_str() : "<null>", static_cast<size_t>(tid));
 	}
 }
 
@@ -983,7 +1028,7 @@ void TransferGraphManager::CreateTransferPlanUpdated() {
 //! pipeline expects the full set to still be available after planning.
 void TransferGraphManager::CreateTransferPlanSeeded(uint64_t seed) {
 	auto saved_nodes = table_operator_manager.table_operators;
-	THCRootAndTransferGraph(seed);
+	PickRootAndOrderWithSeed(seed);
 	table_operator_manager.table_operators = saved_nodes;
 
 	for (auto &edge : selected_edges) {

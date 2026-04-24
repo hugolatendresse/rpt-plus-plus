@@ -12,6 +12,7 @@
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/storage/temporary_memory_manager.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
+#include "duckdb/main/client_config.hpp"
 
 namespace duckdb {
 
@@ -195,9 +196,18 @@ public:
 	unique_ptr<TemporaryMemoryState> temporary_memory_state;
 };
 
+// Decide to not create a Bloom Filter at runtime based on selectivity, size, and current memory usage
 bool PhysicalCreateBF::GiveUpBFCreation(const DataChunk &chunk, OperatorSinkInput &input) const {
 	auto &lstate = input.local_state.Cast<CreateBFLocalSinkState>();
 	auto &gstate = input.global_state.Cast<CreateBFGlobalSinkState>();
+
+	// When the client has opted out of runtime BF dropping, skip all
+	// give-up branches below so that every BF scheduled by RPT+ is built to
+	// completion regardless of observed selectivity or memory pressure.
+	// Intended for benchmarking / A-B comparisons against the heuristic behavior.
+	if (ClientConfig::GetConfig(gstate.context).disable_bf_dropping) {
+		return false;
+	}
 
 	// Stop: OOM
 	if (lstate.local_data->AllocationSize() + chunk.GetAllocationSize() >=
