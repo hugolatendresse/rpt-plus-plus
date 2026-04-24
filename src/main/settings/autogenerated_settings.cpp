@@ -585,6 +585,23 @@ Value DisableBfDroppingSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// Create BF For All Tables
+//===----------------------------------------------------------------------===//
+void CreateBfForAllTablesSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.create_bf_for_all_tables = input.GetValue<bool>();
+}
+
+void CreateBfForAllTablesSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).create_bf_for_all_tables = ClientConfig().create_bf_for_all_tables;
+}
+
+Value CreateBfForAllTablesSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.create_bf_for_all_tables);
+}
+
+//===----------------------------------------------------------------------===//
 // Disable Perfect Hashing
 //===----------------------------------------------------------------------===//
 void DisablePerfectHashingSetting::SetLocal(ClientContext &context, const Value &input) {

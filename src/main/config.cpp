@@ -111,6 +111,7 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_LOCAL(RptForwardOnlySetting),
     DUCKDB_LOCAL(DisableRptSetting),
 	DUCKDB_LOCAL(DisableBfDroppingSetting),
+	DUCKDB_LOCAL(CreateBfForAllTablesSetting),
 	DUCKDB_LOCAL(DisablePerfectHashingSetting),
 	DUCKDB_LOCAL(DisableTieredHashCacheSetting),
 	DUCKDB_LOCAL(UseSeededTransferOrderSetting),

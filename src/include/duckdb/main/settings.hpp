@@ -599,6 +599,19 @@ struct DisableBfDroppingSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct CreateBfForAllTablesSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "create_bf_for_all_tables";
+	static constexpr const char *Description =
+	    "When enabled, RPT+ CreateBloomFilterPlan builds a Bloom Filter for every base table in the "
+	    "transfer graph, even when the table has no local filter and no incoming BF to use (bypasses "
+	    "the HasAnyFilter gate).";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct DisablePerfectHashingSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "disable_perfect_hashing";

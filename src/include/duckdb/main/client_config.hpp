@@ -90,6 +90,15 @@ struct ClientConfig {
 	//! the runtime heuristics; may increase memory use and slow queries when the
 	//! heuristics would otherwise have correctly discarded a useless BF.
 	bool disable_bf_dropping = false;
+	//! When true, `CreateBloomFilterPlan` creates a Bloom Filter for every base
+	//! table that participates in the transfer graph, bypassing the
+	//! `HasAnyFilter` gate that normally suppresses BF creation on tables that
+	//! have neither a local filter nor an incoming BF to use. This lets
+	//! otherwise "useless" full-column BFs still be built -- useful for
+	//! benchmarking / THC experiments where we want a BF attached to every
+	//! base table independent of local predicates or transfer-order position.
+	//! Default false matches the RPT+ paper behavior.
+	bool create_bf_for_all_tables = false;
 	//! Transfer-order mode used by predicate transfer.
 	//! False (default): RPT+ transfer order via LargestRootUpdated (paper behavior).
 	//! True:            THC transfer order via THCRootAndTransferGraph, driven by
