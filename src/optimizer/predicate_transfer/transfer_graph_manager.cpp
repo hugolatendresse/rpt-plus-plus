@@ -10,7 +10,6 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 
 #include <algorithm>
-#include <cstring>
 #include <queue>
 
 namespace duckdb {
@@ -681,6 +680,11 @@ void TransferGraphManager::LargestRootUpdated(vector<LogicalOperator *> &sorted_
 //!     from the remaining unconstructed tables when no neighbor has an edge
 //!     into the constructed set. Callers therefore do not need an outer
 //!     `while (!empty)` loop.
+//!   - Does NOT erase placed tables from table_operator_manager.table_operators.
+//!     LargestRootUpdated uses that erasure as its "what's left" set, which is
+//!     why CreateTransferPlanUpdated needs a save/restore dance around it.
+//!     This function tracks its own constructed_set / unconstructed_set, so the
+//!     erasure is unnecessary and CreateTransferPlanSeeded can skip the dance.
 //!
 //! The `cardinality_order` assignment mirrors LargestRootUpdated: every table
 //! first receives a distinct initial value during the init loop, and each
@@ -724,33 +728,22 @@ void TransferGraphManager::PickRootAndOrderWithSeed(uint64_t &seed) {
 		return;
 	}
 
-	// Snapshot table-id -> name NOW, because table_operator_manager.table_operators
-	// gets erased as we attach each table to the spanning tree; subsequent calls
-	// to GetTableOperator(id) for already-placed tables would return nullptr.
-	// This snapshot backs both LessByName (used to sort deterministically) and
-	// LookupName (used for DEBUG_LOG trace output). Without the snapshot, the
-	// `parents` sort later in this function would call GetName on nullptr for
-	// already-attached parents and segfault.
-	unordered_map<idx_t, string> name_by_id;
-	for (auto &entry : table_operator_manager.table_operators) {
-		name_by_id.emplace(entry.first, GetName(entry.second));
-	}
-	auto LookupName = [&](idx_t id) -> const char * {
-		auto it = name_by_id.find(id);
-		return it == name_by_id.end() ? "Unknown" : it->second.c_str();
-	};
-
 	// Order by (name, table_index). The table_index tiebreaker guarantees a
 	// total order even when multiple operators share the same displayed name
-	// (e.g. two scans of the same physical table). Uses the `name_by_id`
-	// snapshot above so it stays valid after tables have been erased from
-	// table_operator_manager.table_operators.
+	// (e.g. two scans of the same physical table). Unlike LargestRootUpdated,
+	// this function does NOT erase entries from table_operator_manager.table_operators
+	// as tables are attached; its own constructed_set / unconstructed_set tracks
+	// progress, and handling disconnected components is done internally (see
+	// the `else` branch below). That means GetTableOperator(id) stays valid
+	// for every id for the entire lifetime of the function, and we can call
+	// it directly from the comparator without any snapshot.
 	auto LessByName = [&](idx_t a, idx_t b) {
-		const char *name_a = LookupName(a);
-		const char *name_b = LookupName(b);
-		int cmp = std::strcmp(name_a, name_b);
-		if (cmp != 0) {
-			return cmp < 0;
+		auto *op_a = table_operator_manager.GetTableOperator(a);
+		auto *op_b = table_operator_manager.GetTableOperator(b);
+		auto name_a = GetName(op_a);
+		auto name_b = GetName(op_b);
+		if (name_a != name_b) {
+			return name_a < name_b;
 		}
 		return a < b;
 	};
@@ -798,10 +791,10 @@ void TransferGraphManager::PickRootAndOrderWithSeed(uint64_t &seed) {
 	idx_t root = all_ids[root_idx];
 
 	DEBUG_LOG("[PickRootAndOrderWithSeed] root=%s (table_index=%zu, candidate_idx=%zu/%zu)\n",
-	          LookupName(root), static_cast<size_t>(root), root_idx, all_ids.size());
+	          GetName(table_operator_manager.GetTableOperator(root)).c_str(),
+	          static_cast<size_t>(root), root_idx, all_ids.size());
 
 	transfer_order.push_back(table_operator_manager.GetTableOperator(root));
-	table_operator_manager.table_operators.erase(root);
 	constructed_set.insert(root);
 	unconstructed_set.erase(root);
 	RegisterLeaders(root);
@@ -861,8 +854,10 @@ void TransferGraphManager::PickRootAndOrderWithSeed(uint64_t &seed) {
 			DEBUG_LOG("[PickRootAndOrderWithSeed] step=%zu attach child=%s (table_index=%zu, "
 			          "neighbor_idx=%zu/%zu) <- parent=%s (table_index=%zu, parent_idx=%zu/%zu)\n",
 			          constructed_set.size(),
-			          LookupName(t), static_cast<size_t>(t), idx, neighbors.size(),
-			          LookupName(parent), static_cast<size_t>(parent), p_idx, parents.size());
+			          GetName(table_operator_manager.GetTableOperator(t)).c_str(),
+			          static_cast<size_t>(t), idx, neighbors.size(),
+			          GetName(table_operator_manager.GetTableOperator(parent)).c_str(),
+			          static_cast<size_t>(parent), p_idx, parents.size());
 
 			auto &edge = neighbor_matrix[parent][t];
 			selected_edges.emplace_back(std::move(edge));
@@ -871,7 +866,6 @@ void TransferGraphManager::PickRootAndOrderWithSeed(uint64_t &seed) {
 			node->cardinality_order = prior_flag--;
 
 			transfer_order.push_back(table_operator_manager.GetTableOperator(t));
-			table_operator_manager.table_operators.erase(t);
 			RegisterLeaders(t);
 
 			constructed_set.insert(t);
@@ -893,10 +887,10 @@ void TransferGraphManager::PickRootAndOrderWithSeed(uint64_t &seed) {
 			DEBUG_LOG("[PickRootAndOrderWithSeed] step=%zu disconnected-component new_root=%s "
 			          "(table_index=%zu, candidate_idx=%zu/%zu)\n",
 			          constructed_set.size(),
-			          LookupName(new_root), static_cast<size_t>(new_root), new_root_idx, remaining.size());
+			          GetName(table_operator_manager.GetTableOperator(new_root)).c_str(),
+			          static_cast<size_t>(new_root), new_root_idx, remaining.size());
 
 			transfer_order.push_back(table_operator_manager.GetTableOperator(new_root));
-			table_operator_manager.table_operators.erase(new_root);
 			RegisterLeaders(new_root);
 
 			constructed_set.insert(new_root);
@@ -905,9 +899,7 @@ void TransferGraphManager::PickRootAndOrderWithSeed(uint64_t &seed) {
 	}
 
 	// Final summary so the full order is visible on one block without having
-	// to stitch the per-step lines back together. Iterates over transfer_order
-	// (which holds the LogicalOperator* directly and therefore remains valid
-	// after the table_operators erases above).
+	// to stitch the per-step lines back together.
 	DEBUG_LOG("[PickRootAndOrderWithSeed] done. transfer_order size=%zu\n", transfer_order.size());
 	for (size_t i = 0; i < transfer_order.size(); ++i) {
 		auto *op = transfer_order[i];
@@ -1028,18 +1020,16 @@ void TransferGraphManager::CreateTransferPlanUpdated() {
 }
 
 //! Seed-driven counterpart of CreateTransferPlanUpdated: delegates the
-//! root/spanning-tree selection to THCRootAndTransferGraph (which already
+//! root/spanning-tree selection to PickRootAndOrderWithSeed (which already
 //! handles disconnected components internally) and then runs the same
 //! forward/backward edge-wiring pass as CreateTransferPlanUpdated.
 //!
-//! The save/restore of table_operators around the builder call is required
-//! because THCRootAndTransferGraph (like LargestRootUpdated) erases tables
-//! from table_operator_manager.table_operators as they are placed; the outer
-//! pipeline expects the full set to still be available after planning.
+//! Unlike CreateTransferPlanUpdated, no save/restore of table_operators is
+//! required: PickRootAndOrderWithSeed tracks its own constructed/unconstructed
+//! sets and never erases from table_operator_manager.table_operators, so the
+//! map is already intact when we reach the edge-wiring pass below.
 void TransferGraphManager::CreateTransferPlanSeeded(uint64_t seed) {
-	auto saved_nodes = table_operator_manager.table_operators;
 	PickRootAndOrderWithSeed(seed);
-	table_operator_manager.table_operators = saved_nodes;
 
 	for (auto &edge : selected_edges) {
 		if (!edge) {
