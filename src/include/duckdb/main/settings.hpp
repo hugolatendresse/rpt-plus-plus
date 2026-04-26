@@ -601,7 +601,7 @@ struct DisableBfDroppingSetting {
 
 struct CreateBfForAllTablesSetting {
 	using RETURN_TYPE = bool;
-	static constexpr const char *Name = "create_bf_for_all_tables";
+	static constexpr const char *Name = "skip_unfiltered_tables_create_bf_plan";
 	static constexpr const char *Description =
 	    "When enabled, RPT+ CreateBloomFilterPlan builds a Bloom Filter for every base table in the "
 	    "transfer graph, even when the table has no local filter and no incoming BF to use (bypasses "
@@ -632,11 +632,24 @@ struct DisableTieredHashCacheSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct UseSeededRootSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "use_seeded_root";
+	static constexpr const char *Description =
+	    "When enabled, the predicate-transfer spanning tree's root is picked via the seed instead of "
+	    "the RPT+ largest filtered/intermediate heuristic";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct UseSeededTransferOrderSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "use_seeded_transfer_order";
 	static constexpr const char *Description =
-	    "When enabled, use THC transfer-order enumeration instead of the default RPT+ order";
+	    "When enabled, every non-root node of the predicate-transfer spanning tree is picked via the "
+	    "seed instead of the RPT+ greedy cardinality-driven FindEdge heuristic";
 	static constexpr const char *InputType = "BOOLEAN";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
@@ -655,7 +668,7 @@ struct ThcTransferGraphSeedSetting {
 
 struct SkipUnfilteredTablesSetting {
 	using RETURN_TYPE = bool;
-	static constexpr const char *Name = "skip_unfiltered_tables";
+	static constexpr const char *Name = "skip_unfiltered_tables_graph_creation";
 	static constexpr const char *Description =
 	    "When enabled, skip transfer-graph generation from unfiltered tables";
 	static constexpr const char *InputType = "BOOLEAN";

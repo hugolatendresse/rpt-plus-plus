@@ -90,27 +90,44 @@ struct ClientConfig {
 	//! the runtime heuristics; may increase memory use and slow queries when the
 	//! heuristics would otherwise have correctly discarded a useless BF.
 	bool disable_bf_dropping = false;
-	//! When true, `CreateBloomFilterPlan` creates a Bloom Filter for every base
+	//! When false, `CreateBloomFilterPlan` creates a Bloom Filter for every base
 	//! table that participates in the transfer graph, bypassing the
 	//! `HasAnyFilter` gate that normally suppresses BF creation on tables that
 	//! have neither a local filter nor an incoming BF to use. This lets
 	//! otherwise "useless" full-column BFs still be built -- useful for
 	//! benchmarking / THC experiments where we want a BF attached to every
 	//! base table independent of local predicates or transfer-order position.
-	//! Default false matches the RPT+ paper behavior.
-	bool create_bf_for_all_tables = false;
-	//! Transfer-order mode used by predicate transfer.
-	//! False (default): RPT+ transfer order via LargestRootUpdated (paper behavior).
-	//! True:            THC transfer order via THCRootAndTransferGraph, driven by
-	//!                  transfer_graph_seed for deterministic enumeration.
-	bool use_seeded_transfer_order = false;
-	//! Seed driving THCRootAndTransferGraph. Only consulted when
-	//! use_seeded_transfer_order is true. Seed = 0 is a valid value and
-	//! will deterministically pick the first option at each step. // TODO shouldn't we use a hash at each step???
-	idx_t transfer_graph_seed = 0;
+	//! Default true matches the RPT+ paper behavior.
+	bool skip_unfiltered_tables_create_bf_plan = true;
 	//! Whether SkipUnfilteredTable is executed during transfer-graph
 	//! construction. True matches the RPT+ paper / current behavior.
-	bool skip_unfiltered_tables = false;
+	bool skip_unfiltered_tables_graph_creation = true;
+	//! Controls how the ROOT of the predicate-transfer spanning tree is picked.
+	//! False (default): RPT+ behavior -- the root is the largest filtered or
+	//!                  intermediate table (LargestRootUpdated path), falling
+	//!                  back to the largest table if none qualifies.
+	//! True:            seed-driven pick over a deterministic name-sorted list
+	//!                  of all candidate tables (any table can be the root,
+	//!                  including unfiltered ones).
+	//! Independent of `use_seeded_transfer_order`; both flags can be combined.
+	bool use_seeded_root = false;
+	//! Controls how every NON-ROOT node of the predicate-transfer spanning tree
+	//! is picked.
+	//! False (default): RPT+ behavior -- greedy cardinality-driven pick via
+	//!                  FindEdge (the unconstructed table with the highest
+	//!                  estimated cardinality reachable from the constructed
+	//!                  set).
+	//! True:            seed-driven pick over a deterministic name-sorted list
+	//!                  of reachable unconstructed tables; the parent inside
+	//!                  the constructed set is also picked via the seed.
+	//! Independent of `use_seeded_root`; both flags can be combined.
+	bool use_seeded_transfer_order = false;
+	//! Seed used for any seed-driven pick during transfer-graph construction.
+	//! Consulted whenever `use_seeded_root` or `use_seeded_transfer_order` is
+	//! true (otherwise ignored). Seed = 0 is a valid value and will
+	//! deterministically pick the first option at each step. The seed is
+	//! advanced via MurmurHash64 after every pick that consumes it. // TODO shouldn't we use a hash at each step???
+	idx_t transfer_graph_seed = 0;
 	//! Controls the cost-based build/probe side swap performed by
 	//! BuildProbeSideOptimizer::TryFlipJoinChildren. When false, that
 	//! optimizer leaves the (left=probe, right=build) assignment that

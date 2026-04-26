@@ -102,16 +102,26 @@ public:
 private:
 	void ExtractEdgesInfo(const vector<reference<LogicalOperator>> &join_operators);
 	void CreateOriginTransferPlan();
-	void CreateTransferPlanUpdated();
-	void CreateTransferPlanSeeded(uint64_t seed);
 	void LargestRoot(vector<LogicalOperator *> &sorted_nodes);
-	void LargestRootUpdated(vector<LogicalOperator *> &sorted_nodes);
-	//! Seed-driven alternative to LargestRootUpdated that builds the full
-	//! transfer graph (across all connected components) in one pass.
-	//! Root and neighbor picks are deterministic given the seed; seed is
-	//! advanced via MurmurHash64 after each pick so callers passing the same
-	//! initial seed always get the same transfer order.
-	void PickRootAndOrderWithSeed(uint64_t &seed);
+	//! Build the predicate-transfer spanning tree using configurable strategies
+	//! for root selection and tree growth, then run the forward/backward
+	//! edge-wiring pass shared by every strategy combination.
+	//! - `seeded_root` toggles between the RPT+ "largest filtered/intermediate"
+	//!   root pick and the seed-driven pick over a deterministic candidate
+	//!   list.
+	//! - `seeded_growth` toggles between the RPT+ greedy `FindEdge` neighbor
+	//!   pick and the seed-driven neighbor + parent pick.
+	//! - `seed` is consulted only when at least one of the two strategies is
+	//!   seeded; the value is advanced via MurmurHash64 after each pick so
+	//!   the same initial seed reproduces the same transfer order across runs.
+	//! Disconnected components are handled inline: if no edge into the
+	//! constructed set remains, a fresh root is picked from the leftovers
+	//! using the same root strategy.
+	void CreateTransferPlan(bool seeded_root, bool seeded_growth, uint64_t seed);
+	//! Apply the spanning tree (already populated in `selected_edges`,
+	//! `transfer_graph` and `transfer_order`) to wire the per-node forward
+	//! and backward Bloom-filter edges. Shared between every strategy combo.
+	void WireTransferGraph();
 
 	pair<idx_t, idx_t> FindEdge(const unordered_set<idx_t> &constructed_set,
 	                            const unordered_set<idx_t> &unconstructed_set);

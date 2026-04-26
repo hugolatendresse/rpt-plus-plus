@@ -589,16 +589,16 @@ Value DisableBfDroppingSetting::GetSetting(const ClientContext &context) {
 //===----------------------------------------------------------------------===//
 void CreateBfForAllTablesSetting::SetLocal(ClientContext &context, const Value &input) {
 	auto &config = ClientConfig::GetConfig(context);
-	config.create_bf_for_all_tables = input.GetValue<bool>();
+	config.skip_unfiltered_tables_create_bf_plan = input.GetValue<bool>();
 }
 
 void CreateBfForAllTablesSetting::ResetLocal(ClientContext &context) {
-	ClientConfig::GetConfig(context).create_bf_for_all_tables = ClientConfig().create_bf_for_all_tables;
+	ClientConfig::GetConfig(context).skip_unfiltered_tables_create_bf_plan = ClientConfig().skip_unfiltered_tables_create_bf_plan;
 }
 
 Value CreateBfForAllTablesSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
-	return Value::BOOLEAN(config.create_bf_for_all_tables);
+	return Value::BOOLEAN(config.skip_unfiltered_tables_create_bf_plan);
 }
 
 //===----------------------------------------------------------------------===//
@@ -633,6 +633,23 @@ void DisableTieredHashCacheSetting::ResetLocal(ClientContext &context) {
 Value DisableTieredHashCacheSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
 	return Value::BOOLEAN(config.disable_tiered_hash_cache);
+}
+
+//===----------------------------------------------------------------------===//
+// Use Seeded Root
+//===----------------------------------------------------------------------===//
+void UseSeededRootSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.use_seeded_root = input.GetValue<bool>();
+}
+
+void UseSeededRootSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).use_seeded_root = ClientConfig().use_seeded_root;
+}
+
+Value UseSeededRootSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.use_seeded_root);
 }
 
 //===----------------------------------------------------------------------===//
@@ -674,16 +691,16 @@ Value ThcTransferGraphSeedSetting::GetSetting(const ClientContext &context) {
 //===----------------------------------------------------------------------===//
 void SkipUnfilteredTablesSetting::SetLocal(ClientContext &context, const Value &input) {
 	auto &config = ClientConfig::GetConfig(context);
-	config.skip_unfiltered_tables = input.GetValue<bool>();
+	config.skip_unfiltered_tables_graph_creation = input.GetValue<bool>();
 }
 
 void SkipUnfilteredTablesSetting::ResetLocal(ClientContext &context) {
-	ClientConfig::GetConfig(context).skip_unfiltered_tables = ClientConfig().skip_unfiltered_tables;
+	ClientConfig::GetConfig(context).skip_unfiltered_tables_graph_creation = ClientConfig().skip_unfiltered_tables_graph_creation;
 }
 
 Value SkipUnfilteredTablesSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
-	return Value::BOOLEAN(config.skip_unfiltered_tables);
+	return Value::BOOLEAN(config.skip_unfiltered_tables_graph_creation);
 }
 
 //===----------------------------------------------------------------------===//

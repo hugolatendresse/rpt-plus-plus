@@ -114,6 +114,7 @@ static const ConfigurationOption internal_options[] = {
 	DUCKDB_LOCAL(CreateBfForAllTablesSetting),
 	DUCKDB_LOCAL(DisablePerfectHashingSetting),
 	DUCKDB_LOCAL(DisableTieredHashCacheSetting),
+	DUCKDB_LOCAL(UseSeededRootSetting),
 	DUCKDB_LOCAL(UseSeededTransferOrderSetting),
 	DUCKDB_LOCAL(ThcTransferGraphSeedSetting),
 	DUCKDB_LOCAL(SkipUnfilteredTablesSetting),
