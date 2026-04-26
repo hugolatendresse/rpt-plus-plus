@@ -117,7 +117,8 @@ private:
 	//! Disconnected components are handled inline: if no edge into the
 	//! constructed set remains, a fresh root is picked from the leftovers
 	//! using the same root strategy.
-	void CreateTransferPlan(bool seeded_root, bool seeded_growth, uint64_t seed);
+	void CreateTransferPlanSPY(bool seeded_root, bool seeded_growth, uint64_t seed);
+	// TODO get RPT+ CreateTransferPlanUpdated and make sure that results are the same when settings are supposed to reproduce RPT+
 	//! Apply the spanning tree (already populated in `selected_edges`,
 	//! `transfer_graph` and `transfer_order`) to wire the per-node forward
 	//! and backward Bloom-filter edges. Shared between every strategy combo.

@@ -92,7 +92,7 @@ bool TransferGraphManager::Build(LogicalOperator &plan) {
 	//    `transfer_graph_seed` is consulted only when at least one of the
 	//    two strategies is seeded. The seed value itself (including 0) only
 	//    affects which plan is enumerated; it is never random.
-	CreateTransferPlan(cfg.use_seeded_root, cfg.use_seeded_transfer_order, cfg.transfer_graph_seed);
+	CreateTransferPlanSPY(cfg.use_seeded_root, cfg.use_seeded_transfer_order, cfg.transfer_graph_seed);
 
 	return true;
 }
@@ -614,7 +614,7 @@ void TransferGraphManager::LargestRoot(vector<LogicalOperator *> &sorted_nodes) 
 //!   - For every recorded edge, parent.cardinality_order > child.cardinality_order
 //!     because the parent was placed first. The "smaller table on the left"
 //!     swap in WireTransferGraph relies on this strict ordering.
-void TransferGraphManager::CreateTransferPlan(bool seeded_root, bool seeded_growth, uint64_t seed) {
+void TransferGraphManager::CreateTransferPlanSPY(bool seeded_root, bool seeded_growth, uint64_t seed) {
 	if (table_operator_manager.table_operators.empty()) {
 		return;
 	}
