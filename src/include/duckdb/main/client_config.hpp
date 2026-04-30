@@ -81,7 +81,7 @@ struct ClientConfig {
 	bool disable_rpt = false;
 	//! When true, skip initializing the tiered hash cache
 	bool disable_tiered_hash_cache = false;
-	//! When true, PhysicalCreateBF never gives up constructing a bloom filter based on
+	//! When false, PhysicalCreateBF never gives up constructing a bloom filter based on
 	//! observed selectivity or estimated/actual memory pressure. All three give-up
 	//! branches in PhysicalCreateBF::GiveUpBFCreation (OOM against the temp-memory
 	//! reservation, unselective base-table pipeline, and projected OOM) are bypassed,
@@ -89,7 +89,7 @@ struct ClientConfig {
 	//! benchmarking / A-B comparisons where we want the BF set to be independent of
 	//! the runtime heuristics; may increase memory use and slow queries when the
 	//! heuristics would otherwise have correctly discarded a useless BF.
-	bool disable_bf_dropping = false;
+	bool drop_bf_at_runtime = true;
 	//! When false, `CreateBloomFilterPlan` creates a Bloom Filter for every base
 	//! table that participates in the transfer graph, bypassing the
 	//! `HasAnyFilter` gate that normally suppresses BF creation on tables that
@@ -171,7 +171,9 @@ struct ClientConfig {
 	//! "build_count" is during hash table build
 	//! "probe_sample" is during the first cycle of probing
 	//! "ht_sample" is between building and probing
-	std::string thc_mu_s_method = "build_count"; // TODO we are now incurring a cost on every single build. Other methods are less precise but could be done only if we are to use a THC
+	std::string thc_mu_s_method =
+	    "build_count"; // TODO we are now incurring a cost on every single build. Other methods are less precise but
+	                   // could be done only if we are to use a THC
 	//! When true, log mu_s estimates to stderr (works in both debug and release builds).
 	bool thc_log_mu_s = false;
 	//! Minimum estimated mu_{S->R} to keep THC active after the first cycle.

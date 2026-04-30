@@ -25,10 +25,10 @@ SET pin_threads = 'on';
 
 -- Optimizer
 SET transfer_graph_seed = 0;
-SET use_seeded_root = true;
+SET use_seeded_root = false;
 SET use_seeded_transfer_order = true;
 SET join_order_mode = 'seeded_left_deep';
 SET allow_build_probe_side_swap = false;
 SET skip_unfiltered_tables_create_bf_plan = false; -- Run RPT+ logic to not create BF for tables with filters (during CreateBloomFilterPlan)
 SET skip_unfiltered_tables_graph_creation = false; -- Same as above but during TransferGraphCreation
-SET disable_bf_dropping = true; -- Don't give up BF creation at runtime due to selectivity or memory usage
+SET drop_bf_at_runtime = false; -- Give up BF creation at runtime due to selectivity or memory usage

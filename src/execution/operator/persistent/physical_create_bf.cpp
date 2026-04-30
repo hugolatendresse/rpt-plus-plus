@@ -212,7 +212,7 @@ bool PhysicalCreateBF::GiveUpBFCreation(const DataChunk &chunk, OperatorSinkInpu
 	// give-up branches below so that every BF scheduled by RPT+ is built to
 	// completion regardless of observed selectivity or memory pressure.
 	// Intended for benchmarking / A-B comparisons against the heuristic behavior.
-	if (ClientConfig::GetConfig(gstate.context).disable_bf_dropping) {
+	if (!ClientConfig::GetConfig(gstate.context).drop_bf_at_runtime) {
 		return false;
 	}
 
