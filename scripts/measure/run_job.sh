@@ -6,6 +6,7 @@ set -euo pipefail
 
 CASE=""
 JOB_QUERY=""
+SEED=""
 USE_PERF=false
 USE_DEBUG=false
 USE_DUCKDB_PROFILING=false
@@ -18,6 +19,7 @@ Usage: scripts/measure/run_job.sh --case <1|2|3|4> [options]
 Options:
   --case <1|2|3|4>      Optimizer case (required)
   --job-query <id>      Run one JOB query (e.g. 10a, 24a, or 10a.sql)
+  --seed <int>          Override transfer_graph_seed from settings-common.sql
   --perf                Run query/queries under perf stat
   --debug               Use debug build (build/debug/duckdb)
   --duckdb-profiling    Enable DuckDB JSON profiling, output to job_results.json
@@ -29,6 +31,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --case) CASE="$2"; shift 2 ;;
         --job-query) JOB_QUERY="$2"; shift 2 ;;
+        --seed) SEED="$2"; shift 2 ;;
         --perf) USE_PERF=true; shift ;;
         --debug) USE_DEBUG=true; shift ;;
         --duckdb-profiling) USE_DUCKDB_PROFILING=true; shift ;;
@@ -58,6 +61,15 @@ SET disable_tiered_hash_cache = true;" ;;
     4) CASE_SETTINGS="SET disable_tiered_hash_cache = true;" ;;
     *) echo "Error: --case must be 1, 2, 3, or 4 (got: $CASE)" >&2; exit 1 ;;
 esac
+
+SEED_SETTING=""
+if [[ -n "$SEED" ]]; then
+    if ! [[ "$SEED" =~ ^[0-9]+$ ]]; then
+        echo "Error: --seed must be a non-negative integer (got: $SEED)" >&2
+        exit 1
+    fi
+    SEED_SETTING="SET transfer_graph_seed = ${SEED};"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -113,6 +125,7 @@ run_query() {
             grep '^SET ' "$COMMON_SETTINGS_SQL" || true
             grep '^SET ' "$RUN_SETTINGS_SQL" || true
             printf '%s\n' "$CASE_SETTINGS"
+            if [[ -n "$SEED_SETTING" ]]; then printf '%s\n' "$SEED_SETTING"; fi
             cat "$query_file"
         } | sudo perf stat -e "$PERF_EVENTS" -- "$DUCKDB_BIN" "$DB_FILE"
     else
@@ -121,6 +134,7 @@ run_query() {
             grep '^SET ' "$COMMON_SETTINGS_SQL" || true
             grep '^SET ' "$RUN_SETTINGS_SQL" || true
             printf '%s\n' "$CASE_SETTINGS"
+            if [[ -n "$SEED_SETTING" ]]; then printf '%s\n' "$SEED_SETTING"; fi
             cat "$query_file"
         } | "$DUCKDB_BIN" "$DB_FILE"
     fi
