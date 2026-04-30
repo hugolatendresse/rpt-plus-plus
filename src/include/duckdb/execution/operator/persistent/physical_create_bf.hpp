@@ -32,7 +32,13 @@ public:
 	// TODO: we may need to remove the mutable usage.
 	bool is_probing_side;
 	mutable atomic<bool> is_successful;
-	shared_ptr<Pipeline> this_pipeline;
+	// Cached producer Pipeline for intra-execute reuse only. Stored as weak_ptr
+	// so the operator does not keep the Pipeline alive past its Executor's
+	// lifetime: each EXECUTE builds a fresh Executor, and any strong refs are
+	// held by the per-execute MetaPipeline tree and Executor::pipelines. When
+	// the previous Executor dies between executes, this weak_ptr expires and
+	// BuildPipelines transparently rebuilds the producer pipeline from scratch.
+	weak_ptr<Pipeline> this_pipeline;
 
 	vector<shared_ptr<FilterPlan>> filter_plans;
 

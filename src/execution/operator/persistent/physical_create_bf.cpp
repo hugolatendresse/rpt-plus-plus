@@ -201,6 +201,13 @@ bool PhysicalCreateBF::GiveUpBFCreation(const DataChunk &chunk, OperatorSinkInpu
 	auto &lstate = input.local_state.Cast<CreateBFLocalSinkState>();
 	auto &gstate = input.global_state.Cast<CreateBFGlobalSinkState>();
 
+	// PhysicalCreateBF lives across executes (the operator is part of the prepared plan). Hence, we can't hold
+	// a shared_ptr to the pipeline.
+	// Sink phase implies the producer Pipeline is alive (held by the Executor),
+	// so locking the weak_ptr cache always succeeds here.
+	auto pipeline = this_pipeline.lock();
+	D_ASSERT(pipeline);
+
 	// When the client has opted out of runtime BF dropping, skip all
 	// give-up branches below so that every BF scheduled by RPT+ is built to
 	// completion regardless of observed selectivity or memory pressure.
@@ -221,22 +228,22 @@ bool PhysicalCreateBF::GiveUpBFCreation(const DataChunk &chunk, OperatorSinkInpu
 		gstate.num_input_rows += static_cast<int64_t>(chunk.size());
 		gstate.total_row_size += static_cast<int64_t>(chunk.GetAllocationSize());
 
-		if (this_pipeline->num_source_chunks > 32) {
+		if (pipeline->num_source_chunks > 32) {
 			gstate.is_selectivity_checked = true;
 
 			// 0. Since one Bloom filter is already created from this table, we believe it is worthy to create the
 			// second, because the second bloom filter is only created in the backward stage and is to be distributed.
-			if (gstate.op.this_pipeline->GetSource()->type == PhysicalOperatorType::CREATE_BF) {
+			if (pipeline->GetSource()->type == PhysicalOperatorType::CREATE_BF) {
 				return false;
 			}
 
 			// 1. Check the selectivity: a high selectivity means that the base table is not filtered. It is not
 			// beneficial to build a BF on a full table.
 			ProgressData progress;
-			this_pipeline->GetProgress(progress);
+			pipeline->GetProgress(progress);
 			double progress_percent = progress.done / progress.total;
 			double input_rows = static_cast<double>(gstate.num_input_rows);
-			double source_rows = static_cast<double>(this_pipeline->num_source_chunks * STANDARD_VECTOR_SIZE);
+			double source_rows = static_cast<double>(pipeline->num_source_chunks * STANDARD_VECTOR_SIZE);
 			double selectivity = input_rows / source_rows;
 			double row_length = static_cast<double>(gstate.total_row_size) / input_rows;
 
@@ -512,17 +519,26 @@ void PhysicalCreateBF::BuildPipelinesFromRelated(Pipeline &current, MetaPipeline
 	// operator is a sink, build a pipeline
 	D_ASSERT(children.size() == 1);
 
-	if (this_pipeline == nullptr) {
-		// we create a new pipeline starting from the child
+	// this_pipeline is a weak_ptr; lock() returns null if the cache belongs to a
+	// previous Executor (already torn down) or is set for the first time. Within
+	// the same execute, the producer Pipeline is kept alive by the MetaPipeline
+	// tree and Executor::pipelines, so subsequent calls (e.g. multiple USE_BFs
+	// probing the same CREATE_BF) reuse the cached Pipeline as a dependency.
+	auto sp = this_pipeline.lock();
+	if (sp == nullptr) {
+		// First call this execute (or first ever): rebuild fresh and reset all
+		// per-execute operator state.
+		is_successful = true;
+		for (auto &pair : unique_bloom_filters) {
+			pair.second->finalized_ = false;
+		}
 		auto &child_meta_pipeline = meta_pipeline.CreateChildMetaPipeline(current, *this);
-		this_pipeline = child_meta_pipeline.GetBasePipeline();
-
-		// set pipeline flag
-		this_pipeline->is_building_bf = true;
-
+		sp = child_meta_pipeline.GetBasePipeline();
+		sp->is_building_bf = true;
+		this_pipeline = sp;
 		child_meta_pipeline.Build(children[0]);
 	} else {
-		current.AddDependency(this_pipeline);
+		current.AddDependency(sp);
 	}
 }
 
@@ -547,17 +563,28 @@ void PhysicalCreateBF::BuildPipelines(Pipeline &current, MetaPipeline &meta_pipe
 
 	// single operator: the operator becomes the data source of the current pipeline
 	state.SetPipelineSource(current, *this);
-	if (this_pipeline == nullptr) {
-		// we create a new pipeline starting from the child
+	// this_pipeline is a weak_ptr; lock() returns null if the cache belongs to a
+	// previous Executor (already torn down) or is set for the first time. Within
+	// the same execute, the producer Pipeline is kept alive by the MetaPipeline
+	// tree and Executor::pipelines, so subsequent calls (e.g. multiple USE_BFs
+	// probing the same CREATE_BF) reuse the cached Pipeline as a dependency.
+	auto sp = this_pipeline.lock();
+	if (sp == nullptr) {
+		// First call this execute (or first ever): rebuild fresh and reset all
+		// per-execute operator state. Storing as weak_ptr ensures this branch
+		// fires on every fresh Executor, mirroring how PhysicalRecursiveCTE
+		// resets recursive_meta_pipeline at the top of its BuildPipelines.
+		is_successful = true;
+		for (auto &pair : unique_bloom_filters) {
+			pair.second->finalized_ = false;
+		}
 		auto &child_meta_pipeline = meta_pipeline.CreateChildMetaPipeline(current, *this);
-		this_pipeline = child_meta_pipeline.GetBasePipeline();
-
-		// set pipeline flag
-		this_pipeline->is_building_bf = true;
-
+		sp = child_meta_pipeline.GetBasePipeline();
+		sp->is_building_bf = true;
+		this_pipeline = sp;
 		child_meta_pipeline.Build(children[0]);
 	} else {
-		current.AddDependency(this_pipeline);
+		current.AddDependency(sp);
 	}
 }
 } // namespace duckdb
