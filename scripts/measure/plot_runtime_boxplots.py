@@ -66,6 +66,9 @@ def plot_query(query, by_case, out_path):
     ax.set_ylabel("Runtime (seconds)")
     ax.set_title(f"JOB query {query}  (n_seeds = {n_seeds})")
     ax.grid(True, axis="y", linestyle=":", alpha=0.5)
+    # Anchor the y-axis at 0 so visual bar/box heights are proportional to
+    # absolute runtime instead of being truncated to the data range.
+    ax.set_ylim(bottom=0)
     fig.tight_layout()
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
