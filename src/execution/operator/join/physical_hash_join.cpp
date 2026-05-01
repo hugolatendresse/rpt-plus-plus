@@ -28,6 +28,33 @@
 
 namespace duckdb {
 
+//! Walks the physical subtree rooted at `op` and returns true if any join-style operator
+//! is reachable. Used by HashJoinGlobalSinkState to decide whether the build side of a
+//! HashJoin is fed by a base table (no joins below) or by a join intermediate.
+static bool PhysicalSubtreeContainsJoin(const PhysicalOperator &op) {
+	switch (op.type) {
+	case PhysicalOperatorType::HASH_JOIN:
+	case PhysicalOperatorType::NESTED_LOOP_JOIN:
+	case PhysicalOperatorType::BLOCKWISE_NL_JOIN:
+	case PhysicalOperatorType::PIECEWISE_MERGE_JOIN:
+	case PhysicalOperatorType::IE_JOIN:
+	case PhysicalOperatorType::ASOF_JOIN:
+	case PhysicalOperatorType::CROSS_PRODUCT:
+	case PhysicalOperatorType::LEFT_DELIM_JOIN:
+	case PhysicalOperatorType::RIGHT_DELIM_JOIN:
+	case PhysicalOperatorType::POSITIONAL_JOIN:
+		return true;
+	default:
+		break;
+	}
+	for (auto &child : op.children) {
+		if (PhysicalSubtreeContainsJoin(child.get())) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static InsertionOrderPreservingMap<string>
 GetHashJoinTimingInfo(const uint64_t build_ns, const uint64_t probe_ns, const uint64_t execute_probe_ns,
                       const uint64_t external_probe_ns, const uint64_t execute_scan_next_ns,
@@ -184,6 +211,11 @@ public:
 			}
 			global_filter_state = op.filter_pushdown->GetGlobalState(context, op);
 		}
+
+		// Phase C: THC is only worthwhile when the build side is a base table.
+		// Static plan walk gives the initial answer; future runtime-swap code
+		// must call SetBuildSourceIsBaseTable() to override before FinishEvent.
+		build_source_is_base_table = !PhysicalSubtreeContainsJoin(op.children[1].get());
 	}
 	~HashJoinGlobalSinkState() override {
 		auto probe_ns = execute_probe_time_ns.load(std::memory_order_relaxed) +
@@ -194,6 +226,10 @@ public:
 	void ScheduleFinalize(Pipeline &pipeline, Event &event);
 	void InitializeProbeSpill();
 	void EmitProbeTiming(ExecutionContext &context) const;
+
+	//! Override the build-source-is-base-table flag. Intended for a future
+	//! runtime build/probe swap mechanism (Phase D); not currently called.
+	void SetBuildSourceIsBaseTable(bool v) { build_source_is_base_table = v; }
 
 public:
 	ClientContext &context;
@@ -251,6 +287,11 @@ public:
 
 	bool skip_filter_pushdown = false;
 	unique_ptr<JoinFilterGlobalState> global_filter_state;
+
+	//! True when the physical operator feeding this HashJoin's build side
+	//! contains no join-style operator (i.e., is effectively a base table).
+	//! Read at FinishEvent time to gate THC instantiation.
+	bool build_source_is_base_table = true;
 };
 
 unique_ptr<JoinFilterLocalState> JoinFilterPushdownInfo::GetLocalState(JoinFilterGlobalState &gstate) const {
@@ -642,7 +683,11 @@ public:
 		auto &ht = *sink.hash_table;
 		PrintJoinHashTableFinalizeStats(ht);
 		sink.hash_table->GetDataCollection().VerifyEverythingPinned();
-		sink.hash_table->InitializeTieredHashCache();
+		if (sink.build_source_is_base_table) {
+			sink.hash_table->InitializeTieredHashCache();
+		} else {
+			DEBUG_LOG("[FinishEvent] Skipping THC: build source is not a base table.\n");
+		}
 		sink.hash_table->finalized = true;
 	}
 
