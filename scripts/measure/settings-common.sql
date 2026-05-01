@@ -32,3 +32,23 @@ SET allow_build_probe_side_swap = false;
 SET skip_unfiltered_tables_create_bf_plan = false; -- Run RPT+ logic to not create BF for tables with filters (during CreateBloomFilterPlan)
 SET skip_unfiltered_tables_graph_creation = false; -- Same as above but during TransferGraphCreation
 SET drop_bf_at_runtime = false; -- Give up BF creation at runtime due to selectivity or memory usage
+
+-- -- NEW OPTIMIZER
+-- SET transfer_graph_seed = 0;
+-- SET use_seeded_root = false;
+-- SET use_seeded_transfer_order = true;
+-- SET join_order_mode = 'seeded_left_deep';
+-- SET allow_build_probe_side_swap = false;
+-- SET skip_unfiltered_tables_create_bf_plan = false; -- Run RPT+ logic to not create BF for tables with filters (during CreateBloomFilterPlan)
+-- SET skip_unfiltered_tables_graph_creation = false; -- Same as above but during TransferGraphCreation
+-- SET drop_bf_at_runtime = false; -- Give up BF creation at runtime due to selectivity or memory usage
+
+-- -- OLD OPTIMIZER
+-- SET transfer_graph_seed = 0;
+-- SET use_seeded_root = false;
+-- SET use_seeded_transfer_order = false;
+-- SET join_order_mode = 'duckdb';
+-- SET allow_build_probe_side_swap = true;
+-- SET skip_unfiltered_tables_create_bf_plan = true; -- Run RPT+ logic to not create BF for tables with filters (during CreateBloomFilterPlan)
+-- SET skip_unfiltered_tables_graph_creation = true; -- Same as above but during TransferGraphCreation
+-- SET drop_bf_at_runtime = true; -- Give up BF creation at runtime due to selectivity or memory usage
