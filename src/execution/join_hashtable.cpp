@@ -910,11 +910,11 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			// stopping when the table is full or all entries are consumed.
 			idx_t new_entries_this_phase;
 			if (thc_single_threaded) {
-				new_entries_this_phase = tiered_hash_cache->InsertBatch<true>(state.collected_entries.data(),
-				                                                              state.collected_entries.size());
+				new_entries_this_phase = tiered_hash_cache->InsertBatchUnsafe(
+				    state.collected_entries.data(), state.collected_entries.size());
 			} else {
-				new_entries_this_phase = tiered_hash_cache->InsertBatch<false>(state.collected_entries.data(),
-				                                                               state.collected_entries.size());
+				new_entries_this_phase = tiered_hash_cache->InsertBatchSafe(
+				    state.collected_entries.data(), state.collected_entries.size());
 			}
 			if (tiered_hash_cache->IsFull()) {
 				DEBUG_LOG("THC has reached desired load factor - don't collect ever again.");

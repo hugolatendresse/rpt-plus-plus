@@ -290,48 +290,48 @@ public:
 
 	//! Batch-insert collected entries into the THC, stopping when the max load
 	//! factor has been achieved or all entries have been processed.
+	//! 
+	//! NOTE: there may appear to be a race here: we check the number of free slots available, 
+	//! then fill based on that number while other threads can also add to the THC. However,
+	//! since we have a max linear probe distance, extraneous entries will simply get dropped.
+	//! It is possible though that the final entry count is higher than the max_fill
+	//! attribute.
 	//!
-	//! @tparam SingleThreaded  When true, uses InsertUnsafe (no atomics) and
-	//!                         reads unsafe_fill_count to budget batches—
-	//!                         avoiding every atomic load.  When false, uses
-	//!                         the CAS-based InsertSafe and the atomic
-	//!                         GetFreeSlotsUntilMaxFilled query.
-	//! @tparam EntryT          Must expose .hash (hash_t) and .row_ptr
-	//!                         (const_data_ptr_t).
+	//! @tparam EntryT  Must expose .hash (hash_t) and .row_ptr (const_data_ptr_t).
 	//! @return Number of genuinely new entries inserted.
-	//! TODO try to unroll/optimize this
-	template <bool SingleThreaded, typename EntryT>
-	idx_t InsertBatch(const EntryT *entries, idx_t count) {
+	//! Single-threaded path: InsertUnsafe + non-atomic free-slot budgeting.
+	template <typename EntryT>
+	idx_t InsertBatchUnsafe(const EntryT *entries, idx_t count) {
 		idx_t new_entries = 0;
 		idx_t i = 0;
-
-		idx_t free_slots;
-		if constexpr (SingleThreaded) {
-			free_slots = GetFreeSlotsUntilMaxFilledUnsafe();
-		} else {
-			free_slots = GetFreeSlotsUntilMaxFilled();
-		}
-
+		idx_t free_slots = GetFreeSlotsUntilMaxFilledUnsafe();
 		while (i < count && free_slots > 0) {
 			const idx_t batch_end = i + MinValue<idx_t>(free_slots, count - i);
 			for (; i < batch_end; i++) {
-				if constexpr (SingleThreaded) {
-					new_entries += static_cast<idx_t>(InsertUnsafe(entries[i].hash, entries[i].row_ptr));
-				} else {
-					new_entries += static_cast<idx_t>(InsertSafe(entries[i].hash, entries[i].row_ptr));
-				}
+				new_entries += static_cast<idx_t>(InsertUnsafe(entries[i].hash, entries[i].row_ptr));
 			}
 			if (i < count) {
-				if constexpr (SingleThreaded) {
-					free_slots = GetFreeSlotsUntilMaxFilledUnsafe();
-				} else {
-					free_slots = GetFreeSlotsUntilMaxFilled();
-				}
+				free_slots = GetFreeSlotsUntilMaxFilledUnsafe();
 			}
 		}
+		SyncCountersFromUnsafe();
+		return new_entries;
+	}
 
-		if constexpr (SingleThreaded) {
-			SyncCountersFromUnsafe();
+	//! Concurrent path: InsertSafe + atomic free-slot budgeting.
+	template <typename EntryT>
+	idx_t InsertBatchSafe(const EntryT *entries, idx_t count) {
+		idx_t new_entries = 0;
+		idx_t i = 0;
+		idx_t free_slots = GetFreeSlotsUntilMaxFilled();
+		while (i < count && free_slots > 0) {
+			const idx_t batch_end = i + MinValue<idx_t>(free_slots, count - i);
+			for (; i < batch_end; i++) {
+				new_entries += static_cast<idx_t>(InsertSafe(entries[i].hash, entries[i].row_ptr));
+			}
+			if (i < count) {
+				free_slots = GetFreeSlotsUntilMaxFilled();
+			}
 		}
 		return new_entries;
 	}
