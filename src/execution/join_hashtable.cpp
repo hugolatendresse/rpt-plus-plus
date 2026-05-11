@@ -999,6 +999,20 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// apply the cost-based three-way decision rule.
 	// =================================================================
 
+	// Steady-state fast path: once the thread has frozen the THC or otherwise
+	// disabled further collection (e.g. THC saturated), the checkpoint logic
+	// below early-returns at the `!thc_collection_enabled` guard before reading
+	// c_eval — so the two steady_clock::now() calls and the miss-rate / phase
+	// counter accumulation are all dead work on every chunk forever after.
+	if (!state.thc_collection_enabled) {
+		idx_t match_count = 0;
+		idx_t cache_miss_count = 0;
+		ProbeTHCAndFallback(keys, key_state, state, hashes_v, sel, count, has_sel, pointers_result_v, match_sel,
+		                    match_count, cache_miss_count);
+		count = match_count;
+		return;
+	}
+
 	auto eval_phase_t0 = std::chrono::steady_clock::now();
 
 	idx_t match_count = 0;
