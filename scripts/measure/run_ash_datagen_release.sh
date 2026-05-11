@@ -7,6 +7,7 @@
 set -euo pipefail
 
 PERF=false
+USE_DUCKDB_PROFILING=false
 USE_TASKSET=true
 RUNS=1
 CASE=""
@@ -34,6 +35,7 @@ Options:
   --csv <path>          Write per-run CSV (auto-named if omitted in sweep mode)
   --runs <N>            EXECUTE iterations per (case,query,seed) (default 1)
   --perf                Run benchmark phase under perf stat
+  --duckdb-profiling    Enable DuckDB JSON profiling, output to ash_datagen_results.json
   --no-taskset          Don't taskset to cores 4-59
   -h, --help            Show this help
 USAGE
@@ -50,6 +52,7 @@ while [[ $# -gt 0 ]]; do
         --csv) CSV_PATH="$2"; shift 2 ;;
         --runs) RUNS="$2"; shift 2 ;;
         --perf) PERF=true; shift ;;
+        --duckdb-profiling) USE_DUCKDB_PROFILING=true; shift ;;
         --no-taskset) USE_TASKSET=false; shift ;;
         -h|--help) usage; exit 0 ;;
         --*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
@@ -140,6 +143,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Absolute path so the file is easy to locate regardless of the script's CWD.
+PROFILING_OUTPUT="$REPO_ROOT/ash_datagen_results.json"
+# See https://duckdb.org/docs/stable/dev/profiling
+PROFILING_PRAGMAS="PRAGMA enable_profiling = 'json';
+PRAGMA profiling_output = '$PROFILING_OUTPUT';
+PRAGMA profiling_coverage = 'SELECT';"
+
 DB="ASH-datagen/bench.duckdb"
 
 if [[ ! -f "$COMMON_SETTINGS_SQL" ]]; then
@@ -188,6 +198,9 @@ if ! $SWEEPING && [[ -z "$CSV_PATH" ]]; then
     if [[ -n "$s" ]]; then
         case_settings_str="${case_settings_str}"$'\n'"SET transfer_graph_seed = ${s};"
     fi
+    if $USE_DUCKDB_PROFILING; then
+        case_settings_str="${PROFILING_PRAGMAS}"$'\n'"${case_settings_str}"
+    fi
     echo "=== Phase 2: running query_${q}.sql with release build (${RUNS} runs, case ${c}) ==="
     if $PERF; then
         CMD=(sudo perf stat -e "$PERF_EVENTS" -- "${TASKSET_PREFIX[@]}" build/release/duckdb "$DB")
@@ -197,6 +210,9 @@ if ! $SWEEPING && [[ -z "$CSV_PATH" ]]; then
     COMMON_SETTINGS_SQL="$COMMON_SETTINGS_SQL" RUN_SETTINGS_SQL="$RUN_SETTINGS_SQL" \
         CASE_SETTINGS="$case_settings_str" \
         "ASH-datagen/run_benchmark.sh" "$q" "$RUNS" "$DB" "${CMD[@]}"
+    if $USE_DUCKDB_PROFILING; then
+        echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
+    fi
     exit 0
 fi
 
@@ -211,6 +227,7 @@ build_sweep_sql() {
     local case_num="$1"
     local seed_val="$2"
     local query_name="$3"
+    if $USE_DUCKDB_PROFILING; then printf '%s\n' "$PROFILING_PRAGMAS"; fi
     grep '^SET ' "$COMMON_SETTINGS_SQL" || true
     grep '^SET ' "$RUN_SETTINGS_SQL" || true
     case_settings_for "$case_num"
@@ -288,4 +305,7 @@ done
 echo "Sweep complete. Captured ${TOTAL_RUNS} run(s)."
 if [[ -n "$CSV_PATH" ]]; then
     echo "CSV written to: $CSV_PATH"
+fi
+if $USE_DUCKDB_PROFILING; then
+    echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
 fi
