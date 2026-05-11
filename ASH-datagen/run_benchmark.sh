@@ -41,11 +41,16 @@ fi
         echo "EXECUTE benchmark_query;"
     done
     echo ".timer off"
-    echo "PRAGMA enable_profiling = 'no_output';"
     echo "SET VARIABLE t_end = epoch_ms(now());"
 
-    # echo ".print Show the detailed timed query plan"
-    # echo ".output stdout"
-    # echo "EXPLAIN ANALYZE EXECUTE benchmark_query;"
-    # echo "SELECT printf('Average run time: %.3f s', (getvariable('t_end') - getvariable('t0')) / ${NUM_RUNS}.0 / 1000.0) AS info;"
+    # If profiling was requested (via PROFILING_PRAGMAS env var), re-run the
+    # raw SELECT (not EXECUTE) so the profiling output captures the actual
+    # query text and plan rather than "EXECUTE benchmark_query;".
+    if [[ -n "${PROFILING_PRAGMAS:-}" ]]; then
+        printf '%s\n' "$PROFILING_PRAGMAS"
+        # Extract the SELECT body from the PREPARE statement in the query
+        # file (everything between "PREPARE ... AS" and the closing ";").
+        sed -n '/^PREPARE/,/;/{/^PREPARE/!p}' "ASH-datagen/query_${QUERY}.sql"
+        echo "PRAGMA enable_profiling = 'no_output';"
+    fi
 } | "$@"

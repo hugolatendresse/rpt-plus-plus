@@ -226,7 +226,6 @@ if ! $SWEEPING && [[ -z "$CSV_PATH" ]]; then
     s="${SEEDS[0]:-}"
 
     build_bench_sql() {
-        printf '%s\n' "$PROFILING_HEADER"
         grep '^SET ' "$COMMON_SETTINGS_SQL" || true
         grep '^SET ' "$RUN_SETTINGS_SQL" || true
         case_settings_for "$c"
@@ -247,10 +246,18 @@ if ! $SWEEPING && [[ -z "$CSV_PATH" ]]; then
             echo "EXECUTE benchmark_query;"
         done
         echo ".timer off"
-        echo "PRAGMA enable_profiling = 'no_output';"
         echo "SET VARIABLE t1 = epoch_ms(now());"
         echo ""
         echo "SELECT printf('Average run time: %.3f s', (getvariable('t1') - getvariable('t0')) / ${RUNS}.0 / 1000.0) AS info;"
+        # If profiling was requested, re-run the raw SELECT (not EXECUTE) so
+        # the profiling output captures the actual query text.
+        if $PROFILE; then
+            printf '%s\n' "$PROFILING_HEADER"
+            echo "SELECT min(b.valueB1)"
+            echo "FROM a"
+            echo "JOIN b ON a.keyB1 = b.keyB1;"
+            echo "PRAGMA enable_profiling = 'no_output';"
+        fi
     }
 
     echo "=== Running query: ${DB_NAME} (Case #$c, warmup + $RUNS runs) ==="
@@ -267,7 +274,6 @@ fi
 build_sweep_sql() {
     local case_num="$1"
     local seed_val="$2"
-    printf '%s\n' "$PROFILING_HEADER"
     grep '^SET ' "$COMMON_SETTINGS_SQL" || true
     grep '^SET ' "$RUN_SETTINGS_SQL" || true
     case_settings_for "$case_num"
@@ -293,6 +299,15 @@ build_sweep_sql() {
         echo "SELECT printf('PERRUN_S=%d=%.6f', ${i}, (epoch_ms(now()) - getvariable('_t0_${i}')) / 1000.0);"
         echo ".output /dev/null"
     done
+    # If profiling was requested, re-run the raw SELECT (not EXECUTE) so the
+    # profiling output captures the actual query text.
+    if $PROFILE; then
+        printf '%s\n' "$PROFILING_HEADER"
+        echo "SELECT min(b.valueB1)"
+        echo "FROM a"
+        echo "JOIN b ON a.keyB1 = b.keyB1;"
+        echo "PRAGMA enable_profiling = 'no_output';"
+    fi
 }
 
 echo "Starting hugo-generated sweep (cases: ${CASES[*]}, seeds: ${SEEDS[*]:-default}, runs/tuple: ${RUNS}, db: ${DB_NAME})..."

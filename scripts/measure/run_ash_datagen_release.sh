@@ -198,17 +198,17 @@ if ! $SWEEPING && [[ -z "$CSV_PATH" ]]; then
     if [[ -n "$s" ]]; then
         case_settings_str="${case_settings_str}"$'\n'"SET transfer_graph_seed = ${s};"
     fi
-    if $USE_DUCKDB_PROFILING; then
-        case_settings_str="${PROFILING_PRAGMAS}"$'\n'"${case_settings_str}"
-    fi
     echo "=== Phase 2: running query_${q}.sql with release build (${RUNS} runs, case ${c}) ==="
     if $PERF; then
         CMD=(sudo perf stat -e "$PERF_EVENTS" -- "${TASKSET_PREFIX[@]}" build/release/duckdb "$DB")
     else
         CMD=("${TASKSET_PREFIX[@]}" build/release/duckdb "$DB")
     fi
+    profiling_env=""
+    if $USE_DUCKDB_PROFILING; then profiling_env="$PROFILING_PRAGMAS"; fi
     COMMON_SETTINGS_SQL="$COMMON_SETTINGS_SQL" RUN_SETTINGS_SQL="$RUN_SETTINGS_SQL" \
         CASE_SETTINGS="$case_settings_str" \
+        PROFILING_PRAGMAS="$profiling_env" \
         "ASH-datagen/run_benchmark.sh" "$q" "$RUNS" "$DB" "${CMD[@]}"
     if $USE_DUCKDB_PROFILING; then
         echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
@@ -227,7 +227,6 @@ build_sweep_sql() {
     local case_num="$1"
     local seed_val="$2"
     local query_name="$3"
-    if $USE_DUCKDB_PROFILING; then printf '%s\n' "$PROFILING_PRAGMAS"; fi
     grep '^SET ' "$COMMON_SETTINGS_SQL" || true
     grep '^SET ' "$RUN_SETTINGS_SQL" || true
     case_settings_for "$case_num"
@@ -251,6 +250,14 @@ build_sweep_sql() {
         echo "SELECT printf('PERRUN_S=%d=%.6f', ${i}, (epoch_ms(now()) - getvariable('_t0_${i}')) / 1000.0);"
         echo ".output /dev/null"
     done
+    # If profiling was requested, re-run the raw SELECT (not EXECUTE) so the
+    # profiling output captures the actual query text rather than
+    # "EXECUTE benchmark_query;".
+    if $USE_DUCKDB_PROFILING; then
+        printf '%s\n' "$PROFILING_PRAGMAS"
+        sed -n '/^PREPARE/,/;/{/^PREPARE/!p}' "ASH-datagen/query_${query_name}.sql"
+        echo "PRAGMA enable_profiling = 'no_output';"
+    fi
 }
 
 if $PERF; then
