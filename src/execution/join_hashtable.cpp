@@ -467,18 +467,17 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
                                         Vector &pointers_result_v, SelectionVector &match_sel, idx_t &match_count,
                                         idx_t &cache_miss_count) {
 
-	// ---- Step 1: Densify hashes ----
-	// The THC probe functions expect a dense array of hashes (one per probe row,
-	// indexed 0..count-1). If a selection vector is in use, we need to gather
-	// the hashes into a contiguous buffer.
-	// TODO Let's find a way to avoid those memcopies
-	auto hashes_dense = FlatVector::GetData<hash_t>(state.hashes_dense_v);
+	// ---- Step 1: Acquire dense hash pointer ----
+	// The THC probe functions expect a sequential hash array indexed [0..count).
+	// On the !has_sel path the flattened hashes vector is already exactly that
+	// layout, so we pass its data straight through.  On the has_sel path we
+	// still need to gather through the selection vector into state.hashes_dense_v.
+	const hash_t *hashes_ptr;
 	if (!has_sel) {
-		// Already dense
 		hashes_v.Flatten(count);
-		auto hashes_flat = FlatVector::GetData<hash_t>(hashes_v);
-		memcpy(hashes_dense, hashes_flat, count * sizeof(hash_t));
+		hashes_ptr = FlatVector::GetData<hash_t>(hashes_v);
 	} else {
+		auto hashes_dense = FlatVector::GetData<hash_t>(state.hashes_dense_v);
 		UnifiedVectorFormat hashes_unified;
 		hashes_v.ToUnifiedFormat(count, hashes_unified);
 		auto hashes_src = UnifiedVectorFormat::GetData<hash_t>(hashes_unified);
@@ -487,6 +486,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 			const auto uvf_index = hashes_unified.sel->get_index(row_index);
 			hashes_dense[i] = hashes_src[uvf_index];
 		}
+		hashes_ptr = hashes_dense;
 	}
 
 	// ---- Step 2: Probe the THC ----
@@ -508,10 +508,10 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 	do {                                                                                                               \
 		auto probe_keys = FlatVector::GetData<T>(keys.data[0]);                                                        \
 		if (has_sel) {                                                                                                 \
-			tiered_hash_cache->ProbeAndMatch<T, true>(hashes_dense, probe_keys, count, sel, pointers_result,           \
+			tiered_hash_cache->ProbeAndMatch<T, true>(hashes_ptr, probe_keys, count, sel, pointers_result,           \
 			                                          match_sel, match_count, state.cache_miss_sel, cache_miss_count); \
 		} else {                                                                                                       \
-			tiered_hash_cache->ProbeAndMatch<T, false>(hashes_dense, probe_keys, count, sel, pointers_result,          \
+			tiered_hash_cache->ProbeAndMatch<T, false>(hashes_ptr, probe_keys, count, sel, pointers_result,          \
 			                                           match_sel, match_count, state.cache_miss_sel,                   \
 			                                           cache_miss_count);                                              \
 		}                                                                                                              \
@@ -571,11 +571,11 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		{
 			ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 			if (has_sel) {
-				tiered_hash_cache->ProbeByHash<true>(hashes_dense, count, sel, state.cache_candidates_sel,
+				tiered_hash_cache->ProbeByHash<true>(hashes_ptr, count, sel, state.cache_candidates_sel,
 				                                     cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
 				                                     state.cache_miss_sel, cache_miss_count);
 			} else {
-				tiered_hash_cache->ProbeByHash<false>(hashes_dense, count, sel, state.cache_candidates_sel,
+				tiered_hash_cache->ProbeByHash<false>(hashes_ptr, count, sel, state.cache_candidates_sel,
 				                                      cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
 				                                      state.cache_miss_sel, cache_miss_count);
 			}
