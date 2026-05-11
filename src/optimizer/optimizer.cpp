@@ -172,6 +172,7 @@ void Optimizer::RunBuiltInOptimizers() {
 	{
 		// 1. Extract information for predicate transfer, because some information may be lost in the next step.
 		PredicateTransferOptimizer PT(context);
+		// Create transfer graph, choose BFs that will be sent sent
 		plan = PT.PreOptimize(std::move(plan));
 
 		// 2. Then we perform the join ordering optimization, this also rewrites cross products + filters into joins and
@@ -196,7 +197,7 @@ void Optimizer::RunBuiltInOptimizers() {
 			plan = optimizer.Optimize(std::move(plan));
 		});
 
-		// 3. Insert BloomFilter-related operators
+		// 3. Actually insert BF operators
 		plan = PT.Optimize(std::move(plan));
 	}
 
