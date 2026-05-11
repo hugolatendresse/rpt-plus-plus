@@ -17,8 +17,7 @@ namespace duckdb {
 struct string_t;
 struct interval_t; // NOLINT
 
-// efficient hash function that maximizes the avalanche effect and minimizes
-// bias
+// efficient hash function that maximizes the avalanche effect and minimizes bias
 // see: https://nullprogram.com/blog/2018/07/31/
 
 // Hash function that leaves the 32 LSB untouched and copies them into the 32 MSB.

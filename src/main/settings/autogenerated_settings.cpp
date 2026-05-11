@@ -718,6 +718,20 @@ void AllowBuildProbeSideSwapSetting::ResetLocal(ClientContext &context) {
 Value AllowBuildProbeSideSwapSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
 	return Value::BOOLEAN(config.allow_build_probe_side_swap);
+// Enable Hash Join Timers
+//===----------------------------------------------------------------------===//
+void EnableHashJoinTimersSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.enable_hash_join_timers = input.GetValue<bool>();
+}
+
+void EnableHashJoinTimersSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).enable_hash_join_timers = ClientConfig().enable_hash_join_timers;
+}
+
+Value EnableHashJoinTimersSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.enable_hash_join_timers);
 }
 
 //===----------------------------------------------------------------------===//

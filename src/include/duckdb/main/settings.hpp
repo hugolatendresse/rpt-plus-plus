@@ -685,6 +685,11 @@ struct AllowBuildProbeSideSwapSetting {
 	    "When disabled, BuildProbeSideOptimizer will not swap a join's build and probe children "
 	    "based on estimated build cost (the (left=probe, right=build) ordering from the join-order "
 	    "optimizer is preserved instead)";
+struct EnableHashJoinTimersSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "enable_hash_join_timers";
+	static constexpr const char *Description =
+	    "When enabled, populate fine-grained hash-join timers (build/probe/match/THC) in profiling output";
 	static constexpr const char *InputType = "BOOLEAN";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);

@@ -142,6 +142,14 @@ struct ClientConfig {
 	bool allow_build_probe_side_swap = true;
 	//! When true, never use perfect hash join
 	bool disable_perfect_hashing = false;
+	//! When true, populate fine-grained hash-join timing counters
+	//! (Build Time, Probe Time, Match Time, THC Collect/Insert/Probe Time, ...)
+	//! into the query profiler output. Off by default because each timer adds
+	//! a pair of `std::chrono::steady_clock::now()` calls per scoped region,
+	//! which is non-trivial overhead on the hottest probe paths.
+	//! Replaces the historical DUCKDB_ENABLE_HASH_JOIN_TIMERS compile-time flag,
+	//! so the timers can be toggled at SQL level (PRAGMA / SET) without rebuilding.
+	bool enable_hash_join_timers = false;
 	//! Memory budget (in bytes) for the Tiered Hash Cache.
 	//! Controls how much of L3 the THC is allowed to occupy.
 	//! Default: 32 MiB (sized for typical L3 caches).
