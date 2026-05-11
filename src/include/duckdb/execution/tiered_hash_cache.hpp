@@ -53,7 +53,7 @@ public:
 	//!            Beyond this, we stop inserting new entries to avoid pathological
 	//!            linear-probing chains (the extreme case being an infinite loop).
 	TieredHashCache(idx_t capacity_p, idx_t row_size_p, idx_t key_offset_in_row_p, idx_t row_copy_offset_p = 0,
-	                double max_load_factor_p = 0.875)
+	                double max_load_factor_p = 0.6)
 	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), key_offset_in_row(key_offset_in_row_p),
 	      row_copy_offset(row_copy_offset_p), entry_stride(ComputeEntryStride(row_size_p)),
 	      max_fill(static_cast<idx_t>(static_cast<double>(capacity_p) * max_load_factor_p)), unsafe_fill_count(0) {
@@ -397,9 +397,17 @@ private:
 	// Pointers are not needed since we are copying the whole payload (TODO for now?)
 	static constexpr idx_t HEADER_SIZE = sizeof(tag_t);
 
-	//! Safety cap for linear probing in ProbeAndMatch.
-	//! If we exceed this many probes we treat the lookup as a cache miss.
-	static constexpr idx_t MAX_PROBE_DISTANCE = 10;
+	//! Safety cap for linear probing in ProbeAndMatch and the insert paths.
+	//! On probe: exceeding this many slots without finding a match or an empty
+	//! slot causes a false-negative miss (the row will still be served via the
+	//! HT fallback, at the cost of paying both walks).  On insert: exceeding
+	//! the cap silently drops the entry, making it permanently unservable.
+	//!
+	//! Sized in tandem with the default max load factor.  Linear probing has
+	//! E[probes | miss] ~ 1/(1-alpha)^2 / 2 (Knuth), so at alpha=0.6 the miss
+	//! path averages ~3.6 probes — a cap of 16 catches well over 99% of
+	//! legitimate entries.  Worth re-deriving if the load factor moves.
+	static constexpr idx_t MAX_PROBE_DISTANCE = 16;
 
 	//! Pick a stride such that, when the entry fits within a 64-byte cache line,
 	//! each slot lives inside a single line.  Strides of 24/40/48/56 (the natural

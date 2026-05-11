@@ -152,8 +152,10 @@ struct ClientConfig {
 	bool enable_hash_join_timers = false;
 	//! Memory budget (in bytes) for the Tiered Hash Cache.
 	//! Controls how much of L3 the THC is allowed to occupy.
-	//! Default: 32 MiB (sized for typical L3 caches).
-	idx_t thc_budget_bytes = 32ULL * 1024 * 1024;
+	//! Default: 48 MiB.  Raised from 32 MiB alongside the load-factor drop
+	//! to 0.6 (was 0.875) so the effective number of useful entries is
+	//! roughly preserved (32 MiB * 0.875 ≈ 48 MiB * 0.6).  Worth retuning.
+	idx_t thc_budget_bytes = 48ULL * 1024 * 1024;
 	//! Number of probe-side rows processed per THC collect phase.
 	//! Smaller values mean faster warm-up but more frequent collect/flush cycles.
 	idx_t thc_collect_phase_rows = 200000;
@@ -170,9 +172,12 @@ struct ClientConfig {
 	//! Hash tables smaller than this are assumed to fit in L3 naturally.
 	idx_t thc_activation_threshold = 10ULL * 1024 * 1024 / sizeof(uint64_t);
 	//! Maximum load factor for the THC (0.0–1.0).
-	//! Beyond this fill ratio, THC does not insert new entries. This
-	//! is to avoid pathological linear-probing chains.
-	double thc_max_load_factor = 0.875;
+	//! Beyond this fill ratio, THC does not insert new entries.  At higher
+	//! load factors, linear probing exhibits heavy-tailed cluster lengths
+	//! (Knuth), driving both the cost-per-probe and the false-negative rate
+	//! at MAX_PROBE_DISTANCE up sharply.
+	//! Default: 0.6.  Lowered from 0.875 — likely worth tuning further.
+	double thc_max_load_factor = 0.6;
 	//! Which mu_s (within-build side multiplicity) estimation method(s) to run during hash join.
 	//! Values: "none", "build_count", "probe_sample", "ht_sample", or "all".
 	//! "none" bypasses mu_s estimation
