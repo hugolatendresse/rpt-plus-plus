@@ -606,6 +606,17 @@ struct DisableTieredHashCacheSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct EnableHashJoinTimersSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "enable_hash_join_timers";
+	static constexpr const char *Description =
+	    "When enabled, populate fine-grained hash-join timers (build/probe/match/THC) in profiling output";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct ThcL3BudgetSetting {
 	using RETURN_TYPE = int64_t;
 	static constexpr const char *Name = "thc_l3_budget";

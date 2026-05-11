@@ -262,7 +262,11 @@ unique_ptr<JoinFilterLocalState> JoinFilterPushdownInfo::GetLocalState(JoinFilte
 class HashJoinLocalSinkState : public LocalSinkState {
 public:
 	HashJoinLocalSinkState(const PhysicalHashJoin &op, ClientContext &context, HashJoinGlobalSinkState &gstate)
-	    : join_key_executor(context) {
+	    : join_key_executor(context),
+	      // Snapshot the runtime hash-join-timer flag once. The flag is a
+	      // ClientConfig setting (see `EnableHashJoinTimersSetting`) and is
+	      // expected to be stable over the lifetime of a query.
+	      enable_timers(ClientConfig::GetConfig(context).enable_hash_join_timers) {
 		auto &allocator = BufferAllocator::Get(context);
 
 		for (auto &cond : op.conditions) {
@@ -295,6 +299,9 @@ public:
 	//! Thread-local HT
 	unique_ptr<JoinHashTable> hash_table;
 	uint64_t build_time_ns = 0;
+	//! Mirror of ClientConfig.enable_hash_join_timers, used to gate the
+	//! ScopedHashJoinTimer wrapping the Build() call in Sink().
+	const bool enable_timers;
 
 	unique_ptr<JoinFilterLocalState> local_filter_state;
 };
@@ -390,7 +397,7 @@ SinkResultType PhysicalHashJoin::Sink(ExecutionContext &context, DataChunk &chun
 
 	// build the HT
 	{
-		ScopedHashJoinTimer build_timer(&lstate.build_time_ns);
+		ScopedHashJoinTimer build_timer(&lstate.build_time_ns, lstate.enable_timers);
 		lstate.hash_table->Build(lstate.append_state, lstate.join_keys, lstate.payload_chunk);
 	}
 
@@ -1013,12 +1020,20 @@ class HashJoinOperatorState : public CachingOperatorState {
 public:
 	explicit HashJoinOperatorState(ClientContext &context, HashJoinGlobalSinkState &sink_p)
 	    : sink(sink_p), probe_executor(context), scan_structure(*sink.hash_table, join_key_state),
-	      probe_state(ClientConfig::GetConfig(context).thc_collect_phase_rows) {
-		probe_state.probe_for_pointers_time_ns = &probe_for_pointers_time_ns;
-		probe_state.match_time_ns = &match_time_ns;
-		probe_state.thc_probe_time_ns = &thc_probe_time_ns;
-		probe_state.thc_collect_time_ns = &thc_collect_time_ns;
-		probe_state.thc_insert_time_ns = &thc_insert_time_ns;
+	      probe_state(ClientConfig::GetConfig(context).thc_collect_phase_rows),
+	      // Snapshot the runtime flag once: see HashJoinLocalSinkState for the
+	      // motivation. The ProbeState's `*_time_ns` pointers are *only* wired
+	      // to our local counters when timers are enabled; otherwise they stay
+	      // at their default nullptr and the inner ScopedHashJoinTimer scopes
+	      // become no-ops without any extra call-site check.
+	      enable_timers(ClientConfig::GetConfig(context).enable_hash_join_timers) {
+		if (enable_timers) {
+			probe_state.probe_for_pointers_time_ns = &probe_for_pointers_time_ns;
+			probe_state.match_time_ns = &match_time_ns;
+			probe_state.thc_probe_time_ns = &thc_probe_time_ns;
+			probe_state.thc_collect_time_ns = &thc_collect_time_ns;
+			probe_state.thc_insert_time_ns = &thc_insert_time_ns;
+		}
 	}
 
 	~HashJoinOperatorState() override {
@@ -1049,6 +1064,11 @@ public:
 	uint64_t thc_insert_time_ns = 0;
 	uint64_t probe_for_pointers_time_ns = 0;
 	uint64_t match_time_ns = 0;
+	//! Mirror of ClientConfig.enable_hash_join_timers, used to gate the
+	//! ScopedHashJoinTimer scopes around ExecuteInternal probe/scan_next.
+	//! (The probe_state-pointer-based timers are gated separately by leaving
+	//! those pointers nullptr when this flag is false.)
+	const bool enable_timers;
 
 public:
 	void FlushLocalTimings() {
@@ -1131,7 +1151,7 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 		state.initialized = true;
 	}
 	{
-		ScopedHashJoinTimer probe_timer(&state.execute_probe_time_ns);
+		ScopedHashJoinTimer probe_timer(&state.execute_probe_time_ns, state.enable_timers);
 		if (state.scan_structure.is_null) {
 			// probe the HT, start by resolving the join keys for the left chunk
 			state.lhs_join_keys.Reset();
@@ -1153,7 +1173,7 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 
 	{
 		// We don't need the THC or HT at this point - we just use pointers in state.scan_structure
-		ScopedHashJoinTimer scan_next_timer(&state.execute_scan_next_time_ns);
+		ScopedHashJoinTimer scan_next_timer(&state.execute_scan_next_time_ns, state.enable_timers);
 		state.scan_structure.Next(state.lhs_join_keys, state.lhs_output, chunk);
 	}
 
@@ -1284,6 +1304,10 @@ public:
 	uint64_t thc_insert_time_ns = 0;
 	uint64_t probe_for_pointers_time_ns = 0;
 	uint64_t match_time_ns = 0;
+	//! Mirror of ClientConfig.enable_hash_join_timers, used to gate the
+	//! ScopedHashJoinTimer scope around ExternalProbe(). The probe_state's
+	//! `*_time_ns` pointers are gated by leaving them nullptr when false.
+	const bool enable_timers;
 
 private:
 	void FlushLocalTimings();
@@ -1471,7 +1495,9 @@ HashJoinLocalSourceState::HashJoinLocalSourceState(const PhysicalHashJoin &op, H
                                                    Allocator &allocator)
     : local_stage(HashJoinSourceStage::INIT), addresses(LogicalType::POINTER), lhs_join_key_executor(sink_p.context),
       scan_structure(*sink_p.hash_table, join_key_state),
-      probe_state(ClientConfig::GetConfig(sink_p.context).thc_collect_phase_rows), sink(sink_p) {
+      probe_state(ClientConfig::GetConfig(sink_p.context).thc_collect_phase_rows),
+      // Snapshot the runtime flag. Same rationale as HashJoinLocalSinkState.
+      enable_timers(ClientConfig::GetConfig(sink_p.context).enable_hash_join_timers), sink(sink_p) {
 	auto &chunk_state = probe_local_scan.current_chunk_state;
 	chunk_state.properties = ColumnDataScanProperties::ALLOW_ZERO_COPY;
 
@@ -1479,11 +1505,17 @@ HashJoinLocalSourceState::HashJoinLocalSourceState(const PhysicalHashJoin &op, H
 	lhs_join_keys.Initialize(allocator, op.condition_types);
 	lhs_output.Initialize(allocator, op.lhs_output_columns.col_types);
 	TupleDataCollection::InitializeChunkState(join_key_state, op.condition_types);
-	probe_state.probe_for_pointers_time_ns = &probe_for_pointers_time_ns;
-	probe_state.match_time_ns = &match_time_ns;
-	probe_state.thc_probe_time_ns = &thc_probe_time_ns;
-	probe_state.thc_collect_time_ns = &thc_collect_time_ns;
-	probe_state.thc_insert_time_ns = &thc_insert_time_ns;
+	// Only wire up the ProbeState's per-thread timing pointers when timers are
+	// enabled. When disabled, they stay nullptr (their struct default), which
+	// turns every `ScopedHashJoinTimer(state.*_time_ns)` deep in the probe path
+	// into a zero-cost no-op.
+	if (enable_timers) {
+		probe_state.probe_for_pointers_time_ns = &probe_for_pointers_time_ns;
+		probe_state.match_time_ns = &match_time_ns;
+		probe_state.thc_probe_time_ns = &thc_probe_time_ns;
+		probe_state.thc_collect_time_ns = &thc_collect_time_ns;
+		probe_state.thc_insert_time_ns = &thc_insert_time_ns;
+	}
 
 	for (auto &cond : op.conditions) {
 		lhs_join_key_executor.AddExpression(*cond.left);
@@ -1553,7 +1585,7 @@ void HashJoinLocalSourceState::ExternalProbe(HashJoinGlobalSinkState &sink, Hash
 	D_ASSERT(local_stage == HashJoinSourceStage::PROBE && sink.hash_table->finalized);
 	{
 		DEBUG_LOG("[HashJoinLocalSourceState::ExternalProbe] Starting probe timer in HashJoinLocalSourceState!!!!!\n\nTODO: INVESTIGATE\n\n");
-		ScopedHashJoinTimer probe_timer(&external_probe_time_ns);
+		ScopedHashJoinTimer probe_timer(&external_probe_time_ns, enable_timers);
 
 		if (!scan_structure.is_null) {
 			// Still have elements remaining (i.e. we got >STANDARD_VECTOR_SIZE elements in the previous probe)
