@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SF=100
-DUCKDB_BIN="./build/release/duckdb"
+DUCKDB_BIN=""
 GENERATE_DATA=0
 OUT_DIR="./tpch_results"
 RUN_TPCH=1
@@ -12,6 +12,8 @@ TPCH_QUERY=""
 RUNS=1
 CASE=""
 USE_PERF=false
+USE_DEBUG=false
+USE_DUCKDB_PROFILING=false
 COMMON_SETTINGS_SQL="scripts/measure/settings-common.sql"
 RUN_SETTINGS_SQL="scripts/measure/settings-run_tpc.sql"
 PERF_EVENTS="cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,mem_access,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd,branch-instructions,branch-misses,br_retired,br_mis_pred_retired"
@@ -32,6 +34,8 @@ Options:
   --runs <N>             Number of benchmark runs (default: 1)
   --case <1|2|3|4>       Optimizer case (required)
   --perf                 Run each query under perf stat
+  --debug                Use debug build (build/debug/duckdb)
+  --duckdb-profiling     Enable DuckDB JSON profiling, output to tpc_results.json
   -h, --help             Show this help
 USAGE
 }
@@ -49,6 +53,8 @@ while [[ $# -gt 0 ]]; do
         --runs) RUNS="$2"; shift 2 ;;
         --case) CASE="$2"; shift 2 ;;
         --perf) USE_PERF=true; shift ;;
+        --debug) USE_DEBUG=true; shift ;;
+        --duckdb-profiling) USE_DUCKDB_PROFILING=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
@@ -78,6 +84,22 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Absolute path so the file is easy to locate regardless of the script's CWD.
+PROFILING_OUTPUT="$REPO_ROOT/tpc_results.json"
+# See https://duckdb.org/docs/stable/dev/profiling
+PROFILING_PRAGMAS="PRAGMA enable_profiling = 'json';
+PRAGMA profiling_output = '$PROFILING_OUTPUT';
+PRAGMA profiling_coverage = 'SELECT';"
+
+# Pick default DuckDB binary based on --debug if the user did not override with --duckdb.
+if [[ -z "$DUCKDB_BIN" ]]; then
+    if $USE_DEBUG; then
+        DUCKDB_BIN="./build/debug/duckdb"
+    else
+        DUCKDB_BIN="./build/release/duckdb"
+    fi
+fi
+
 TPCH_DB_PATH="${DB_BASE_PATH}/tpch/tpch_sf${SF}.duckdb"
 TPCDS_DB_PATH="${DB_BASE_PATH}/tpcds/tpcds_sf${SF}.duckdb"
 
@@ -103,6 +125,9 @@ TPCDS_CSV_PATH="$OUT_DIR/tpcds_runtimes_sf${SF}_${TIMESTAMP}.csv"
 build_sql() {
     local extension="$1"
     local query_stmt="$2"
+    if $USE_DUCKDB_PROFILING; then
+        printf '%s\n' "$PROFILING_PRAGMAS"
+    fi
     grep '^SET ' "$COMMON_SETTINGS_SQL" || true
     grep '^SET ' "$RUN_SETTINGS_SQL" || true
     printf '%s\n' "$CASE_SETTINGS"
@@ -237,3 +262,6 @@ echo "===== MULTI-RUN SUMMARY ====="
 echo "Total time (s): ${TOTAL_WALL}"
 echo "Number of runs: ${RUNS}"
 echo "Average time per run (s): ${AVG_WALL}"
+if $USE_DUCKDB_PROFILING; then
+    echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
+fi
