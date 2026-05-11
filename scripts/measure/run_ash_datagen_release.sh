@@ -8,7 +8,7 @@ set -euo pipefail
 
 PERF=false
 USE_TASKSET=true
-RUNS=5
+RUNS=1
 CASE=""
 CASES_LIST=""
 QUERY=""
@@ -32,7 +32,7 @@ Options:
   --seed <int>          Override transfer_graph_seed (mutually exclusive with --seeds)
   --seeds <N>           Sweep seeds 0..N-1 (overrides transfer_graph_seed)
   --csv <path>          Write per-run CSV (auto-named if omitted in sweep mode)
-  --runs <N>            EXECUTE iterations per (case,query,seed) (default 5)
+  --runs <N>            EXECUTE iterations per (case,query,seed) (default 1)
   --perf                Run benchmark phase under perf stat
   --no-taskset          Don't taskset to cores 4-59
   -h, --help            Show this help
