@@ -61,7 +61,8 @@ Options:
   --csv <path>          Write per-run CSV (auto-named if omitted in sweep mode)
   --generate            (Re)generate the data before running the query
   --perf                Run under perf stat
-  --profile             Enable DuckDB JSON profiling output
+  --profile, --duckdb-profiling
+                        Enable DuckDB JSON profiling output
   --debug               Use debug build (build/debug/duckdb) instead of release
   --no-taskset          Don't pin DuckDB to cores 4-59 via taskset
   -h, --help            Show this help
@@ -80,7 +81,7 @@ while [[ $# -gt 0 ]]; do
         --csv)       CSV_PATH="$2"; shift 2 ;;
         --generate)  GENERATE=true;  shift ;;
         --perf)      USE_PERF=true;  shift ;;
-        --profile)   PROFILE=true;   shift ;;
+        --profile|--duckdb-profiling)   PROFILE=true;   shift ;;
         --debug)     BUILD_TYPE=debug;   shift ;;
         --no-taskset) USE_TASKSET=false; shift ;;
         -h|--help)   usage; exit 0 ;;
@@ -254,6 +255,9 @@ if ! $SWEEPING && [[ -z "$CSV_PATH" ]]; then
 
     echo "=== Running query: ${DB_NAME} (Case #$c, warmup + $RUNS runs) ==="
     build_bench_sql | "${CMD[@]}"
+    if $PROFILE; then
+        echo "DuckDB profiling output written to: $PROFILE_JSON"
+    fi
     exit 0
 fi
 
@@ -335,4 +339,7 @@ done
 echo "Sweep complete. Captured ${TOTAL_RUNS} run(s)."
 if [[ -n "$CSV_PATH" ]]; then
     echo "CSV written to: $CSV_PATH"
+fi
+if $PROFILE; then
+    echo "DuckDB profiling output written to: $PROFILE_JSON"
 fi
