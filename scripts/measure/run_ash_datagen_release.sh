@@ -39,7 +39,7 @@ Options:
 USAGE
 }
 
-while [[ $# -gt 0 && ( "${1:-}" == --* || "${1:-}" == "-h" ) ]]; do
+while [[ $# -gt 0 ]]; do
     case "$1" in
         --case) CASE="$2"; shift 2 ;;
         --cases) CASES_LIST="$2"; shift 2 ;;
@@ -52,15 +52,17 @@ while [[ $# -gt 0 && ( "${1:-}" == --* || "${1:-}" == "-h" ) ]]; do
         --perf) PERF=true; shift ;;
         --no-taskset) USE_TASKSET=false; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
+        --*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
+        *)
+            # Back-compat: positional <query> argument (rs|rst).
+            if [[ -z "$QUERY" && -z "$QUERIES_LIST" ]]; then
+                QUERY="$1"; shift
+            else
+                echo "Unexpected argument: $1" >&2; usage; exit 1
+            fi
+            ;;
     esac
 done
-
-# Back-compat: positional <query> argument (rs|rst).
-if [[ -z "$QUERY" && -z "$QUERIES_LIST" && $# -gt 0 ]]; then
-    QUERY="$1"
-    shift || true
-fi
 
 if [[ -n "$CASE" && -n "$CASES_LIST" ]]; then
     echo "Error: --case and --cases are mutually exclusive." >&2; exit 1
