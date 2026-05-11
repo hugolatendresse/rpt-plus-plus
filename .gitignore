@@ -368,3 +368,4 @@ scripts/measure/*.json
 join-order-benchmark/*.csv
 join-order-benchmark/*.json
 result.json
+ash_datagen_results.json
