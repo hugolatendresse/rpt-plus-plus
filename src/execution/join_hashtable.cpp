@@ -949,9 +949,10 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			                                           static_cast<double>(state.total_probe_rows)
 			                                     : 0.0);
 
-			// Free the collection buffer
+			// Reset for the next cycle.  Keep the underlying capacity reserved
+			// (set at ProbeState construction from thc_collect_phase_rows) so the
+			// next COLLECT cycle doesn't re-fault its pages or re-grow the buffer.
 			state.collected_entries.clear();
-			state.collected_entries.shrink_to_fit();
 
 			// Transition to READ_ONLY with exponentially growing target.
 			// The first READ_ONLY segment uses READ_ONLY_BASE_ROWS.
@@ -1060,7 +1061,6 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				state.thc_abandoned = true;
 				state.thc_collection_enabled = false;
 				state.collected_entries.clear();
-				state.collected_entries.shrink_to_fit();
 				return;
 			}
 
@@ -1075,7 +1075,6 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				state.thc_abandoned = true;
 				state.thc_collection_enabled = false;
 				state.collected_entries.clear();
-				state.collected_entries.shrink_to_fit();
 				return;
 			}
 
@@ -1088,7 +1087,6 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				state.thc_abandoned = true;
 				state.thc_collection_enabled = false;
 				state.collected_entries.clear();
-				state.collected_entries.shrink_to_fit();
 				return;
 			}
 		} else {
