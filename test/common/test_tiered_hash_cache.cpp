@@ -1,7 +1,9 @@
 #include "catch.hpp"
 #include "duckdb/execution/tiered_hash_cache.hpp"
 
+#include <cstdint>
 #include <cstring>
+#include <vector>
 
 using namespace duckdb;
 
@@ -154,6 +156,38 @@ TEST_CASE("THC: ComputeCapacity returns a power of two and respects the floor", 
 
 	const auto cap_tiny = TieredHashCache::ComputeCapacity(/*row_size*/ 8, /*l3_budget*/ 100);
 	REQUIRE(cap_tiny == 64);
+}
+
+TEST_CASE("THC: insert/probe round-trips for a range of row sizes", "[thc]") {
+	// Spans the small/medium/large stride regimes — including the awkward
+	// 24/40/48/56 sizes that the old stride math produced.
+	const std::vector<idx_t> row_sizes = {8, 14, 16, 22, 30, 32, 40, 48, 56, 62, 100};
+
+	for (idx_t row_size : row_sizes) {
+		TieredHashCache thc(/*capacity*/ 64, row_size, /*key_offset_in_row*/ 0);
+
+		std::vector<uint8_t> row_buf(row_size, 0);
+		const int64_t key = static_cast<int64_t>(0xCAFEBABE + row_size);
+		std::memcpy(row_buf.data(), &key, sizeof(int64_t));
+
+		const hash_t h = MakeHash(/*tag*/ 0xBEEF, /*slot_bits*/ row_size);
+		REQUIRE(thc.InsertUnsafe(h, row_buf.data()));
+
+		hash_t hashes[1] = {h};
+		int64_t keys[1] = {key};
+		data_ptr_t result_ptrs[1] = {nullptr};
+		SelectionVector match_sel(STANDARD_VECTOR_SIZE);
+		SelectionVector miss_sel(STANDARD_VECTOR_SIZE);
+		idx_t match_count = 0;
+		idx_t miss_count = 0;
+
+		thc.ProbeAndMatch<int64_t, false>(hashes, keys, 1, nullptr, result_ptrs, match_sel, match_count, miss_sel,
+		                                  miss_count);
+
+		REQUIRE(match_count == 1);
+		REQUIRE(miss_count == 0);
+		REQUIRE(LoadKey(result_ptrs[0]) == key);
+	}
 }
 
 TEST_CASE("THC: InsertBatch reports the number of newly inserted entries", "[thc]") {

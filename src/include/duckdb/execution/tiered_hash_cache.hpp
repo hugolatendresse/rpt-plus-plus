@@ -401,8 +401,26 @@ private:
 	//! If we exceed this many probes we treat the lookup as a cache miss.
 	static constexpr idx_t MAX_PROBE_DISTANCE = 10;
 
+	//! Pick a stride such that, when the entry fits within a 64-byte cache line,
+	//! each slot lives inside a single line.  Strides of 24/40/48/56 (the natural
+	//! 8-byte-aligned values for medium rows) cause roughly half of slots to
+	//! straddle two lines, doubling the per-probe cache-line traffic that the
+	//! THC is meant to minimise.  For payloads that exceed a line we fall back
+	//! to 8-byte alignment — every slot would straddle anyway, so the memory
+	//! that would be spent padding up to 128 bytes is not worth it.
 	static idx_t ComputeEntryStride(idx_t row_size) {
-		idx_t stride = (HEADER_SIZE + row_size + 7) & ~idx_t(7);
+		static constexpr idx_t CACHE_LINE_BYTES = 64;
+		const idx_t raw = HEADER_SIZE + row_size;
+		idx_t stride;
+		if (raw <= 16) {
+			stride = 16;
+		} else if (raw <= 32) {
+			stride = 32;
+		} else if (raw <= CACHE_LINE_BYTES) {
+			stride = CACHE_LINE_BYTES;
+		} else {
+			stride = (raw + 7) & ~idx_t(7);
+		}
 		DEBUG_LOG("[THC] Stride is %lu bytes\n", stride);
 		return stride;
 	}
