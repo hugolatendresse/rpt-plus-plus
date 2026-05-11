@@ -31,8 +31,7 @@ JoinHashTable::SharedState::SharedState()
 JoinHashTable::ProbeState::ProbeState(idx_t collected_entries_capacity)
     : SharedState(), ht_offsets_v(LogicalType::UBIGINT), hashes_dense_v(LogicalType::HASH),
       non_empty_sel(STANDARD_VECTOR_SIZE), cache_rhs_row_locations(LogicalType::POINTER),
-      cache_result_pointers(LogicalType::POINTER), cache_candidates_sel(STANDARD_VECTOR_SIZE),
-      cache_miss_sel(STANDARD_VECTOR_SIZE) {
+      cache_candidates_sel(STANDARD_VECTOR_SIZE), cache_miss_sel(STANDARD_VECTOR_SIZE) {
 	if (collected_entries_capacity > 0) {
 		collected_entries.reserve(collected_entries_capacity);
 	}
@@ -564,20 +563,19 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 	// Everything else uses ProbeByHash (hash-only lookup) followed by
 	// RowMatcher.Match (actual key comparison on THC candidates).
 	if (!used_probe_and_match) {
-		auto cache_result_ptrs = FlatVector::GetData<data_ptr_t>(state.cache_result_pointers);
-		auto cache_rhs_locations = FlatVector::GetData<data_ptr_t>(state.cache_rhs_row_locations);
+		auto cache_row_ptrs = FlatVector::GetData<data_ptr_t>(state.cache_rhs_row_locations);
 		idx_t cache_candidates_count = 0;
 
 		{
 			ScopedHashJoinTimer tiered_hash_cache_timer(state.thc_probe_time_ns);
 			if (has_sel) {
 				tiered_hash_cache->ProbeByHash<true>(hashes_ptr, count, sel, state.cache_candidates_sel,
-				                                     cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
-				                                     state.cache_miss_sel, cache_miss_count);
+				                                     cache_candidates_count, cache_row_ptrs, state.cache_miss_sel,
+				                                     cache_miss_count);
 			} else {
 				tiered_hash_cache->ProbeByHash<false>(hashes_ptr, count, sel, state.cache_candidates_sel,
-				                                      cache_candidates_count, cache_result_ptrs, cache_rhs_locations,
-				                                      state.cache_miss_sel, cache_miss_count);
+				                                      cache_candidates_count, cache_row_ptrs, state.cache_miss_sel,
+				                                      cache_miss_count);
 			}
 		}
 
@@ -595,7 +593,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 			// ProbeByHash?
 			for (idx_t i = 0; i < cache_match_count; i++) {
 				const auto row_index = state.cache_candidates_sel.get_index(i);
-				pointers_result[row_index] = cache_result_ptrs[row_index];
+				pointers_result[row_index] = cache_row_ptrs[row_index];
 				match_sel.set_index(match_count++, row_index);
 			}
 

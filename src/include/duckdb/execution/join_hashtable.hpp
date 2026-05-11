@@ -214,9 +214,10 @@ public:
 		uint64_t *thc_collect_time_ns = nullptr;
 		uint64_t *thc_insert_time_ns = nullptr;
 
-		//! Per-thread vectors for THC probing
+		//! Per-thread vectors for THC probing.  cache_rhs_row_locations stores the
+		//! cached row pointers returned by the THC; downstream it is read by both
+		//! RowMatcher.Match (to compare keys) and the final result gather.
 		Vector cache_rhs_row_locations;
-		Vector cache_result_pointers;
 		SelectionVector cache_candidates_sel;
 		SelectionVector cache_miss_sel;
 

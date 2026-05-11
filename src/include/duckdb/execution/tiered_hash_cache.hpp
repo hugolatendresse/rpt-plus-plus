@@ -78,9 +78,8 @@ public:
 	//! @tparam HAS_ROW_SEL compile-time constant eliminating the per-iteration has_row_sel branch
 	template <bool HAS_ROW_SEL>
 	void ProbeByHash(const hash_t *hashes_dense, idx_t count, const SelectionVector *row_sel,
-	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count,
-	                 data_ptr_t *cache_result_ptrs, data_ptr_t *cache_rhs_locations, SelectionVector &cache_miss_sel,
-	                 idx_t &cache_miss_count) const {
+	                 SelectionVector &cache_candidates_sel, idx_t &cache_candidates_count, data_ptr_t *cache_row_ptrs,
+	                 SelectionVector &cache_miss_sel, idx_t &cache_miss_count) const {
 
 		static constexpr idx_t SLOT_PREFETCH_DIST = 16;
 
@@ -104,9 +103,7 @@ public:
 			auto stored_tag = LoadTag(entry_ptr);
 
 			if (__builtin_expect(stored_tag == probe_tag, 1)) {
-				auto row_ptr = GetRowPtr(entry_ptr);
-				cache_result_ptrs[row_index] = row_ptr;
-				cache_rhs_locations[row_index] = row_ptr;
+				cache_row_ptrs[row_index] = GetRowPtr(entry_ptr);
 				cache_candidates_sel.set_index(cache_candidates_count++, row_index);
 				continue;
 			}
@@ -121,9 +118,7 @@ public:
 				entry_ptr = GetEntryPtr(slot);
 				stored_tag = LoadTag(entry_ptr);
 				if (__builtin_expect(stored_tag == probe_tag, 0)) {
-					auto row_ptr = GetRowPtr(entry_ptr);
-					cache_result_ptrs[row_index] = row_ptr;
-					cache_rhs_locations[row_index] = row_ptr;
+					cache_row_ptrs[row_index] = GetRowPtr(entry_ptr);
 					cache_candidates_sel.set_index(cache_candidates_count++, row_index);
 					found = true;
 					break;
