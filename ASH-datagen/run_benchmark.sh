@@ -41,10 +41,11 @@ fi
         echo "EXECUTE benchmark_query;"
     done
     echo ".timer off"
+    echo "PRAGMA enable_profiling = 'no_output';"
     echo "SET VARIABLE t_end = epoch_ms(now());"
 
-    echo ".print Show the detailed timed query plan"
-    echo ".output stdout"
-    echo "EXPLAIN ANALYZE EXECUTE benchmark_query;"
-    echo "SELECT printf('Average run time: %.3f s', (getvariable('t_end') - getvariable('t0')) / ${NUM_RUNS}.0 / 1000.0) AS info;"
+    # echo ".print Show the detailed timed query plan"
+    # echo ".output stdout"
+    # echo "EXPLAIN ANALYZE EXECUTE benchmark_query;"
+    # echo "SELECT printf('Average run time: %.3f s', (getvariable('t_end') - getvariable('t0')) / ${NUM_RUNS}.0 / 1000.0) AS info;"
 } | "$@"
