@@ -157,6 +157,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 JOB_DIR="$REPO_ROOT/join-order-benchmark"
 COMMON_SETTINGS_SQL="${COMMON_SETTINGS_SQL:-$REPO_ROOT/scripts/measure/settings-common.sql}"
+# Resolve to an absolute path if relative — the script cd's into JOB_DIR before
+# reading the settings file, and a relative env override would silently break
+# (grep fails, no SETs sent, runs masquerade as faster than baseline).
+if [[ "$COMMON_SETTINGS_SQL" != /* ]]; then
+	COMMON_SETTINGS_SQL="$PWD/$COMMON_SETTINGS_SQL"
+fi
 RUN_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-run_job.sql"
 # Use GNU time on Linux (`/usr/bin/time -f ...`); fall back to `gtime` from
 # `brew install gnu-time` on macOS, since BSD `/usr/bin/time` doesn't accept `-f`.
