@@ -156,7 +156,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 JOB_DIR="$REPO_ROOT/join-order-benchmark"
-COMMON_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-common.sql"
+COMMON_SETTINGS_SQL="${COMMON_SETTINGS_SQL:-$REPO_ROOT/scripts/measure/settings-common.sql}"
 RUN_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-run_job.sql"
 # Absolute path so the file is easy to locate regardless of the script's CWD.
 PROFILING_OUTPUT="$REPO_ROOT/job_results.json"
