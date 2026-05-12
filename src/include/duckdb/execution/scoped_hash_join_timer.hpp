@@ -57,8 +57,8 @@ public:
 	// `target_p` may be nullptr; `enabled` may be false. In either case the
 	// timer is a no-op and we skip the now() call entirely.
 	explicit ScopedHashJoinTimer(uint64_t *target_p, bool enabled = true)
-	    : target(enabled ? target_p : nullptr), atomic_target(nullptr) {
-		if (target) {
+	    : single_threaded_target(enabled ? target_p : nullptr), atomic_target(nullptr) {
+		if (single_threaded_target) {
 			start = std::chrono::steady_clock::now();
 		}
 	}
@@ -69,28 +69,28 @@ public:
 	// `fetch_add(..., std::memory_order_relaxed)` so each scope still costs
 	// exactly one atomic op, but the call site becomes a single line.
 	explicit ScopedHashJoinTimer(std::atomic<uint64_t> *target_p, bool enabled = true)
-	    : target(nullptr), atomic_target(enabled ? target_p : nullptr) {
+	    : single_threaded_target(nullptr), atomic_target(enabled ? target_p : nullptr) {
 		if (atomic_target) {
 			start = std::chrono::steady_clock::now();
 		}
 	}
 
 	~ScopedHashJoinTimer() {
-		if (!target && !atomic_target) {
+		if (!single_threaded_target && !atomic_target) {
 			return;
 		}
 		auto end = std::chrono::steady_clock::now();
 		auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
 		auto ns = static_cast<uint64_t>(elapsed_ns);
-		if (target) {
-			*target += ns;
+		if (single_threaded_target) {
+			*single_threaded_target += ns;
 		} else {
 			atomic_target->fetch_add(ns, std::memory_order_relaxed);
 		}
 	}
 
 private:
-	uint64_t *target;
+	uint64_t *single_threaded_target;
 	std::atomic<uint64_t> *atomic_target;
 	// Default-constructed; only meaningful when one of the targets is non-null,
 	// in which case the constructor will have overwritten it with `now()`.
