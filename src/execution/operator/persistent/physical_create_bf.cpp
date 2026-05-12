@@ -12,13 +12,37 @@
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/storage/temporary_memory_manager.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
+#include "duckdb/execution/scoped_hash_join_timer.hpp"
 #include "duckdb/main/client_config.hpp"
+#include "duckdb/main/query_profiler.hpp"
+#include "duckdb/common/string_util.hpp"
 
 namespace duckdb {
 
 #ifndef USE_SQLSTORM_DP_CONDITION
 #define USE_SQLSTORM_DP_CONDITION 0
 #endif
+
+// Mirror of PhysicalHashJoin's `GetHashJoinTimingInfo`. Formats the four
+// CreateBF-phase nanosecond counters into a profiler `extra_info` map.
+// Kept in this translation unit because nothing outside needs it.
+//
+// "CreateBF Total Time" is the arithmetic sum of the four sub-buckets. They
+// are sequentially disjoint in execution (Sink → Combine → Finalize-sync →
+// Finalize-tasks), so summing the per-thread CPU ns produces a faithful
+// total of CPU work attributed to this operator without double-counting.
+static InsertionOrderPreservingMap<string> GetCreateBFTimingInfo(const uint64_t sink_ns, const uint64_t combine_ns,
+                                                                 const uint64_t finalize_ns,
+                                                                 const uint64_t bf_insert_ns) {
+	InsertionOrderPreservingMap<string> result;
+	const auto total_ns = sink_ns + combine_ns + finalize_ns + bf_insert_ns;
+	result["CreateBF Total Time"] = StringUtil::Format("%.3f ms", static_cast<double>(total_ns) / 1000000.0);
+	result["CreateBF Sink Time"] = StringUtil::Format("%.3f ms", static_cast<double>(sink_ns) / 1000000.0);
+	result["CreateBF Combine Time"] = StringUtil::Format("%.3f ms", static_cast<double>(combine_ns) / 1000000.0);
+	result["CreateBF Finalize Time"] = StringUtil::Format("%.3f ms", static_cast<double>(finalize_ns) / 1000000.0);
+	result["CreateBF BF Insert Time"] = StringUtil::Format("%.3f ms", static_cast<double>(bf_insert_ns) / 1000000.0);
+	return result;
+}
 
 PhysicalCreateBF::PhysicalCreateBF(vector<LogicalType> types, const vector<shared_ptr<FilterPlan>> &filter_plans,
                                    vector<shared_ptr<DynamicTableFilterSet>> dynamic_filter_sets,
@@ -48,7 +72,10 @@ public:
 	    : context(context), op(op),
 	      num_threads(NumericCast<idx_t>(TaskScheduler::GetScheduler(context).NumberOfThreads())),
 	      temporary_memory_state(TemporaryMemoryManager::Get(context).Register(context)), is_selectivity_checked(false),
-	      num_input_rows(0), total_row_size(0) {
+	      num_input_rows(0), total_row_size(0),
+	      // Snapshot the same runtime knob the hash-join timers use. Stable for
+	      // the lifetime of the query.
+	      enable_timers(ClientConfig::GetConfig(context).enable_hash_join_timers) {
 		data_collection = make_uniq<ColumnDataCollection>(context, op.types);
 
 		// init min max aggregation
@@ -159,11 +186,25 @@ public:
 	atomic<bool> is_selectivity_checked;
 	atomic<int64_t> num_input_rows;
 	atomic<int64_t> total_row_size;
+
+	//! Per-phase nanosecond timers (gated by `enable_timers`).
+	//! `sink_time_ns` and combine_time_ns are summed across threads via
+	//! fetch_add in Combine
+	//! `finalize_time_ns` is written once from the single-threaded Finalize body
+	//! `bf_insert_time_ns` is summed across the parallel CreateBFFinalizeTasks via ScopedHashJoinTimer's atomic
+	//! constructor.
+	atomic<uint64_t> sink_time_ns {0};
+	atomic<uint64_t> combine_time_ns {0};
+	atomic<uint64_t> finalize_time_ns {0};
+	atomic<uint64_t> bf_insert_time_ns {0};
+
+	const bool enable_timers;
 };
 
 class CreateBFLocalSinkState : public LocalSinkState {
 public:
-	CreateBFLocalSinkState(ClientContext &context, const PhysicalCreateBF &op) : client_context(context) {
+	CreateBFLocalSinkState(ClientContext &context, const PhysicalCreateBF &op)
+	    : client_context(context), enable_timers(ClientConfig::GetConfig(context).enable_hash_join_timers) {
 		auto &gstate = op.sink_state->Cast<CreateBFGlobalSinkState>();
 		local_data = make_uniq<ColumnDataCollection>(context, op.types);
 		col_to_expr = gstate.col_to_expr;
@@ -194,6 +235,13 @@ public:
 
 	//! If memory is not enough, give up creating BFs
 	unique_ptr<TemporaryMemoryState> temporary_memory_state;
+
+	//! Per-thread accumulators flushed into the global atomics at Combine.
+	//! Non-atomic because they are only touched by the owning thread.
+	uint64_t sink_time_ns = 0;
+	uint64_t combine_time_ns = 0;
+
+	const bool enable_timers;
 };
 
 // Decide to not create a Bloom Filter at runtime based on selectivity, size, and current memory usage
@@ -279,6 +327,11 @@ bool PhysicalCreateBF::GiveUpBFCreation(const DataChunk &chunk, OperatorSinkInpu
 SinkResultType PhysicalCreateBF::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
 	auto &state = input.local_state.Cast<CreateBFLocalSinkState>();
 
+	// Times the entire Sink body — including the GiveUpBFCreation heuristic
+	// check, the columnar append, and the per-column min/max aggregate sinks.
+	// Non-atomic thread-local accumulator; flushed to gstate in Combine.
+	ScopedHashJoinTimer sink_timer(&state.sink_time_ns, state.enable_timers);
+
 	if (!is_successful || GiveUpBFCreation(chunk, input)) {
 		return SinkResultType::FINISHED;
 	}
@@ -303,18 +356,38 @@ SinkCombineResultType PhysicalCreateBF::Combine(ExecutionContext &context, Opera
 
 	// give up creating filters
 	if (!is_successful) {
+		// Still flush whatever sink_time the thread accumulated before giving
+		// up so we don't lose those ns in profiling.
+		if (state.enable_timers) {
+			gstate.sink_time_ns.fetch_add(state.sink_time_ns, std::memory_order_relaxed);
+		}
 		return SinkCombineResultType::FINISHED;
 	}
 
-	// min-max aggregation
-	gstate.global_aggregate_state->Combine(*state.local_aggregate_state);
+	{
+		// Times the Combine body proper (aggregate merge, reservation update,
+		// local-data hand-off). Closed before the local->global flush so the
+		// counter is final when we fetch_add below.
+		ScopedHashJoinTimer combine_timer(&state.combine_time_ns, state.enable_timers);
 
-	auto guard = gstate.Lock();
-	size_t global_size = gstate.temporary_memory_state->GetMinimumReservation() + state.local_data->SizeInBytes();
-	gstate.temporary_memory_state->SetMinimumReservation(global_size);
-	gstate.temporary_memory_state->SetRemainingSizeAndUpdateReservation(context.client, global_size);
+		// min-max aggregation
+		gstate.global_aggregate_state->Combine(*state.local_aggregate_state);
 
-	gstate.local_data_collections.push_back(std::move(state.local_data));
+		auto guard = gstate.Lock();
+		size_t global_size = gstate.temporary_memory_state->GetMinimumReservation() + state.local_data->SizeInBytes();
+		gstate.temporary_memory_state->SetMinimumReservation(global_size);
+		gstate.temporary_memory_state->SetRemainingSizeAndUpdateReservation(context.client, global_size);
+
+		gstate.local_data_collections.push_back(std::move(state.local_data));
+	}
+
+	// Flush thread-local timers into the global atomics. Mirror of the
+	// pattern at physical_hash_join.cpp:469.
+	if (state.enable_timers) {
+		gstate.sink_time_ns.fetch_add(state.sink_time_ns, std::memory_order_relaxed);
+		gstate.combine_time_ns.fetch_add(state.combine_time_ns, std::memory_order_relaxed);
+	}
+
 	return SinkCombineResultType::FINISHED;
 }
 
@@ -350,14 +423,21 @@ public:
 	}
 
 	TaskExecutionResult ExecuteTask(TaskExecutionMode mode) override {
-		DataChunk chunk;
-		sink.data_collection->InitializeScanChunk(chunk);
-		for (idx_t i = chunk_idx_from; i < chunk_idx_to; i++) {
-			sink.data_collection->FetchChunk(i, chunk);
-			for (auto &pair : sink.op.unique_bloom_filters) {
-				auto &cols_build = pair.first;
-				auto &bf = pair.second;
-				bf->Insert(chunk, cols_build);
+		{
+			// Time the full per-task BF-population scan: FetchChunk + per-BF
+			// Insert. One-shot parallel task with no thread-local counter to
+			// reuse, so we use the atomic constructor (mirror of the
+			// external_probe_time_ns scope at physical_hash_join.cpp:1667).
+			ScopedHashJoinTimer insert_timer(&sink.bf_insert_time_ns, sink.enable_timers);
+			DataChunk chunk;
+			sink.data_collection->InitializeScanChunk(chunk);
+			for (idx_t i = chunk_idx_from; i < chunk_idx_to; i++) {
+				sink.data_collection->FetchChunk(i, chunk);
+				for (auto &pair : sink.op.unique_bloom_filters) {
+					auto &cols_build = pair.first;
+					auto &bf = pair.second;
+					bf->Insert(chunk, cols_build);
+				}
 			}
 		}
 		event->FinishTask();
@@ -425,6 +505,12 @@ SinkFinalizeType PhysicalCreateBF::Finalize(Pipeline &pipeline, Event &event, Cl
 	if (!is_successful) {
 		return SinkFinalizeType::READY;
 	}
+
+	// Times the synchronous Finalize body (min-max finalize, local-data
+	// merge, BF Initialize loop, event scheduling). The atomic constructor
+	// is used because there is no thread-local counter here — Finalize runs
+	// once on the coordinator thread.
+	ScopedHashJoinTimer finalize_timer(&sink.finalize_time_ns, sink.enable_timers);
 
 	// Finalize min-max
 	sink.FinalizeMinMax();
@@ -510,6 +596,21 @@ SourceResultType PhysicalCreateBF::GetData(ExecutionContext &context, DataChunk 
 	auto &gstate = input.global_state.Cast<CreateBFGlobalSourceState>();
 	auto &lstate = input.local_state.Cast<CreateBFLocalSourceState>();
 	gstate.data_collection.Scan(gstate.global_scan_state, lstate.local_scan_state, chunk);
+
+	// Emit accumulated timers. By the time pipeline B2 calls GetData, the
+	// CreateBFFinalizeEvent has completed, so all four atomics are stable.
+	// AddExtraInfo uses replace-merge semantics, so repeated calls per chunk
+	// (and across source threads) are safe — every call overwrites with the
+	// same global values.
+	auto &sink = sink_state->Cast<CreateBFGlobalSinkState>();
+	if (sink.enable_timers) {
+		auto sink_ns = sink.sink_time_ns.load(std::memory_order_relaxed);
+		auto combine_ns = sink.combine_time_ns.load(std::memory_order_relaxed);
+		auto finalize_ns = sink.finalize_time_ns.load(std::memory_order_relaxed);
+		auto bf_insert_ns = sink.bf_insert_time_ns.load(std::memory_order_relaxed);
+		context.thread.profiler.AddExtraInfo(GetCreateBFTimingInfo(sink_ns, combine_ns, finalize_ns, bf_insert_ns));
+	}
+
 	return chunk.size() == 0 ? SourceResultType::FINISHED : SourceResultType::HAVE_MORE_OUTPUT;
 }
 

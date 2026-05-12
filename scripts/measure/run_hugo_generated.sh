@@ -7,13 +7,17 @@
 # Options:
 #   --cold N        Cold-to-hot ratio: 1, 5, 10, 100  (default: 10)
 #   --layout L      Layout: interleaved, segmented     (default: interleaved)
+#   --mult M        Multiplicity suffix (REQUIRED): selects file
+#                   scripts/measure/generation/<cold>_cold_<layout>_<mult>x.sql
+#                   (programmer's responsibility to ensure that file exists)
 #   --case N        Optimizer case (mutually exclusive with --cases):
 #                     1 = Old DuckDB (no RPT, no THC)
 #                     2 = RPT+ Forward Pass Only
 #                     3 = RPT+ Forward + THC
 #                     4 = RPT+ Forward + Backward
 #   --cases <list>  Comma-separated case list, e.g. 2,3,4
-#   --runs N        Run the query N times with a warmup and print average (default: 1)
+#   --runs N        Run the query N times and print average (default: 1)
+#   --no-warmup     Skip the warmup EXECUTE before timed iterations
 #   --seed <int>    Override transfer_graph_seed (mutually exclusive with --seeds)
 #   --seeds <N>     Sweep seeds 0..N-1 (overrides transfer_graph_seed)
 #   --csv <path>    Write per-run CSV (auto-named if omitted in sweep mode)
@@ -24,16 +28,17 @@
 #   --no-taskset    Don't pin DuckDB to cores 4-59 via taskset (pinning is on by default)
 #
 # Examples:
-#   ./scripts/measure/run_hugo_generated.sh --case 3                  # 10 cold, interleaved, RPT+Forward+THC
-#   ./scripts/measure/run_hugo_generated.sh --case 1 --generate       # generate data first, Old DuckDB
-#   ./scripts/measure/run_hugo_generated.sh --case 4 --cold 100 --layout segmented --generate --perf
+#   ./scripts/measure/run_hugo_generated.sh --case 3 --mult 100                                # 10 cold, interleaved, 100x, RPT+Forward+THC
+#   ./scripts/measure/run_hugo_generated.sh --case 1 --mult 100 --generate                     # generate data first, Old DuckDB
+#   ./scripts/measure/run_hugo_generated.sh --case 4 --cold 100 --layout segmented --mult 1000 --generate --perf
 #
 # Sweep example (box plots):
-#   ./scripts/measure/run_hugo_generated.sh --cases 2,3,4 --seeds 5
+#   ./scripts/measure/run_hugo_generated.sh --cases 2,3,4 --mult 100 --seeds 5
 set -euo pipefail
 
 COLD=10
 LAYOUT=interleaved
+MULT=""
 CASE=""
 CASES_LIST=""
 RUNS=1
@@ -44,6 +49,7 @@ GENERATE=false
 USE_PERF=false
 PROFILE=false
 USE_TASKSET=true
+NO_WARMUP=false
 BUILD_TYPE=release
 
 usage() {
@@ -53,9 +59,12 @@ Usage: scripts/measure/run_hugo_generated.sh (--case <c> | --cases <list>) [opti
 Options:
   --cold <1|5|10|100>   Cold-to-hot ratio (default: 10)
   --layout <L>          Layout: interleaved, segmented (default: interleaved)
+  --mult <int>          Multiplicity suffix (REQUIRED): selects file
+                        scripts/measure/generation/<cold>_cold_<layout>_<mult>x.sql
   --case <1|2|3|4>      Optimizer case (mutually exclusive with --cases)
   --cases <list>        Comma-separated case list, e.g. 2,3,4
   --runs <N>            EXECUTE iterations per (case, seed) tuple (default: 1)
+  --no-warmup           Skip the warmup EXECUTE before timed iterations
   --seed <int>          Override transfer_graph_seed (mutually exclusive with --seeds)
   --seeds <N>           Sweep seeds 0..N-1 (overrides transfer_graph_seed)
   --csv <path>          Write per-run CSV (auto-named if omitted in sweep mode)
@@ -73,6 +82,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --cold)      COLD="$2";    shift 2 ;;
         --layout)    LAYOUT="$2";  shift 2 ;;
+        --mult)      MULT="$2";    shift 2 ;;
         --case)      CASE="$2";    shift 2 ;;
         --cases)     CASES_LIST="$2"; shift 2 ;;
         --runs)      RUNS="$2";    shift 2 ;;
@@ -84,6 +94,7 @@ while [[ $# -gt 0 ]]; do
         --profile|--duckdb-profiling)   PROFILE=true;   shift ;;
         --debug)     BUILD_TYPE=debug;   shift ;;
         --no-taskset) USE_TASKSET=false; shift ;;
+        --no-warmup) NO_WARMUP=true; shift ;;
         -h|--help)   usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
@@ -97,6 +108,12 @@ case "$LAYOUT" in
     interleaved|segmented) ;;
     *) echo "Error: --layout must be interleaved or segmented (got: $LAYOUT)"; exit 1 ;;
 esac
+if [[ -z "$MULT" ]]; then
+    echo "Error: --mult is required (positive integer). See --help." >&2; exit 1
+fi
+if ! [[ "$MULT" =~ ^[0-9]+$ ]] || [[ "$MULT" -lt 1 ]]; then
+    echo "Error: --mult must be a positive integer (got: $MULT)" >&2; exit 1
+fi
 if [[ -n "$CASE" && -n "$CASES_LIST" ]]; then
     echo "Error: --case and --cases are mutually exclusive." >&2; exit 1
 fi
@@ -154,7 +171,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
-DB_NAME="${COLD}_cold_${LAYOUT}"
+DB_NAME="${COLD}_cold_${LAYOUT}_${MULT}x"
 DB="scripts/measure/data/${DB_NAME}.duckdb"
 SETUP_SQL="scripts/measure/generation/${DB_NAME}.sql"
 COMMON_SETTINGS_SQL="scripts/measure/settings-common.sql"
@@ -238,8 +255,12 @@ if ! $SWEEPING && [[ -z "$CSV_PATH" ]]; then
         echo "FROM a"
         echo "JOIN b ON a.keyB1 = b.keyB1;"
         echo ""
-        echo "EXECUTE benchmark_query;"
-        echo ".print Warmup done - running $RUNS timed iterations"
+        if ! $NO_WARMUP; then
+            echo "EXECUTE benchmark_query;"
+            echo ".print Warmup done - running $RUNS timed iterations"
+        else
+            echo ".print Skipping warmup - running $RUNS timed iterations"
+        fi
         echo "SET VARIABLE t0 = epoch_ms(now());"
         echo ".timer on"
         for ((i = 0; i < RUNS; i++)); do
@@ -286,9 +307,14 @@ build_sweep_sql() {
     echo "FROM a"
     echo "JOIN b ON a.keyB1 = b.keyB1;"
     echo ""
-    # Warmup run; output goes to /dev/null so it stays out of captured stream.
+    # Suppress non-timing output so only PERRUN_S lines reach the captured stream.
+    # (The .output /dev/null persists across iterations; each loop iteration
+    # briefly toggles back to stdout to print the PERRUN_S line.)
     echo ".output /dev/null"
-    echo "EXECUTE benchmark_query;"
+    if ! $NO_WARMUP; then
+        # Warmup run; its result is suppressed by the .output /dev/null above.
+        echo "EXECUTE benchmark_query;"
+    fi
     # CSV mode + headers off so PERRUN_S lines come out as bare text we can grep.
     echo ".mode csv"
     echo ".headers off"
