@@ -593,7 +593,8 @@ void CreateBfForAllTablesSetting::SetLocal(ClientContext &context, const Value &
 }
 
 void CreateBfForAllTablesSetting::ResetLocal(ClientContext &context) {
-	ClientConfig::GetConfig(context).skip_unfiltered_tables_create_bf_plan = ClientConfig().skip_unfiltered_tables_create_bf_plan;
+	ClientConfig::GetConfig(context).skip_unfiltered_tables_create_bf_plan =
+	    ClientConfig().skip_unfiltered_tables_create_bf_plan;
 }
 
 Value CreateBfForAllTablesSetting::GetSetting(const ClientContext &context) {
@@ -695,7 +696,8 @@ void SkipUnfilteredTablesSetting::SetLocal(ClientContext &context, const Value &
 }
 
 void SkipUnfilteredTablesSetting::ResetLocal(ClientContext &context) {
-	ClientConfig::GetConfig(context).skip_unfiltered_tables_graph_creation = ClientConfig().skip_unfiltered_tables_graph_creation;
+	ClientConfig::GetConfig(context).skip_unfiltered_tables_graph_creation =
+	    ClientConfig().skip_unfiltered_tables_graph_creation;
 }
 
 Value SkipUnfilteredTablesSetting::GetSetting(const ClientContext &context) {
@@ -718,6 +720,8 @@ void AllowBuildProbeSideSwapSetting::ResetLocal(ClientContext &context) {
 Value AllowBuildProbeSideSwapSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
 	return Value::BOOLEAN(config.allow_build_probe_side_swap);
+}
+
 // Enable Hash Join Timers
 //===----------------------------------------------------------------------===//
 void EnableHashJoinTimersSetting::SetLocal(ClientContext &context, const Value &input) {
