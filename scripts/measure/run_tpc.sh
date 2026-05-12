@@ -19,6 +19,13 @@ if [[ "$COMMON_SETTINGS_SQL" != /* ]]; then
     COMMON_SETTINGS_SQL="$PWD/$COMMON_SETTINGS_SQL"
 fi
 RUN_SETTINGS_SQL="scripts/measure/settings-run_tpc.sql"
+# Use GNU time on Linux (`/usr/bin/time -f ...`); fall back to `gtime` from
+# `brew install gnu-time` on macOS, since BSD `/usr/bin/time` doesn't accept `-f`.
+if command -v gtime >/dev/null 2>&1; then
+    TIME_BIN="gtime"
+else
+    TIME_BIN="/usr/bin/time"
+fi
 PERF_EVENTS="cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,mem_access,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd,branch-instructions,branch-misses,br_retired,br_mis_pred_retired"
 
 usage() {
