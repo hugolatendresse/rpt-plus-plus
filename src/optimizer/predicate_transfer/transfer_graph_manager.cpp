@@ -72,7 +72,7 @@ bool TransferGraphManager::Build(LogicalOperator &plan) {
 	// 3. Unfiltered tables only receive Bloom filters, they will not generate Bloom filters.
 	//    Gated by skip_unfiltered_tables_graph_creation so the edge-pruning pass can be
 	//    toggled independently of the transfer-order strategy. Disabling it
-	//    lets THCRootAndTransferGraph explore plans where unfiltered tables
+	//    lets CreateTransferPlanSPY explore plans where unfiltered tables
 	//    also create BFs.
 	if (cfg.skip_unfiltered_tables_graph_creation) {
 		SkipUnfilteredTable(joins);
@@ -640,13 +640,15 @@ void TransferGraphManager::CreateTransferPlanSPY(bool seeded_root, bool seeded_g
 		return result;
 	};
 
-	// Register `id` as the leader for every join-key group it participates
-	// in (same bookkeeping the original LargestRootUpdated/PickRootAndOrderWithSeed
-	// performed after adding a table).
+	// Register `id` as the leader for every join-key group it participates in.
+	// `table_groups` is populated by ExtractEdgesInfo via UnionBindings, so an
+	// entry exists only for bindings that participated in at least one
+	// unprotected equijoin (protected edges -- e.g. the outer side of a
+	// LEFT/RIGHT/MARK join -- skip the union step). Bindings outside any
+	// group leave `group` null, which is why the null check is needed.
 	auto RegisterLeaders = [&](idx_t id) {
 		for (auto &col_binding : table_join_keys[id]) {
 			auto &group = table_groups[col_binding];
-			// TODO when do groups in table_groups ever get populated?
 			if (group) {
 				group->RegisterLeader(id, col_binding);
 			}
@@ -706,11 +708,12 @@ void TransferGraphManager::CreateTransferPlanSPY(bool seeded_root, bool seeded_g
 		D_ASSERT(!unconstructed_set.empty());
 		if (seeded_root) {
 			// Seed-driven pick over a deterministic name-sorted snapshot of
-			// the unconstructed candidates. This intentionally mirrors the
-			// previous PickRootAndOrderWithSeed behavior: any table is a
-			// valid root, including unfiltered ones. The pre-existing TODO
-			// about combining this with skip_unfiltered_tables_graph_creation=true (which
-			// could disable the backward pass) carries over unchanged.
+			// the unconstructed candidates. Any table is a valid root,
+			// including unfiltered ones. Note: combining seeded_root=true
+			// with skip_unfiltered_tables_graph_creation=true can root the
+			// tree at a table whose outgoing edges were pruned by
+			// SkipUnfilteredTable, which yields a degenerate spanning tree
+			// for that component.
 			vector<idx_t> remaining(unconstructed_set.begin(), unconstructed_set.end());
 			std::sort(remaining.begin(), remaining.end(), LessByName);
 			size_t idx = PickMod(remaining.size());
@@ -730,8 +733,7 @@ void TransferGraphManager::CreateTransferPlanSPY(bool seeded_root, bool seeded_g
 			}
 		}
 		// Fallback: no filtered/intermediate table left, fall back to the
-		// largest unconstructed table (matches LargestRootUpdated's "all
-		// tables have no filter" branch).
+		// largest unconstructed table.
 		for (auto it = sorted_nodes.rbegin(); it != sorted_nodes.rend(); ++it) {
 			idx_t id = TableOperatorManager::GetScalarTableIndex(*it);
 			if (unconstructed_set.count(id)) {

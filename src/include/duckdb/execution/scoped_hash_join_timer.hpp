@@ -3,18 +3,39 @@
 //
 // duckdb/execution/scoped_hash_join_timer.hpp
 //
-// A small RAII helper for accumulating nanosecond timings into an optional
-// uint64_t counter.
+// A small RAII helper for accumulating nanosecond timings into a counter.
+//
+// Two constructor overloads are provided to support the two accumulation
+// patterns used throughout the hash join code:
+//
+//   1. `ScopedHashJoinTimer(uint64_t *target, ...)` — non-atomic increment.
+//      Use this when many timer scopes fire on the same thread and feed into
+//      a thread-local counter inside the per-thread state (e.g. the per-chunk
+//      timers in `JoinHashTable::GetRowPointers` writing to fields in
+//      `HashJoinOperatorState`). The destructor does a single non-atomic
+//      `*target += elapsed_ns`, so the timer is cheap enough to nest in inner
+//      loops. The caller is responsible for rolling the thread-local counter
+//      into a global atomic at a well-defined boundary (e.g. Combine,
+//      FlushLocalTimings).
+//
+//   2. `ScopedHashJoinTimer(std::atomic<uint64_t> *target, ...)` — atomic
+//      fetch_add. Use this at call sites that have no thread-local counter
+//      to reuse: one-shot parallel tasks (`HashJoinFinalizeTask` etc.), and
+//      coordinator-thread scopes inside event callbacks. The destructor does
+//      one `fetch_add(elapsed_ns, std::memory_order_relaxed)`, so each scope
+//      costs exactly one atomic op while the call site stays a single line
+//      (no surrounding `uint64_t local = 0;` + explicit fetch_add).
 //
 // Whether or not a particular scope actually does timing is controlled at
 // runtime via:
-//   - the `target_p` pointer being non-null, AND
+//   - the chosen `target_p` pointer being non-null, AND
 //   - the `enabled` argument being true.
 //
-// When either condition is false, the constructor and destructor do nothing.
-//
-// The runtime knob is the `enable_hash_join_timers` ClientConfig flag
-// (see `client_config.hpp`).
+// When either condition is false, the constructor and destructor do nothing
+// (no `now()` calls, no stores). The runtime knob is the
+// `enable_hash_join_timers` ClientConfig flag (see `client_config.hpp`); the
+// hash-join code mirrors it once into a `const bool enable_timers` field on
+// the sink/operator state and passes that into every ScopedHashJoinTimer.
 //===----------------------------------------------------------------------===//
 
 #pragma once
