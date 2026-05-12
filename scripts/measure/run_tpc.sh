@@ -200,7 +200,7 @@ for RUN_IDX in $(seq 1 "$RUNS"); do
             TIME_FILE=$(mktemp)
             SQL="$(build_sql tpch "PRAGMA tpch(${Q});")"
             if $USE_PERF; then
-                if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
+                if "$TIME_BIN" -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
                     RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
                     printf "Q%02d,%s\n" "$Q" "$RUNTIME" >> "$TPCH_CSV_PATH"
                 else
@@ -209,7 +209,7 @@ for RUN_IDX in $(seq 1 "$RUNS"); do
                     exit 1
                 fi
             else
-                if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
+                if "$TIME_BIN" -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
                     RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
                     printf "Q%02d,%s\n" "$Q" "$RUNTIME" >> "$TPCH_CSV_PATH"
                 else
@@ -229,7 +229,7 @@ for RUN_IDX in $(seq 1 "$RUNS"); do
             TIME_FILE=$(mktemp)
             SQL="$(build_sql tpcds "PRAGMA tpcds(${Q});")"
             if $USE_PERF; then
-                if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
+                if "$TIME_BIN" -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
                     RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
                     printf "Q%02d,%s\n" "$Q" "$RUNTIME" >> "$TPCDS_CSV_PATH"
                 else
@@ -238,7 +238,7 @@ for RUN_IDX in $(seq 1 "$RUNS"); do
                     exit 1
                 fi
             else
-                if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
+                if "$TIME_BIN" -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
                     RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
                     printf "Q%02d,%s\n" "$Q" "$RUNTIME" >> "$TPCDS_CSV_PATH"
                 else

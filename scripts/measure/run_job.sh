@@ -158,6 +158,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 JOB_DIR="$REPO_ROOT/join-order-benchmark"
 COMMON_SETTINGS_SQL="${COMMON_SETTINGS_SQL:-$REPO_ROOT/scripts/measure/settings-common.sql}"
 RUN_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-run_job.sql"
+# Use GNU time on Linux (`/usr/bin/time -f ...`); fall back to `gtime` from
+# `brew install gnu-time` on macOS, since BSD `/usr/bin/time` doesn't accept `-f`.
+if command -v gtime >/dev/null 2>&1; then
+	TIME_BIN="gtime"
+else
+	TIME_BIN="/usr/bin/time"
+fi
 # Absolute path so the file is easy to locate regardless of the script's CWD.
 PROFILING_OUTPUT="$REPO_ROOT/job_results.json"
 # See https://duckdb.org/docs/stable/dev/profiling
@@ -250,7 +257,7 @@ run_query() {
 	sql="$(build_sql "$case_num" "$seed_val" "$query_file")"
 	time_file=$(mktemp)
 	if $USE_PERF; then
-		if /usr/bin/time -f "%e" -o "$time_file" bash -c \
+		if "$TIME_BIN" -f "%e" -o "$time_file" bash -c \
 			'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4"' \
 			_ "$sql" "$PERF_EVENTS" "$DUCKDB_BIN" "$DB_FILE"; then
 			runtime=$(awk 'NR==1{print $1}' "$time_file")
@@ -260,7 +267,7 @@ run_query() {
 			exit 1
 		fi
 	else
-		if /usr/bin/time -f "%e" -o "$time_file" bash -c \
+		if "$TIME_BIN" -f "%e" -o "$time_file" bash -c \
 			'printf "%s\n" "$1" | "$2" "$3"' \
 			_ "$sql" "$DUCKDB_BIN" "$DB_FILE"; then
 			runtime=$(awk 'NR==1{print $1}' "$time_file")
