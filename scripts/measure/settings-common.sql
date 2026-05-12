@@ -23,4 +23,8 @@ SET threads = 1;
 SET disable_perfect_hashing = true;
 SET pin_threads = 'on';
 
+-- Populate fine-grained hash-join timers (Build Time, Probe Time, Match Time,
+-- THC Collect/Insert/Probe Time, ...) in the DuckDB profiling JSON. 
+SET enable_hash_join_timers = true;
+
 
