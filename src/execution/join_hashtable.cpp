@@ -735,37 +735,13 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	state.total_probe_rows += input_count;
 
 	// =================================================================
-	// BASELINE PHASE — measure C_main (main HT only, no THC)
-	// =================================================================
-	if (state.tiered_hash_cache_phase == TieredHashCachePhase::BASELINE) {
-		auto phase_t0 = std::chrono::steady_clock::now();
-		if (UseSalt()) {
-			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
-			                             pointers_result_v, match_sel, has_sel);
-		} else {
-			GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries,
-			                              pointers_result_v, match_sel, has_sel);
-		}
-		auto phase_t1 = std::chrono::steady_clock::now();
-		state.phase_time_ns +=
-		    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(phase_t1 - phase_t0).count());
-		state.phase_probe_count += input_count;
-
-		if (state.phase_probe_count >= thc_collect_phase_rows) {
-			state.c_main = static_cast<double>(state.phase_time_ns) / static_cast<double>(state.phase_probe_count);
-			DEBUG_LOG("[BASELINE->COLLECT] c_main=%.2f ns/probe, phase_probes=%lu\n", state.c_main,
-			          (unsigned long)state.phase_probe_count);
-			state.tiered_hash_cache_phase = TieredHashCachePhase::COLLECT;
-			state.phase_time_ns = 0;
-			state.phase_probe_count = 0;
-			state.probe_rows_in_phase = 0;
-		}
-		return;
-	}
-
-	// =================================================================
 	// COLLECT PHASE
 	// =================================================================
+	// Cycle 0 doubles as the c_main measurement window: we time the bare
+	// GetRowPointersInternal call separately from the collect-loop overhead,
+	// so c_main captures vanilla-DuckDB per-probe cost without ever needing
+	// a dedicated BASELINE phase.  Saves ~thc_collect_phase_rows probes of
+	// pure baseline work per thread on every join.
 	if (state.tiered_hash_cache_phase == TieredHashCachePhase::COLLECT) {
 		auto collect_phase_t0 = std::chrono::steady_clock::now();
 
@@ -795,7 +771,11 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 					}
 				}
 
-				// Run the regular DuckDB probe (no THC involvement)
+				// Run the regular DuckDB probe (no THC involvement).  Time it
+				// separately from the surrounding collect work — accumulator
+				// state.cycle0_probe_only_time_ns is the numerator of c_main,
+				// computed once at the cycle 0 boundary below.
+				auto probe_only_t0 = std::chrono::steady_clock::now();
 				if (UseSalt()) {
 					GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
 					                             pointers_result_v, match_sel, has_sel);
@@ -803,6 +783,9 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 					GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries,
 					                              pointers_result_v, match_sel, has_sel);
 				}
+				auto probe_only_t1 = std::chrono::steady_clock::now();
+				state.cycle0_probe_only_time_ns += static_cast<uint64_t>(
+				    std::chrono::duration_cast<std::chrono::nanoseconds>(probe_only_t1 - probe_only_t0).count());
 
 				// Collect every matched row as a collected entry so that the first
 				// THC population covers the broadest possible set of hot keys.
@@ -933,6 +916,15 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			state.phase_probe_count += state.probe_rows_in_phase;
 			state.c_grow_current =
 			    static_cast<double>(state.phase_time_ns) / static_cast<double>(state.phase_probe_count);
+
+			// Derive c_main from the bare-probe timing accumulated only during cycle 0.
+			// In later cycles this branch fires but the accumulator is zero, so the
+			// computed c_main would be meaningless — restrict to the cycle 0 boundary.
+			if (state.completed_collect_cycles == 0 && state.phase_probe_count > 0) {
+				state.c_main = static_cast<double>(state.cycle0_probe_only_time_ns) /
+				               static_cast<double>(state.phase_probe_count);
+				DEBUG_LOG("[Cycle0->Read-Only] c_main=%.2f ns/probe (folded baseline)\n", state.c_main);
+			}
 
 			DEBUG_LOG("[Collect->Read-Only] cycle=%lu, probe_rows_in_phase=%lu, buffered=%lu, "
 			          "new_entries_this_phase=%lu, cache_fill=%lu/%lu, new_inserts_count=%lu, dup_inserts_count=%lu, "

@@ -227,8 +227,12 @@ public:
 		// READ_ONLY probes the THC and tracks miss rate for deciding the next collect
 		// phase.
 
-		//! Current phase of the adaptive THC lifecycle
-		TieredHashCachePhase tiered_hash_cache_phase = TieredHashCachePhase::BASELINE;
+		//! Current phase of the adaptive THC lifecycle.
+		//! Starts in COLLECT: cycle 0 measures c_main (bare HT probe time) as a
+		//! side-effect of the regular DuckDB probe it already has to run, so a
+		//! separate BASELINE phase isn't needed.  BASELINE remains in the enum
+		//! for documentation purposes but no path transitions to it.
+		TieredHashCachePhase tiered_hash_cache_phase = TieredHashCachePhase::COLLECT;
 
 		//! When true, this thread has permanently abandoned the THC because
 		//! the miss rate remained high even after the THC was full.
@@ -318,8 +322,12 @@ public:
 		idx_t mu_s_chain_count = 0;
 
 		// ---- Cost-based adaptive tracking ----
-		//! Baseline average ns/probe measured during the BASELINE phase (main HT only).
+		//! Baseline average ns/probe.  Measured during cycle 0 (folded with COLLECT)
+		//! by timing the bare HT probe call separately from the collect-loop overhead.
 		double c_main = 0.0;
+		//! Wall-clock nanoseconds spent in just the bare HT probe portion of cycle 0,
+		//! used to derive c_main without needing a separate BASELINE phase.
+		uint64_t cycle0_probe_only_time_ns = 0;
 		//! Average ns/probe measured during the most recent COLLECT phase.
 		double c_grow_current = 0.0;
 		//! Average ns/probe measured during the most recent READ_ONLY (evaluation) phase.

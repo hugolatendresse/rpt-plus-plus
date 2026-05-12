@@ -157,11 +157,21 @@ struct ClientConfig {
 	//! roughly preserved (32 MiB * 0.875 ≈ 48 MiB * 0.6).  Worth retuning.
 	idx_t thc_budget_bytes = 48ULL * 1024 * 1024;
 	//! Number of probe-side rows processed per THC collect phase.
-	//! Smaller values mean faster warm-up but more frequent collect/flush cycles.
-	idx_t thc_collect_phase_rows = 200000;
+	//! Also doubles as the cycle 0 / c_main measurement window since BASELINE
+	//! was folded into cycle 0.  Smaller values mean faster warm-up (and
+	//! faster abandonment for bad-fit joins) at the cost of lower-precision
+	//! c_main / c_grow statistics.
+	//! Default: 50k.  Lowered from 200k — likely worth retuning per workload.
+	idx_t thc_collect_phase_rows = 50000;
 	//! Base length (in probe rows) of the first READ_ONLY phase after a collect.
 	//! Subsequent READ_ONLY phases double this via exponential backoff.
-	idx_t thc_first_read_only_phase_rows = 999999999;
+	//! The first-cycle abandonment heuristics (low multiplicity, high hotness,
+	//! THC too small for build) fire at the end of this phase, so the value
+	//! must be small enough that they can run on a reasonable timescale.
+	//! Default: 50k.  Previously 999,999,999 — which meant the heuristics
+	//! literally never fired in default config, leaving every thread stuck on
+	//! the THC even when its own estimates said the THC wouldn't help.
+	idx_t thc_first_read_only_phase_rows = 50000;
 	//! Maximum fraction of probe rows that can be spent in THC collect phases.
 	//! Example: 0.02 means collect overhead is capped at 2% of probe rows.
 	double thc_collect_budget_fraction = 0.02;
