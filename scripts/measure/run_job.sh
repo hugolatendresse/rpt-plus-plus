@@ -12,6 +12,7 @@ JOB_QUERY=""
 JOB_QUERIES_LIST=""
 SEED=""
 SEEDS_COUNT=""
+RUNS=1
 CSV_PATH=""
 USE_PERF=false
 USE_DEBUG=false
@@ -29,10 +30,14 @@ Options:
   --job-queries <list>  Comma-separated JOB query list, e.g. 1a,2a,2b,4c
   --seed <int>          Override transfer_graph_seed (mutually exclusive with --seeds)
   --seeds <N>           Sweep seeds 0..N-1 (overrides transfer_graph_seed)
+  --runs <N>            Number of benchmark runs per (case, seed) tuple (default: 1)
   --csv <path>          Write per-run CSV (auto-named if omitted in sweep mode)
   --perf                Run query/queries under perf stat
   --debug               Use debug build (build/debug/duckdb)
-  --duckdb-profiling    Enable DuckDB JSON profiling, output to job_results.json
+  --duckdb-profiling    Enable DuckDB JSON profiling: per-query JSON files
+                        under results/job/profiling_<timestamp>/, plus an
+                        augmented runtime CSV with per-join THC telemetry
+                        columns Join1..JoinN (via thc_csv_postprocess.py).
   -h, --help            Show this help
 USAGE
 }
@@ -61,6 +66,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--seeds)
 		SEEDS_COUNT="$2"
+		shift 2
+		;;
+	--runs)
+		RUNS="$2"
 		shift 2
 		;;
 	--csv)
@@ -105,6 +114,10 @@ if [[ -n "$JOB_QUERY" && -n "$JOB_QUERIES_LIST" ]]; then
 fi
 if [[ -z "$CASE" && -z "$CASES_LIST" ]]; then
 	echo "Error: --case or --cases is required." >&2
+	exit 1
+fi
+if ! [[ "$RUNS" =~ ^[0-9]+$ ]] || [[ "$RUNS" -lt 1 ]]; then
+	echo "Error: --runs must be a positive integer (got: $RUNS)" >&2
 	exit 1
 fi
 
@@ -158,12 +171,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 JOB_DIR="$REPO_ROOT/join-order-benchmark"
 COMMON_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-common.sql"
 RUN_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-run_job.sql"
-# Absolute path so the file is easy to locate regardless of the script's CWD.
-PROFILING_OUTPUT="$REPO_ROOT/job_results.json"
-# See https://duckdb.org/docs/stable/dev/profiling
-PROFILING_PRAGMAS="PRAGMA enable_profiling = 'json';
-PRAGMA profiling_output = '$PROFILING_OUTPUT';
-PRAGMA profiling_coverage = 'SELECT';"
+# When DuckDB profiling is on, the JSON for each query is written to its own
+# path under PROFILING_DIR/ so it survives the next query's run; the
+# benchmark post-processor walks those files to extract per-join THC
+# telemetry. PROFILING_OUTPUT itself is set per query in the inner loop.
+PROFILING_OUTPUT=""
+PROFILING_DIR="$REPO_ROOT/results/job/profiling_$(date +%Y%m%d_%H%M%S)"
 if $USE_DEBUG; then
 	DUCKDB_BIN="$REPO_ROOT/build/debug/duckdb"
 else
@@ -214,23 +227,31 @@ fi
 # single-shot mode (one case, one query, no seed sweep) only writes a CSV
 # when --csv is explicitly provided.
 SWEEPING=false
-if $SWEEPING_SEEDS || [[ ${#CASES[@]} -gt 1 ]] || [[ ${#QUERY_FILES[@]} -gt 1 ]]; then
+if $SWEEPING_SEEDS || [[ ${#CASES[@]} -gt 1 ]] || [[ ${#QUERY_FILES[@]} -gt 1 ]] || [[ "$RUNS" -gt 1 ]]; then
 	SWEEPING=true
 fi
 if $SWEEPING && [[ -z "$CSV_PATH" ]]; then
-	mkdir -p "$REPO_ROOT/job_results"
-	CSV_PATH="$REPO_ROOT/job_results/job_runtimes_$(date +%Y%m%d_%H%M%S).csv"
+	mkdir -p "$REPO_ROOT/results/job"
+	CSV_PATH="$REPO_ROOT/results/job/job_runtimes_$(date +%Y%m%d_%H%M%S).csv"
 fi
 if [[ -n "$CSV_PATH" ]]; then
 	mkdir -p "$(dirname "$CSV_PATH")"
-	printf "query,case,seed,runtime_seconds\n" >"$CSV_PATH"
+	printf "query,case,seed,run_idx,runtime_seconds\n" >"$CSV_PATH"
+fi
+
+if $USE_DUCKDB_PROFILING; then
+	mkdir -p "$PROFILING_DIR"
 fi
 
 build_sql() {
 	local case_num="$1"
 	local seed_val="$2"
 	local query_file="$3"
-	if $USE_DUCKDB_PROFILING; then printf '%s\n' "$PROFILING_PRAGMAS"; fi
+	if $USE_DUCKDB_PROFILING && [[ -n "$PROFILING_OUTPUT" ]]; then
+		printf "PRAGMA enable_profiling = 'json';\n"
+		printf "PRAGMA profiling_output = '%s';\n" "$PROFILING_OUTPUT"
+		printf "PRAGMA profiling_coverage = 'SELECT';\n"
+	fi
 	grep '^SET ' "$COMMON_SETTINGS_SQL" || true
 	grep '^SET ' "$RUN_SETTINGS_SQL" || true
 	case_settings_for "$case_num"
@@ -275,26 +296,34 @@ run_query() {
 }
 
 if [[ -n "$JOB_QUERY" ]]; then
-	echo "Starting Join Order Benchmark execution (cases: ${CASES[*]}, seeds: ${SEEDS[*]:-default}, query: ${JOB_QUERY})..."
+	echo "Starting Join Order Benchmark execution (cases: ${CASES[*]}, seeds: ${SEEDS[*]:-default}, runs/tuple: ${RUNS}, query: ${JOB_QUERY})..."
 else
-	echo "Starting Join Order Benchmark execution (cases: ${CASES[*]}, seeds: ${SEEDS[*]:-default})..."
+	echo "Starting Join Order Benchmark execution (cases: ${CASES[*]}, seeds: ${SEEDS[*]:-default}, runs/tuple: ${RUNS})..."
 fi
 
 TOTAL_RUNTIME=0
 ROW_COUNT=0
 for c in "${CASES[@]}"; do
 	for s in "${SEEDS[@]}"; do
-		for q in "${QUERY_FILES[@]}"; do
-			query_name="${q#queries/}"
-			query_name="${query_name%.sql}"
-			echo "Executing case=${c} seed=${s:-default} query=${query_name}..."
-			run_query "$c" "$s" "$q"
-			echo "  runtime: ${LAST_RUNTIME} s"
-			if [[ -n "$CSV_PATH" ]]; then
-				printf '%s,%s,%s,%s\n' "$query_name" "$c" "$s" "$LAST_RUNTIME" >>"$CSV_PATH"
-			fi
-			TOTAL_RUNTIME=$(awk -v t="$TOTAL_RUNTIME" -v r="$LAST_RUNTIME" 'BEGIN{printf "%.6f", t + r}')
-			ROW_COUNT=$((ROW_COUNT + 1))
+		for RUN_IDX in $(seq 1 "$RUNS"); do
+			for q in "${QUERY_FILES[@]}"; do
+				query_name="${q#queries/}"
+				query_name="${query_name%.sql}"
+				seed_for_path="${s:-default}"
+				if $USE_DUCKDB_PROFILING; then
+					PROFILING_OUTPUT="$PROFILING_DIR/job_q${query_name}_case${c}_seed${seed_for_path}_run${RUN_IDX}.json"
+				else
+					PROFILING_OUTPUT=""
+				fi
+				echo "Executing case=${c} seed=${s:-default} run=${RUN_IDX}/${RUNS} query=${query_name}..."
+				run_query "$c" "$s" "$q"
+				echo "  runtime: ${LAST_RUNTIME} s"
+				if [[ -n "$CSV_PATH" ]]; then
+					printf '%s,%s,%s,%s,%s\n' "$query_name" "$c" "$s" "$RUN_IDX" "$LAST_RUNTIME" >>"$CSV_PATH"
+				fi
+				TOTAL_RUNTIME=$(awk -v t="$TOTAL_RUNTIME" -v r="$LAST_RUNTIME" 'BEGIN{printf "%.6f", t + r}')
+				ROW_COUNT=$((ROW_COUNT + 1))
+			done
 		done
 	done
 done
@@ -306,5 +335,10 @@ if [[ -n "$CSV_PATH" ]]; then
 	echo "CSV written to: $CSV_PATH"
 fi
 if $USE_DUCKDB_PROFILING; then
-	echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
+	echo "DuckDB profiling output written to: $PROFILING_DIR/"
+	POSTPROCESS="$SCRIPT_DIR/thc_csv_postprocess.py"
+	if [[ -n "$CSV_PATH" ]] && [[ -f "$POSTPROCESS" ]] && command -v python3 >/dev/null; then
+		python3 "$POSTPROCESS" --csv "$CSV_PATH" --profiling-dir "$PROFILING_DIR" --prefix job || \
+			echo "warning: thc_csv_postprocess failed for $CSV_PATH" >&2
+	fi
 fi
