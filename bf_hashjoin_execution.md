@@ -264,6 +264,30 @@ the key columns, then slice the whole chunk by it". Payload columns are
 never touched (no hashing, no copying); only the key columns are read for
 the BF lookup, and only the selection vector is produced as work.
 
+A couple of details worth being precise about, because they explain why the
+downstream operators never pay payload cost for filtered rows:
+
+- `lookup_results` is a `vector<uint32_t>` of 0/1 per input row
+  (`physical_use_bf.cpp:54-59`), not a bitvector. The selection vector
+  built from it (`sel_vector`, declared on the same state) is a
+  `SelectionVector` — an array of `sel_t` indices, which is what every
+  DuckDB downstream operator expects. The `result_count += lookup_results[i]`
+  loop (`:154-159`) packs the survivor indices in one branchless pass.
+- The BF reads only key columns: `BloomFilter::Lookup`
+  (`src/optimizer/predicate_transfer/bloom_filter/bloom_filter.cpp:57-62`)
+  calls `HashColumns(chunk, bound_cols_applied)`, where
+  `bound_cols_applied` is the set of join-key column indices. `HashColumns`
+  (`:25-38`) iterates only over those columns — payload vectors are not
+  read.
+- The downstream `ColumnDataCollection::Append`
+  (`src/common/types/column/column_data_collection.cpp:809`) calls
+  `ToUnifiedFormat` on each incoming vector. For the `DictionaryVector`s
+  produced by `chunk.Slice`, `ToUnifiedFormat` captures the dictionary's
+  selection vector into `format.sel`, and the copy functions then copy
+  **only the selected rows** into the CDC's blocks. Filtered-out rows'
+  payload bytes are therefore never read, copied, or written downstream of
+  the scan.
+
 ### Adaptive disable
 
 `UseBFState::CheckBFSelectivity` (`:37-50`): after 32 chunks, if more than
@@ -456,6 +480,112 @@ that the buffer manager may evict to disk if the configured
 `memory_limit` is exceeded. The `temporary_memory_state` machinery you'll
 see referenced in `Sink` / `Combine` / `PrepareFinalize` is how the
 operator negotiates with the buffer manager for its share.
+
+---
+
+## Q5 — Why is `CreateBF + UseBF + BuildHT` faster than `BuildHT` alone, despite doing more passes?
+
+The pass count in the table above is honest — RPT+ does add two passes over
+the build-side data (one columnar buffer fill, one BF-insert scan). The
+speedup must come from elsewhere. It comes from **row-count reduction at the
+expensive operators**, where each row pruned by `UseBF` saves work that is
+strictly larger than the BF lookup cost.
+
+### What every pruned row would have cost
+
+Consider a build-side row whose key is not in any other table that this
+join feeds. Without `UseBF`, that row still goes through the full
+hash-join build pipeline:
+
+1. **Key expression evaluation** in `PhysicalHashJoin::Sink`
+   (`physical_hash_join.cpp:427`) — every join key expression is evaluated
+   per input row.
+2. **Hashing** in `JoinHashTable::Build`
+   (`src/execution/join_hashtable.cpp:1240`) — `VectorOperations::Hash`
+   on the first key column plus a `CombineHash` for every additional key.
+3. **NULL filtering** (`PrepareKeys`) — builds a survivor selection vector.
+4. **Row-oriented serialization** into `sink_collection` via
+   `sink_collection->AppendUnified(...)`. This is the expensive write on
+   the build side: a real copy of `[key1..keyN, payload1..payloadM,
+   (found?), hash]` into buffer-managed row blocks, partitioned by hash.
+   **Payload bytes get copied here, even though they were never touched
+   inside `UseBF`.**
+5. **Directory CAS** in `JoinHashTable::Finalize`
+   (`src/execution/join_hashtable.cpp:1636`) — one atomic compare-and-swap
+   per row to install it in the pointer table, plus a chain-link write if
+   the slot was occupied.
+6. **Probe-side work** — every probe-side row whose key happens to hash to
+   the same directory slot pays for hashing this row's slot, the
+   pointer-array lookup, and (on a hash-only false positive) a key
+   comparison.
+
+Pruning the row upstream skips **all six** of those.
+
+### What the BF lookup actually costs per row
+
+- One vectorized hash over the key columns
+  (`BloomFilter::Lookup` → `HashColumns` → `BloomFilterLookup` in
+  `bloom_filter.cpp:25-62`). Bandwidth-bound on the key columns only.
+- A bit-test per row, written into `lookup_results[i]` as 0/1.
+- One increment + one `sel.set_index` in the survivor-packing loop
+  (`physical_use_bf.cpp:154-159`).
+- For survivors, a logical slice (`chunk.Slice`, `:164`) that allocates no
+  payload memory — just a `DictionaryVector` wrapping each input vector.
+
+That's it. There is no payload read, no row write, no atomic operation.
+The cost scales with `input.size() * (sizeof(key) + sizeof(bit_test))`,
+not with payload width or row count downstream.
+
+### Why "more passes" still wins
+
+The two extra passes RPT+ adds:
+
+- **Pass (1) — fill `CreateBF`'s `ColumnDataCollection`.** This appends
+  only *post-UseBF survivors*: the same rows that would have been the
+  hash-join's input anyway. The difference is that the columnar copy
+  happens *here* instead of *inside `JoinHashTable::Build`*. So this pass
+  is mostly amortized: it replaces one bulk copy with another.
+- **Pass (2) — BF-insert scan in `CreateBFFinalizeTask`.** This reads
+  only key columns from the `ColumnDataCollection` (
+  `bf->Insert(chunk, cols_build)`) and does hash-and-set-bit work. Cheap
+  per row; cheap in total because it scales with the post-filter row
+  count, not the pre-filter row count.
+
+Meanwhile the savings — across the build *and* probe sides — scale with
+the *pruned* row count and include row serialization, hash-table
+materialization, directory inserts, and every probe that would have
+touched those rows. The same BF created here is consumed by a probe-side
+`UseBF` too, and the probe side usually has more rows than the build
+side, so the probe-side savings typically dominate.
+
+### Cascading across joins
+
+RPT+ builds a transfer graph across the whole query, not just one join.
+Filtering one table early cascades: a smaller build side here means a
+smaller hash table, which means cheaper probes, which means fewer rows
+flowing into the next join's build side, where another `CreateBF` may be
+running, and so on. The wins compound.
+
+### Bounded worst case via `GiveUpBFCreation`
+
+If upstream filtering is *not* selective — say `UseBF` lets 95% of rows
+through — the BF cost-benefit math flips and the extra passes would just
+be overhead. `PhysicalCreateBF::GiveUpBFCreation`
+(`physical_create_bf.cpp:248`) measures `actual_rows /
+estimated_rows_from_optimizer` after the first 32 chunks and aborts the
+BF if the ratio is above 0.2 (or 0.35 in SQLStorm mode). When that
+happens, `is_successful` flips to false, `Finalize` is a no-op, the BF
+stays un-finalized, and the downstream `UseBF` degrades to a
+`chunk.Reference` pass-through. So the worst case is bounded: at most ~64
+K rows of wasted BF work plus the one columnar buffer copy.
+
+### The one-line takeaway
+
+**BF lookup is O(keys). Each row it prunes saves an O(keys + payload)
+row materialization, a hash-directory insert, and all of the probe-side
+work that row would have caused.** With a moderately selective filter
+upstream and a non-trivial payload, that trade is heavily favorable —
+which is why RPT+ wins despite "more passes" on paper.
 
 ---
 
