@@ -1,0 +1,4 @@
+query,case,seed,runtime_seconds
+100_cold_interleaved_100x,2,,12.660000
+100_cold_interleaved_100x,3,,12.697000
+100_cold_interleaved_100x,4,,10.436000
