@@ -299,8 +299,6 @@ CMakeUserPresets.json
 # Generated documentation
 docs
 
-# benchmarking
-tpch_results/
 
 # tests
 test/test.sql
@@ -369,3 +367,4 @@ join-order-benchmark/*.csv
 join-order-benchmark/*.json
 result.json
 ash_datagen_results.json
+.claude/

@@ -33,7 +33,7 @@ Options:
   --csv <path>          Write per-run CSV (auto-named if omitted in sweep mode)
   --perf                Run query/queries under perf stat
   --debug               Use debug build (build/debug/duckdb)
-  --duckdb-profiling    Enable DuckDB JSON profiling, output to appian_results.json
+  --duckdb-profiling    Enable DuckDB JSON profiling, output to results/appian/appian.json
   --generate            Force (re)download of the Appian database
   -h, --help            Show this help
 USAGE
@@ -165,11 +165,14 @@ APPIAN_QUERIES_DIR="$REPO_ROOT/benchmark/appian_benchmarks/queries"
 COMMON_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-common.sql"
 RUN_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-run_appian.sql"
 # Absolute path so the file is easy to locate regardless of the script's CWD.
-PROFILING_OUTPUT="$REPO_ROOT/appian_results.json"
+PROFILING_OUTPUT="$REPO_ROOT/results/appian/appian.json"
 # See https://duckdb.org/docs/stable/dev/profiling
 PROFILING_PRAGMAS="PRAGMA enable_profiling = 'json';
 PRAGMA profiling_output = '$PROFILING_OUTPUT';
 PRAGMA profiling_coverage = 'SELECT';"
+if $USE_DUCKDB_PROFILING; then
+	mkdir -p "$(dirname "$PROFILING_OUTPUT")"
+fi
 if $USE_DEBUG; then
 	DUCKDB_BIN="$REPO_ROOT/build/debug/duckdb"
 else
@@ -283,8 +286,8 @@ if $SWEEPING_SEEDS || [[ ${#CASES[@]} -gt 1 ]] || [[ ${#QUERY_FILES[@]} -gt 1 ]]
 	SWEEPING=true
 fi
 if $SWEEPING && [[ -z "$CSV_PATH" ]]; then
-	mkdir -p "$REPO_ROOT/appian_results"
-	CSV_PATH="$REPO_ROOT/appian_results/appian_runtimes_$(date +%Y%m%d_%H%M%S).csv"
+	mkdir -p "$REPO_ROOT/results/appian"
+	CSV_PATH="$REPO_ROOT/results/appian/appian_runtimes_$(date +%Y%m%d_%H%M%S).csv"
 fi
 if [[ -n "$CSV_PATH" ]]; then
 	mkdir -p "$(dirname "$CSV_PATH")"

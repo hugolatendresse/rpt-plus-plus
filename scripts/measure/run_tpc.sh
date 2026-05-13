@@ -4,7 +4,7 @@ set -euo pipefail
 SF=100
 DUCKDB_BIN=""
 GENERATE_DATA=0
-OUT_DIR="./tpch_results"
+OUT_DIR="./results/tpch"
 RUN_TPCH=1
 RUN_TPCDS=1
 DB_BASE_PATH="../benchmark_data"
@@ -30,7 +30,7 @@ Options:
   --db <db_base_path>    Base path for databases (default: ../benchmark_data)
   --duckdb <bin_path>    DuckDB CLI binary (default: ./build/release/duckdb)
   --generate             Generate TPC-H/TPC-DS data
-  --out-dir <dir>        Output directory for results (default: ./tpch_results)
+  --out-dir <dir>        Output directory for results (default: ./results/tpch)
   --tpch-only            Run only TPC-H
   --tpcds-only           Run only TPC-DS
   --tpch-query <1..22>   Run one TPC-H query (implies --tpch-only)
@@ -41,7 +41,10 @@ Options:
   --seeds <N>            Sweep seeds 0..N-1 (overrides transfer_graph_seed)
   --perf                 Run each query under perf stat
   --debug                Use debug build (build/debug/duckdb)
-  --duckdb-profiling     Enable DuckDB JSON profiling, output to tpc_results.json
+  --duckdb-profiling     Enable DuckDB JSON profiling: per-query JSON files
+                         under <out-dir>/profiling_<timestamp>/, plus an
+                         augmented runtime CSV with per-join THC telemetry
+                         columns Join1..JoinN (via thc_csv_postprocess.py).
   -h, --help             Show this help
 
 Sweep example (box plots):
@@ -134,12 +137,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
-# Absolute path so the file is easy to locate regardless of the script's CWD.
-PROFILING_OUTPUT="$REPO_ROOT/tpc_results.json"
+# When DuckDB profiling is on, the JSON for each query is written to its own
+# path under $OUT_DIR/profiling/ so it survives the next query's run; the
+# benchmark post-processor walks those files to extract per-join THC
+# telemetry. PROFILING_OUTPUT itself is unset here and recomputed per query
+# inside the inner loop (see build_sql).
+PROFILING_OUTPUT=""
 # See https://duckdb.org/docs/stable/dev/profiling
-PROFILING_PRAGMAS="PRAGMA enable_profiling = 'json';
-PRAGMA profiling_output = '$PROFILING_OUTPUT';
-PRAGMA profiling_coverage = 'SELECT';"
 
 # Pick default DuckDB binary based on --debug if the user did not override with --duckdb.
 if [[ -z "$DUCKDB_BIN" ]]; then
@@ -177,8 +181,12 @@ build_sql() {
     local query_stmt="$2"
     local case_num="$3"
     local seed_val="$4"
-    if $USE_DUCKDB_PROFILING; then
-        printf '%s\n' "$PROFILING_PRAGMAS"
+    # PROFILING_OUTPUT is set by the inner loop to a per-(query, case, seed,
+    # run) path when --duckdb-profiling is on; empty otherwise.
+    if $USE_DUCKDB_PROFILING && [[ -n "$PROFILING_OUTPUT" ]]; then
+        printf "PRAGMA enable_profiling = 'json';\n"
+        printf "PRAGMA profiling_output = '%s';\n" "$PROFILING_OUTPUT"
+        printf "PRAGMA profiling_coverage = 'SELECT';\n"
     fi
     grep '^SET ' "$COMMON_SETTINGS_SQL" || true
     grep '^SET ' "$RUN_SETTINGS_SQL" || true
@@ -245,10 +253,18 @@ else
 fi
 
 if [[ $RUN_TPCH -eq 1 ]]; then
-    printf "query,case,seed,runtime_seconds\n" > "$TPCH_CSV_PATH"
+    printf "query,case,seed,run_idx,runtime_seconds\n" > "$TPCH_CSV_PATH"
 fi
 if [[ $RUN_TPCDS -eq 1 ]]; then
-    printf "query,case,seed,runtime_seconds\n" > "$TPCDS_CSV_PATH"
+    printf "query,case,seed,run_idx,runtime_seconds\n" > "$TPCDS_CSV_PATH"
+fi
+
+# Per-query profiling JSON files land here when --duckdb-profiling is on.
+# Filename pattern: <prefix>_q<Q>_case<C>_seed<S>_run<R>.json. The Python
+# post-processor reconstructs the same paths to map CSV rows to JSONs.
+PROFILING_DIR="$OUT_DIR/profiling_${TIMESTAMP}"
+if $USE_DUCKDB_PROFILING; then
+    mkdir -p "$PROFILING_DIR"
 fi
 
 echo "Starting TPC sweep (cases: ${CASES[*]}, seeds: ${SEEDS[*]:-default}, runs/tuple: ${RUNS}, sf: ${SF})..."
@@ -266,11 +282,17 @@ for c in "${CASES[@]}"; do
                 for Q in $TPCH_QUERY_RANGE; do
                     echo "Running TPC-H query ${Q}..."
                     TIME_FILE=$(mktemp)
+                    seed_for_path="${s:-default}"
+                    if $USE_DUCKDB_PROFILING; then
+                        PROFILING_OUTPUT="$PROFILING_DIR/tpch_q${Q}_case${c}_seed${seed_for_path}_run${RUN_IDX}.json"
+                    else
+                        PROFILING_OUTPUT=""
+                    fi
                     SQL="$(build_sql tpch "PRAGMA tpch(${Q});" "$c" "$s")"
                     if $USE_PERF; then
                         if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
                             RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                            printf "Q%02d,%s,%s,%s\n" "$Q" "$c" "$s" "$RUNTIME" >> "$TPCH_CSV_PATH"
+                            printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCH_CSV_PATH"
                         else
                             rm -f "$TIME_FILE"
                             echo "Error: TPC-H query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
@@ -279,7 +301,7 @@ for c in "${CASES[@]}"; do
                     else
                         if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
                             RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                            printf "Q%02d,%s,%s,%s\n" "$Q" "$c" "$s" "$RUNTIME" >> "$TPCH_CSV_PATH"
+                            printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCH_CSV_PATH"
                         else
                             rm -f "$TIME_FILE"
                             echo "Error: TPC-H query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
@@ -295,11 +317,17 @@ for c in "${CASES[@]}"; do
                 for Q in $(seq 1 99); do
                     echo "Running TPC-DS query ${Q}..."
                     TIME_FILE=$(mktemp)
+                    seed_for_path="${s:-default}"
+                    if $USE_DUCKDB_PROFILING; then
+                        PROFILING_OUTPUT="$PROFILING_DIR/tpcds_q${Q}_case${c}_seed${seed_for_path}_run${RUN_IDX}.json"
+                    else
+                        PROFILING_OUTPUT=""
+                    fi
                     SQL="$(build_sql tpcds "PRAGMA tpcds(${Q});" "$c" "$s")"
                     if $USE_PERF; then
                         if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
                             RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                            printf "Q%02d,%s,%s,%s\n" "$Q" "$c" "$s" "$RUNTIME" >> "$TPCDS_CSV_PATH"
+                            printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCDS_CSV_PATH"
                         else
                             rm -f "$TIME_FILE"
                             echo "Error: TPC-DS query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
@@ -308,7 +336,7 @@ for c in "${CASES[@]}"; do
                     else
                         if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
                             RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                            printf "Q%02d,%s,%s,%s\n" "$Q" "$c" "$s" "$RUNTIME" >> "$TPCDS_CSV_PATH"
+                            printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCDS_CSV_PATH"
                         else
                             rm -f "$TIME_FILE"
                             echo "Error: TPC-DS query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
@@ -345,5 +373,16 @@ if [[ $RUN_TPCDS -eq 1 ]]; then
     echo "TPC-DS CSV: $TPCDS_CSV_PATH"
 fi
 if $USE_DUCKDB_PROFILING; then
-    echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
+    echo "DuckDB profiling output written to: $PROFILING_DIR/"
+    POSTPROCESS="$SCRIPT_DIR/thc_csv_postprocess.py"
+    if [[ -x "$POSTPROCESS" ]] || command -v python3 >/dev/null; then
+        if [[ $RUN_TPCH -eq 1 ]]; then
+            python3 "$POSTPROCESS" --csv "$TPCH_CSV_PATH" --profiling-dir "$PROFILING_DIR" --prefix tpch || \
+                echo "warning: thc_csv_postprocess failed for $TPCH_CSV_PATH" >&2
+        fi
+        if [[ $RUN_TPCDS -eq 1 ]]; then
+            python3 "$POSTPROCESS" --csv "$TPCDS_CSV_PATH" --profiling-dir "$PROFILING_DIR" --prefix tpcds || \
+                echo "warning: thc_csv_postprocess failed for $TPCDS_CSV_PATH" >&2
+        fi
+    fi
 fi

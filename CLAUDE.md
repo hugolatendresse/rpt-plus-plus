@@ -36,7 +36,7 @@ The project's primary feedback loop is benchmark runs, not unit tests. The drive
   - `3`: forward-only RPT+ with THC (`rpt_forward_only`)
   - `4`: full forward+backward RPT+ without THC (`disable_tiered_hash_cache`)
 
-  Supports `--cases`, `--seeds N` (sweeps `transfer_graph_seed = 0..N-1`), `--job-query 10a`, `--perf`, `--debug`, `--duckdb-profiling`. Sweep mode auto-writes a CSV under `job_results/`.
+  Supports `--cases`, `--seeds N` (sweeps `transfer_graph_seed = 0..N-1`), `--job-query 10a`, `--perf`, `--debug`, `--duckdb-profiling`. Sweep mode auto-writes a CSV under `results/`.
 
 - `scripts/measure/run_tpc.sh` — TPC-H / TPC-DS at a chosen scale factor (`--sf 100` default). Same `--case` semantics. `--generate` regenerates the benchmark `.duckdb` file under `../benchmark_data/`.
 

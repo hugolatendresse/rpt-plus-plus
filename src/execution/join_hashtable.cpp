@@ -918,6 +918,11 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			}
 			if (tiered_hash_cache->IsFull()) {
 				DEBUG_LOG("THC has reached desired load factor - don't collect ever again.");
+				// Telemetry: record the freeze probe count + reason *before*
+				// disabling collection so the value is captured even if a
+				// later checkpoint short-circuits.
+				state.probes_at_freeze = state.total_probe_rows;
+				state.freeze_reason = THCFreezeReason::THCFull;
 				state.thc_collection_enabled = false;
 			}
 
@@ -1059,6 +1064,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			if (estimated_mu_s_to_r < thc_min_estimated_mu_s_to_r) {
 				DEBUG_LOG("[THC Low-Multiplicity Bypass] mu_{S->R}=%.4f < %.1f -> abandoning THC for this thread\n",
 				          estimated_mu_s_to_r, thc_min_estimated_mu_s_to_r);
+				state.probes_at_abandon = state.total_probe_rows;
+				state.abandon_reason = THCAbandonReason::LowCrossMultiplicity;
 				state.thc_abandoned = true;
 				state.thc_collection_enabled = false;
 				state.collected_entries.clear();
@@ -1074,6 +1081,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			if (estimated_perc_hot > thc_max_estimated_perc_hot) {
 				DEBUG_LOG("[THC High-Hotness Bypass]: Estimated Hotness is %.2f -> abandoning THC for this thread\n",
 				          estimated_perc_hot);
+				state.probes_at_abandon = state.total_probe_rows;
+				state.abandon_reason = THCAbandonReason::HighHotness;
 				state.thc_abandoned = true;
 				state.thc_collection_enabled = false;
 				state.collected_entries.clear();
@@ -1087,6 +1096,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			if (static_cast<double>(thc_capacity) < thc_capacity_needed * thc_min_coverage_of_build_side) {
 				DEBUG_LOG("THC Too Small for Build Side Bypass: THC capacity needed is %.0f, THC capacity is %lu\n",
 				          thc_capacity_needed, thc_capacity);
+				state.probes_at_abandon = state.total_probe_rows;
+				state.abandon_reason = THCAbandonReason::THCTooSmallForBuildSide;
 				state.thc_abandoned = true;
 				state.thc_collection_enabled = false;
 				state.collected_entries.clear();
@@ -1127,6 +1138,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			DEBUG_LOG("[THC Abandon] thread abandoned THC after %lu consecutive high-miss checkpoints "
 			          "(miss_rate=%.2f%%)\n",
 			          (unsigned long)state.consecutive_high_miss_checkpoints, miss_rate * 100.0);
+			state.probes_at_abandon = state.total_probe_rows;
+			state.abandon_reason = THCAbandonReason::HighMissRate;
 			state.thc_abandoned = true;
 			return;
 		}
@@ -1181,6 +1194,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	if (delta_t >= 0) {
 		DEBUG_LOG("[Eval Checkpoint] eval_cycle=%lu, c_eval=%.2f, c_main=%.2f, delta=%.2f >= 0 -> DROP\n",
 		          (unsigned long)current_eval_cycle, state.c_eval_current, state.c_main, delta_t);
+		state.probes_at_abandon = state.total_probe_rows;
+		state.abandon_reason = THCAbandonReason::THCIncreasesProbeCost;
 		state.thc_abandoned = true;
 		return;
 	}
@@ -1190,7 +1205,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		DEBUG_LOG("[Eval Checkpoint] eval_cycle=%lu, c_eval=%.2f, c_main=%.2f, delta=%.2f, "
 		          "shrinkage=%.2f < gamma=%.2f -> FREEZE\n",
 		          (unsigned long)current_eval_cycle, state.c_eval_current, state.c_main, delta_t, shrinkage, gamma_t);
-		state.thc_frozen = true;
+		state.probes_at_freeze = state.total_probe_rows;
+		state.freeze_reason = THCFreezeReason::MarginalGainNotWorthCollectionCost;
 		state.thc_collection_enabled = false;
 		state.phase_time_ns = 0;
 		state.phase_probe_count = 0;
