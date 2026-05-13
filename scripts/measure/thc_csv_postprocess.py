@@ -6,13 +6,13 @@ run_job.sh) with per-join THC telemetry columns.
 For each row in the runtime CSV, the corresponding DuckDB profiling JSON is
 located by reconstructing the path the shell script wrote it to. The JSON is
 walked depth-first; every HASH_JOIN operator's `extra_info` contributes one
-`JoinK` cell to the row. The cell is a single space-separated string of
-`key=value` tokens. Empty values stay empty so downstream tooling can
+column per THC key to the row (e.g. `Join1-probe`, `Join1-build`,
+`Join1-build_rows`, ...). Empty values stay empty so downstream tooling can
 distinguish "0 probes" from "this state was never reached."
 
-The runtime CSV is rewritten in place with `Join1, Join2, ..., JoinN` columns
-appended, where N is the maximum HASH_JOIN count observed across the sweep
-(jagged rows are padded with empty cells).
+The runtime CSV is rewritten in place with `Join1-<key>, ..., JoinN-<key>`
+columns appended, where N is the maximum HASH_JOIN count observed across the
+sweep (jagged rows are padded with empty cells).
 """
 
 from __future__ import annotations
@@ -70,20 +70,22 @@ def collect_hash_joins(node: dict) -> Iterable[dict]:
         yield from collect_hash_joins(c)
 
 
-def format_join_cell(info: dict) -> str:
-    """Render one HASH_JOIN's THC keys as a single CSV cell string."""
-    tokens = []
+def format_join_values(info: dict) -> list[str]:
+    """Render one HASH_JOIN's THC keys as a list of CSV cell values, one per
+    entry in THC_KEYS (same order as SHORT/THC_KEYS)."""
+    values = []
     for key in THC_KEYS:
         val = info.get(key, "")
         # extra_info values can be lists when DuckDB sees embedded newlines.
         # Our keys never have newlines, but be defensive.
         if isinstance(val, list):
             val = " ".join(str(x) for x in val)
-        tokens.append(f"{SHORT[key]}={val}")
-    return " ".join(tokens)
+        values.append(str(val))
+    return values
 
 
-def join_cells_for_query(profiling_json_path: Path) -> list[str]:
+def join_values_for_query(profiling_json_path: Path) -> list[list[str]]:
+    """Return one list-of-values per HASH_JOIN found in the profiling JSON."""
     if not profiling_json_path.exists():
         return []
     try:
@@ -92,11 +94,11 @@ def join_cells_for_query(profiling_json_path: Path) -> list[str]:
     except json.JSONDecodeError as e:
         print(f"warning: could not parse {profiling_json_path}: {e}", file=sys.stderr)
         return []
-    cells = []
+    joins = []
     for hj in collect_hash_joins(data):
         info = hj.get("extra_info") or {}
-        cells.append(format_join_cell(info))
-    return cells
+        joins.append(format_join_values(info))
+    return joins
 
 
 def query_token(query: str) -> str:
@@ -141,8 +143,10 @@ def main() -> int:
         return 1
     idx = {h: i for i, h in enumerate(header)}
 
-    # First pass: collect per-row Join cells and the global max join count.
-    per_row_cells: list[list[str]] = []
+    # First pass: collect per-row per-join value lists and the global max join
+    # count. Each row's entry is a list of joins, where each join is a list of
+    # values (one per THC key, in THC_KEYS order).
+    per_row_joins: list[list[list[str]]] = []
     max_joins = 0
     for row in body:
         q = query_token(row[idx["query"]])
@@ -150,18 +154,28 @@ def main() -> int:
         s = row[idx["seed"]] or "default"
         r = row[idx["run_idx"]]
         json_path = prof_dir / f"{prefix}_q{q}_case{c}_seed{s}_run{r}.json"
-        cells = join_cells_for_query(json_path)
-        per_row_cells.append(cells)
-        max_joins = max(max_joins, len(cells))
+        joins = join_values_for_query(json_path)
+        per_row_joins.append(joins)
+        max_joins = max(max_joins, len(joins))
 
-    # Build new header: original + Join1..JoinN.
-    new_header = list(header) + [f"Join{i+1}" for i in range(max_joins)]
+    # Build new header: original + Join{i}-<key> columns for i in 1..max_joins
+    # and each key in SHORT (in THC_KEYS order).
+    suffixes = [SHORT[key] for key in THC_KEYS]
+    new_header = list(header)
+    for i in range(max_joins):
+        for suffix in suffixes:
+            new_header.append(f"Join{i+1}-{suffix}")
 
-    # Build new body: pad each row to max_joins.
+    # Build new body: each row contributes `len(THC_KEYS) * max_joins` extra
+    # cells. Missing joins (for rows whose query had fewer HASH_JOINs) get all
+    # empty cells.
+    empty_join = [""] * len(THC_KEYS)
     new_body = []
-    for orig, cells in zip(body, per_row_cells):
-        padded = cells + [""] * (max_joins - len(cells))
-        new_body.append(list(orig) + padded)
+    for orig, joins in zip(body, per_row_joins):
+        extra: list[str] = []
+        for i in range(max_joins):
+            extra.extend(joins[i] if i < len(joins) else empty_join)
+        new_body.append(list(orig) + extra)
 
     # Rewrite in place.
     with csv_path.open("w", newline="") as f:
@@ -169,7 +183,8 @@ def main() -> int:
         writer.writerow(new_header)
         writer.writerows(new_body)
 
-    print(f"thc_csv_postprocess: wrote {len(new_body)} rows with up to {max_joins} Join columns to {csv_path}")
+    print(f"thc_csv_postprocess: wrote {len(new_body)} rows with up to {max_joins} joins "
+          f"({len(THC_KEYS)} columns per join) to {csv_path}")
     return 0
 
 

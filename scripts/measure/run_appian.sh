@@ -33,7 +33,10 @@ Options:
   --csv <path>          Write per-run CSV (auto-named if omitted in sweep mode)
   --perf                Run query/queries under perf stat
   --debug               Use debug build (build/debug/duckdb)
-  --duckdb-profiling    Enable DuckDB JSON profiling, output to results/appian/appian.json
+  --duckdb-profiling    Enable DuckDB JSON profiling: per-query JSON files
+                        under results/appian/profiling_<timestamp>/, plus an
+                        augmented runtime CSV with per-join THC telemetry
+                        columns Join1-*..JoinN-* (via thc_csv_postprocess.py).
   --generate            Force (re)download of the Appian database
   -h, --help            Show this help
 USAGE
@@ -164,14 +167,14 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APPIAN_QUERIES_DIR="$REPO_ROOT/benchmark/appian_benchmarks/queries"
 COMMON_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-common.sql"
 RUN_SETTINGS_SQL="$REPO_ROOT/scripts/measure/settings-run_appian.sql"
-# Absolute path so the file is easy to locate regardless of the script's CWD.
-PROFILING_OUTPUT="$REPO_ROOT/results/appian/appian.json"
-# See https://duckdb.org/docs/stable/dev/profiling
-PROFILING_PRAGMAS="PRAGMA enable_profiling = 'json';
-PRAGMA profiling_output = '$PROFILING_OUTPUT';
-PRAGMA profiling_coverage = 'SELECT';"
+# When DuckDB profiling is on, the JSON for each query is written to its own
+# path under PROFILING_DIR/ so it survives the next query's run; the
+# benchmark post-processor walks those files to extract per-join THC
+# telemetry. PROFILING_OUTPUT itself is set per query in the inner loop.
+PROFILING_OUTPUT=""
+PROFILING_DIR="$REPO_ROOT/results/appian/profiling_$(date +%Y%m%d_%H%M%S)"
 if $USE_DUCKDB_PROFILING; then
-	mkdir -p "$(dirname "$PROFILING_OUTPUT")"
+	mkdir -p "$PROFILING_DIR"
 fi
 if $USE_DEBUG; then
 	DUCKDB_BIN="$REPO_ROOT/build/debug/duckdb"
@@ -291,14 +294,18 @@ if $SWEEPING && [[ -z "$CSV_PATH" ]]; then
 fi
 if [[ -n "$CSV_PATH" ]]; then
 	mkdir -p "$(dirname "$CSV_PATH")"
-	printf "query,case,seed,runtime_seconds\n" >"$CSV_PATH"
+	printf "query,case,seed,run_idx,runtime_seconds\n" >"$CSV_PATH"
 fi
 
 build_sql() {
 	local case_num="$1"
 	local seed_val="$2"
 	local query_file="$3"
-	if $USE_DUCKDB_PROFILING; then printf '%s\n' "$PROFILING_PRAGMAS"; fi
+	if $USE_DUCKDB_PROFILING && [[ -n "$PROFILING_OUTPUT" ]]; then
+		printf "PRAGMA enable_profiling = 'json';\n"
+		printf "PRAGMA profiling_output = '%s';\n" "$PROFILING_OUTPUT"
+		printf "PRAGMA profiling_coverage = 'SELECT';\n"
+	fi
 	grep '^SET ' "$COMMON_SETTINGS_SQL" || true
 	grep '^SET ' "$RUN_SETTINGS_SQL" || true
 	case_settings_for "$case_num"
@@ -351,16 +358,35 @@ fi
 
 TOTAL_RUNTIME=0
 ROW_COUNT=0
+# Appian only supports one run per (case, seed, query) tuple; the run_idx
+# column is still emitted (always 1) so the CSV layout matches run_job.sh /
+# run_tpc.sh and the postprocess script can locate the per-query JSON.
+RUN_IDX=1
 for c in "${CASES[@]}"; do
 	for s in "${SEEDS[@]}"; do
 		for q in "${QUERY_FILES[@]}"; do
 			query_name="${q#queries/}"
 			query_name="${query_name%.sql}"
-			echo "Executing case=${c} seed=${s:-default} query=${query_name}..."
+			seed_for_path="${s:-default}"
+			if $USE_DUCKDB_PROFILING; then
+				# thc_csv_postprocess.py reconstructs this path by stripping the
+				# leading "q" + leading zeros from the CSV's query column
+				# (e.g. "q03" -> "3"). Mirror that here so the file it looks for
+				# actually exists on disk.
+				query_token_stripped="${query_name#q}"
+				query_token_stripped="${query_token_stripped#Q}"
+				if [[ "$query_token_stripped" =~ ^[0-9]+$ ]]; then
+					query_token_stripped="$((10#$query_token_stripped))"
+				fi
+				PROFILING_OUTPUT="$PROFILING_DIR/appian_q${query_token_stripped}_case${c}_seed${seed_for_path}_run${RUN_IDX}.json"
+			else
+				PROFILING_OUTPUT=""
+			fi
+			echo "Executing case=${c} seed=${s:-default} run=${RUN_IDX} query=${query_name}..."
 			run_query "$c" "$s" "$q"
 			echo "  runtime: ${LAST_RUNTIME} s"
 			if [[ -n "$CSV_PATH" ]]; then
-				printf '%s,%s,%s,%s\n' "$query_name" "$c" "$s" "$LAST_RUNTIME" >>"$CSV_PATH"
+				printf '%s,%s,%s,%s,%s\n' "$query_name" "$c" "$s" "$RUN_IDX" "$LAST_RUNTIME" >>"$CSV_PATH"
 			fi
 			TOTAL_RUNTIME=$(awk -v t="$TOTAL_RUNTIME" -v r="$LAST_RUNTIME" 'BEGIN{printf "%.6f", t + r}')
 			ROW_COUNT=$((ROW_COUNT + 1))
@@ -375,5 +401,10 @@ if [[ -n "$CSV_PATH" ]]; then
 	echo "CSV written to: $CSV_PATH"
 fi
 if $USE_DUCKDB_PROFILING; then
-	echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
+	echo "DuckDB profiling output written to: $PROFILING_DIR/"
+	POSTPROCESS="$SCRIPT_DIR/thc_csv_postprocess.py"
+	if [[ -n "$CSV_PATH" ]] && [[ -f "$POSTPROCESS" ]] && command -v python3 >/dev/null; then
+		python3 "$POSTPROCESS" --csv "$CSV_PATH" --profiling-dir "$PROFILING_DIR" --prefix appian || \
+			echo "warning: thc_csv_postprocess failed for $CSV_PATH" >&2
+	fi
 fi
