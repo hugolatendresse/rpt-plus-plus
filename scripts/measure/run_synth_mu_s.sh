@@ -10,7 +10,7 @@ set -euo pipefail
 #     --mus "1 2 3 4 5 10" \
 #     --runs 5 \
 #     --methods "none build_count probe_sample ht_sample" \
-#     --out ./tpch_results/synth_mu_s
+#     --out ./results/tpch/synth_mu_s
 #
 # Notes:
 # - Uses DuckDB CLI at ./build/release/duckdb
@@ -25,7 +25,7 @@ RUNS=5
 METHODS="none build_count probe_sample ht_sample"
 DUCKDB_BIN="./build/release/duckdb"
 DB_DIR="../benchmark_data/synth"
-OUT_DIR="./tpch_results/synth_mu_s"
+OUT_DIR="./results/tpch/synth_mu_s"
 THREADS=16
 
 while [[ $# -gt 0 ]]; do

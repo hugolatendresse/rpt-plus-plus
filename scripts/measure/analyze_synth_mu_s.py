@@ -7,7 +7,7 @@ import glob
 import statistics
 from collections import defaultdict
 
-RESULTS_DIR = "./tpch_results/synth_mu_s_full"
+RESULTS_DIR = "./results/tpch/synth_mu_s_full"
 
 def parse_mu_s_logs(mu, method):
     """Parse mu_s estimates from stderr or mu_s.log files for a given mu and method"""

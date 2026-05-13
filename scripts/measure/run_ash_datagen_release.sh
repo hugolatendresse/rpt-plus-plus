@@ -154,8 +154,8 @@ if $SWEEPING_SEEDS || [[ ${#CASES[@]} -gt 1 ]] || [[ ${#QUERIES[@]} -gt 1 ]]; th
     SWEEPING=true
 fi
 if $SWEEPING && [[ -z "$CSV_PATH" ]]; then
-    mkdir -p "$REPO_ROOT/ash_datagen_results"
-    CSV_PATH="$REPO_ROOT/ash_datagen_results/ash_datagen_runtimes_$(date +%Y%m%d_%H%M%S).csv"
+    mkdir -p "$REPO_ROOT/results/ash_datagen"
+    CSV_PATH="$REPO_ROOT/results/ash_datagen/ash_datagen_runtimes_$(date +%Y%m%d_%H%M%S).csv"
 fi
 if [[ -n "$CSV_PATH" ]]; then
     mkdir -p "$(dirname "$CSV_PATH")"

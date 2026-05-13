@@ -156,6 +156,58 @@ public:
 	//!            decides whether to drop, freeze, or continue building the THC.
 	enum class TieredHashCachePhase : uint8_t { BASELINE, COLLECT, READ_ONLY };
 
+	//! Reason the THC was abandoned by a thread (thc_abandoned = true).
+	//! Reported in the profiling JSON / benchmark CSVs as a short label.
+	enum class THCAbandonReason : uint8_t {
+		None = 0,
+		LowCrossMultiplicity,    // first-cycle mu_{S->R} below thc_min_estimated_mu_s_to_r
+		HighHotness,        // first-cycle estimated_perc_hot above thc_max_estimated_perc_hot
+		THCTooSmallForBuildSide,   // THC capacity insufficient to cover thc_min_coverage_of_build_side hot entries
+		HighMissRate,       // miss rate stayed >= THC_ABANDON_MISS_THRESHOLD for THC_ABANDON_CONSECUTIVE_MISSES checkpoints
+		THCIncreasesProbeCost            // cost-based decision rule: delta_t >= 0 (THC made probes slower)
+	};
+
+	//! Reason the THC stopped growing (thc_collection_enabled = false) without
+	//! being abandoned. Reported in the profiling JSON / benchmark CSVs as a
+	//! short label.
+	enum class THCFreezeReason : uint8_t {
+		None = 0,
+		THCFull,            // THC reached thc_max_load_factor during a COLLECT flush
+		MarginalGainNotWorthCollectionCost          // cost-based decision rule: shrinkage < gamma_t (growth no longer pays for itself)
+	};
+
+	//! Short, stable token for an abandon reason, used in profiling output.
+	static const char *THCAbandonReasonLabel(THCAbandonReason r) {
+		switch (r) {
+		case THCAbandonReason::LowCrossMultiplicity:
+			return "Low-Cross-Multiplicity";
+		case THCAbandonReason::HighHotness:
+			return "High-Hotness";
+		case THCAbandonReason::THCTooSmallForBuildSide:
+			return "Too-Small-For-Build";
+		case THCAbandonReason::HighMissRate:
+			return "High-Miss-Rate";
+		case THCAbandonReason::THCIncreasesProbeCost:
+			return "THC-Increases-Probe-Cost";
+		case THCAbandonReason::None:
+			return "";
+		}
+		return "";
+	}
+
+	//! Short, stable token for a freeze reason, used in profiling output.
+	static const char *THCFreezeReasonLabel(THCFreezeReason r) {
+		switch (r) {
+		case THCFreezeReason::THCFull:
+			return "THC-Full";
+		case THCFreezeReason::MarginalGainNotWorthCollectionCost:
+			return "Marginal-Gain-Not-Worth-Collection-Cost";
+		case THCFreezeReason::None:
+			return "";
+		}
+		return "";
+	}
+
 // TODO most items below should be config params. Some might already be duplicates of config params
 
 	//! Number of probe-side rows each thread processes during a single collect phase.
@@ -331,8 +383,23 @@ public:
 		idx_t phase_probe_count = 0;
 		//! Number of completed evaluation phases (= t in the decision rule).
 		idx_t eval_cycle_count = 0;
-		//! True once the cost-based rule decides to freeze the THC (useful but no more growth).
-		bool thc_frozen = false;
+
+		// ---- Lifecycle telemetry surfaced via PhysicalHashJoin's profiling
+		// extra_info. Captured at the moment of the transition so the
+		// benchmark CSVs can show "after how many probed rows did the THC
+		// stop growing / get abandoned." See join_hashtable.cpp for the
+		// transition sites that write these.
+		//! total_probe_rows at the moment thc_collection_enabled flipped
+		//! false *without* an accompanying abandonment. Zero if this thread
+		//! never froze the THC.
+		idx_t probes_at_freeze = 0;
+		//! total_probe_rows at the moment thc_abandoned was set true. Zero
+		//! if this thread never abandoned the THC.
+		idx_t probes_at_abandon = 0;
+		//! Which freeze-decision rule fired, if any.
+		THCFreezeReason freeze_reason = THCFreezeReason::None;
+		//! Which abandonment rule fired, if any.
+		THCAbandonReason abandon_reason = THCAbandonReason::None;
 	};
 
 	struct InsertState : SharedState {
@@ -387,6 +454,12 @@ public:
 	}
 	idx_t SizeInBytes() const {
 		return data_collection->SizeInBytes();
+	}
+
+	//! True when this join's adaptive THC was actually created during finalize.
+	//! Used by PhysicalHashJoin to emit per-join THC telemetry.
+	bool HasTieredHashCache() const {
+		return tiered_hash_cache != nullptr;
 	}
 
 	PartitionedTupleData &GetSinkCollection() {
