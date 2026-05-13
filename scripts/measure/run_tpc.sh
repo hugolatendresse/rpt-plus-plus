@@ -11,6 +11,9 @@ DB_BASE_PATH="../benchmark_data"
 TPCH_QUERY=""
 RUNS=1
 CASE=""
+CASES_LIST=""
+SEED=""
+SEEDS_COUNT=""
 USE_PERF=false
 USE_DEBUG=false
 USE_DUCKDB_PROFILING=false
@@ -20,7 +23,7 @@ PERF_EVENTS="cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,mem_
 
 usage() {
 cat <<'USAGE'
-Usage: scripts/measure/run_tpc.sh [options]
+Usage: scripts/measure/run_tpc.sh (--case <c> | --cases <list>) [options]
 
 Options:
   --sf <scale_factor>    Scale factor for dbgen/dsdgen (default: 100)
@@ -31,12 +34,18 @@ Options:
   --tpch-only            Run only TPC-H
   --tpcds-only           Run only TPC-DS
   --tpch-query <1..22>   Run one TPC-H query (implies --tpch-only)
-  --runs <N>             Number of benchmark runs (default: 1)
-  --case <1|2|3|4>       Optimizer case (required)
+  --runs <N>             Number of benchmark runs per (case, seed) tuple (default: 1)
+  --case <1|2|3|4>       Optimizer case (mutually exclusive with --cases)
+  --cases <list>         Comma-separated case list, e.g. 2,3,4
+  --seed <int>           Override transfer_graph_seed (mutually exclusive with --seeds)
+  --seeds <N>            Sweep seeds 0..N-1 (overrides transfer_graph_seed)
   --perf                 Run each query under perf stat
   --debug                Use debug build (build/debug/duckdb)
   --duckdb-profiling     Enable DuckDB JSON profiling, output to tpc_results.json
   -h, --help             Show this help
+
+Sweep example (box plots):
+  scripts/measure/run_tpc.sh --cases 1,2,3,4 --tpch-only --runs 3
 USAGE
 }
 
@@ -52,6 +61,9 @@ while [[ $# -gt 0 ]]; do
         --tpch-query) TPCH_QUERY="$2"; RUN_TPCH=1; RUN_TPCDS=0; shift 2 ;;
         --runs) RUNS="$2"; shift 2 ;;
         --case) CASE="$2"; shift 2 ;;
+        --cases) CASES_LIST="$2"; shift 2 ;;
+        --seed) SEED="$2"; shift 2 ;;
+        --seeds) SEEDS_COUNT="$2"; shift 2 ;;
         --perf) USE_PERF=true; shift ;;
         --debug) USE_DEBUG=true; shift ;;
         --duckdb-profiling) USE_DUCKDB_PROFILING=true; shift ;;
@@ -65,20 +77,58 @@ if ! [[ "$RUNS" =~ ^[0-9]+$ ]] || [[ "$RUNS" -lt 1 ]]; then
     exit 1
 fi
 
-if [[ -z "$CASE" ]]; then
-    echo "Error: --case is required (1, 2, 3, or 4)." >&2
+if [[ -n "$CASE" && -n "$CASES_LIST" ]]; then
+    echo "Error: --case and --cases are mutually exclusive." >&2
+    exit 1
+fi
+if [[ -n "$SEED" && -n "$SEEDS_COUNT" ]]; then
+    echo "Error: --seed and --seeds are mutually exclusive." >&2
+    exit 1
+fi
+if [[ -z "$CASE" && -z "$CASES_LIST" ]]; then
+    echo "Error: --case or --cases is required (1, 2, 3, or 4)." >&2
     exit 1
 fi
 
-case "$CASE" in
-    1) CASE_SETTINGS="SET disable_rpt = true;
-SET disable_tiered_hash_cache = true;" ;;
-    2) CASE_SETTINGS="SET rpt_forward_only = true;
-SET disable_tiered_hash_cache = true;" ;;
-    3) CASE_SETTINGS="SET rpt_forward_only = true;" ;;
-    4) CASE_SETTINGS="SET disable_tiered_hash_cache = true;" ;;
-    *) echo "Error: --case must be 1, 2, 3, or 4 (got: $CASE)" >&2; exit 1 ;;
-esac
+CASES=()
+if [[ -n "$CASE" ]]; then
+    CASES=("$CASE")
+else
+    IFS=',' read -r -a CASES <<<"$CASES_LIST"
+fi
+for c in "${CASES[@]}"; do
+    case "$c" in
+        1|2|3|4) ;;
+        *) echo "Error: case must be 1, 2, 3, or 4 (got: $c)" >&2; exit 1 ;;
+    esac
+done
+
+case_settings_for() {
+    case "$1" in
+        1) printf '%s\n' "SET disable_rpt = true;" "SET disable_tiered_hash_cache = true;" ;;
+        2) printf '%s\n' "SET rpt_forward_only = true;" "SET disable_tiered_hash_cache = true;" ;;
+        3) printf '%s\n' "SET rpt_forward_only = true;" ;;
+        4) printf '%s\n' "SET disable_tiered_hash_cache = true;" ;;
+    esac
+}
+
+SEEDS=()
+if [[ -n "$SEEDS_COUNT" ]]; then
+    if ! [[ "$SEEDS_COUNT" =~ ^[0-9]+$ ]] || [[ "$SEEDS_COUNT" -lt 1 ]]; then
+        echo "Error: --seeds must be a positive integer (got: $SEEDS_COUNT)" >&2
+        exit 1
+    fi
+    for ((i = 0; i < SEEDS_COUNT; i++)); do SEEDS+=("$i"); done
+elif [[ -n "$SEED" ]]; then
+    if ! [[ "$SEED" =~ ^[0-9]+$ ]]; then
+        echo "Error: --seed must be a non-negative integer (got: $SEED)" >&2
+        exit 1
+    fi
+    SEEDS=("$SEED")
+else
+    # Empty marker: do not emit a seed override; use whatever settings-common.sql sets.
+    SEEDS=("")
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -125,12 +175,17 @@ TPCDS_CSV_PATH="$OUT_DIR/tpcds_runtimes_sf${SF}_${TIMESTAMP}.csv"
 build_sql() {
     local extension="$1"
     local query_stmt="$2"
+    local case_num="$3"
+    local seed_val="$4"
     if $USE_DUCKDB_PROFILING; then
         printf '%s\n' "$PROFILING_PRAGMAS"
     fi
     grep '^SET ' "$COMMON_SETTINGS_SQL" || true
     grep '^SET ' "$RUN_SETTINGS_SQL" || true
-    printf '%s\n' "$CASE_SETTINGS"
+    case_settings_for "$case_num"
+    if [[ -n "$seed_val" ]]; then
+        printf 'SET transfer_graph_seed = %s;\n' "$seed_val"
+    fi
     printf 'LOAD %s;\n' "$extension"
     printf '%s\n' "$query_stmt"
 }
@@ -179,89 +234,116 @@ if [[ $RUN_TPCDS -eq 1 ]] && [[ $GENERATE_DATA -eq 0 ]] && [[ ! -f "$TPCDS_DB_PA
     exit 1
 fi
 
+if [[ -n "$TPCH_QUERY" ]]; then
+    if ! [[ "$TPCH_QUERY" =~ ^[0-9]+$ ]] || [[ "$TPCH_QUERY" -lt 1 ]] || [[ "$TPCH_QUERY" -gt 22 ]]; then
+        echo "Error: --tpch-query must be between 1 and 22" >&2
+        exit 1
+    fi
+    TPCH_QUERY_RANGE="$TPCH_QUERY"
+else
+    TPCH_QUERY_RANGE=$(seq 1 22)
+fi
+
+if [[ $RUN_TPCH -eq 1 ]]; then
+    printf "query,case,seed,runtime_seconds\n" > "$TPCH_CSV_PATH"
+fi
+if [[ $RUN_TPCDS -eq 1 ]]; then
+    printf "query,case,seed,runtime_seconds\n" > "$TPCDS_CSV_PATH"
+fi
+
+echo "Starting TPC sweep (cases: ${CASES[*]}, seeds: ${SEEDS[*]:-default}, runs/tuple: ${RUNS}, sf: ${SF})..."
+
 TOTAL_WALL=0
-for RUN_IDX in $(seq 1 "$RUNS"); do
-    RUN_START=$(date +%s.%N)
-    echo "===== RUN ${RUN_IDX}/${RUNS} (case ${CASE}) ====="
+TOTAL_ROWS=0
+for c in "${CASES[@]}"; do
+    for s in "${SEEDS[@]}"; do
+        seed_disp="${s:-default}"
+        for RUN_IDX in $(seq 1 "$RUNS"); do
+            RUN_START=$(date +%s.%N)
+            echo "===== case=${c} seed=${seed_disp} run=${RUN_IDX}/${RUNS} ====="
 
-    if [[ $RUN_TPCH -eq 1 ]]; then
-        printf "query,runtime_seconds\n" > "$TPCH_CSV_PATH"
-        if [[ -n "$TPCH_QUERY" ]]; then
-            if ! [[ "$TPCH_QUERY" =~ ^[0-9]+$ ]] || [[ "$TPCH_QUERY" -lt 1 ]] || [[ "$TPCH_QUERY" -gt 22 ]]; then
-                echo "Error: --tpch-query must be between 1 and 22" >&2
-                exit 1
-            fi
-            QUERY_RANGE="$TPCH_QUERY"
-        else
-            QUERY_RANGE=$(seq 1 22)
-        fi
-        for Q in $QUERY_RANGE; do
-            echo "Running TPC-H query ${Q}..."
-            TIME_FILE=$(mktemp)
-            SQL="$(build_sql tpch "PRAGMA tpch(${Q});")"
-            if $USE_PERF; then
-                if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
-                    RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                    printf "Q%02d,%s\n" "$Q" "$RUNTIME" >> "$TPCH_CSV_PATH"
-                else
+            if [[ $RUN_TPCH -eq 1 ]]; then
+                for Q in $TPCH_QUERY_RANGE; do
+                    echo "Running TPC-H query ${Q}..."
+                    TIME_FILE=$(mktemp)
+                    SQL="$(build_sql tpch "PRAGMA tpch(${Q});" "$c" "$s")"
+                    if $USE_PERF; then
+                        if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
+                            RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
+                            printf "Q%02d,%s,%s,%s\n" "$Q" "$c" "$s" "$RUNTIME" >> "$TPCH_CSV_PATH"
+                        else
+                            rm -f "$TIME_FILE"
+                            echo "Error: TPC-H query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
+                            exit 1
+                        fi
+                    else
+                        if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
+                            RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
+                            printf "Q%02d,%s,%s,%s\n" "$Q" "$c" "$s" "$RUNTIME" >> "$TPCH_CSV_PATH"
+                        else
+                            rm -f "$TIME_FILE"
+                            echo "Error: TPC-H query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
+                            exit 1
+                        fi
+                    fi
                     rm -f "$TIME_FILE"
-                    echo "Error: TPC-H query ${Q} failed" >&2
-                    exit 1
-                fi
-            else
-                if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
-                    RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                    printf "Q%02d,%s\n" "$Q" "$RUNTIME" >> "$TPCH_CSV_PATH"
-                else
-                    rm -f "$TIME_FILE"
-                    echo "Error: TPC-H query ${Q} failed" >&2
-                    exit 1
-                fi
+                    TOTAL_ROWS=$((TOTAL_ROWS + 1))
+                done
             fi
-            rm -f "$TIME_FILE"
+
+            if [[ $RUN_TPCDS -eq 1 ]]; then
+                for Q in $(seq 1 99); do
+                    echo "Running TPC-DS query ${Q}..."
+                    TIME_FILE=$(mktemp)
+                    SQL="$(build_sql tpcds "PRAGMA tpcds(${Q});" "$c" "$s")"
+                    if $USE_PERF; then
+                        if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
+                            RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
+                            printf "Q%02d,%s,%s,%s\n" "$Q" "$c" "$s" "$RUNTIME" >> "$TPCDS_CSV_PATH"
+                        else
+                            rm -f "$TIME_FILE"
+                            echo "Error: TPC-DS query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
+                            exit 1
+                        fi
+                    else
+                        if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
+                            RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
+                            printf "Q%02d,%s,%s,%s\n" "$Q" "$c" "$s" "$RUNTIME" >> "$TPCDS_CSV_PATH"
+                        else
+                            rm -f "$TIME_FILE"
+                            echo "Error: TPC-DS query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
+                            exit 1
+                        fi
+                    fi
+                    rm -f "$TIME_FILE"
+                    TOTAL_ROWS=$((TOTAL_ROWS + 1))
+                done
+            fi
+
+            RUN_END=$(date +%s.%N)
+            RUN_WALL=$(awk -v s="$RUN_START" -v e="$RUN_END" 'BEGIN{printf "%.6f", e - s}')
+            TOTAL_WALL=$(awk -v t="$TOTAL_WALL" -v r="$RUN_WALL" 'BEGIN{printf "%.6f", t + r}')
+            echo "case=${c} seed=${seed_disp} run=${RUN_IDX} wall-clock (s): ${RUN_WALL}"
         done
-    fi
-
-    if [[ $RUN_TPCDS -eq 1 ]]; then
-        printf "query,runtime_seconds\n" > "$TPCDS_CSV_PATH"
-        for Q in $(seq 1 99); do
-            echo "Running TPC-DS query ${Q}..."
-            TIME_FILE=$(mktemp)
-            SQL="$(build_sql tpcds "PRAGMA tpcds(${Q});")"
-            if $USE_PERF; then
-                if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
-                    RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                    printf "Q%02d,%s\n" "$Q" "$RUNTIME" >> "$TPCDS_CSV_PATH"
-                else
-                    rm -f "$TIME_FILE"
-                    echo "Error: TPC-DS query ${Q} failed" >&2
-                    exit 1
-                fi
-            else
-                if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
-                    RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                    printf "Q%02d,%s\n" "$Q" "$RUNTIME" >> "$TPCDS_CSV_PATH"
-                else
-                    rm -f "$TIME_FILE"
-                    echo "Error: TPC-DS query ${Q} failed" >&2
-                    exit 1
-                fi
-            fi
-            rm -f "$TIME_FILE"
-        done
-    fi
-
-    RUN_END=$(date +%s.%N)
-    RUN_WALL=$(awk -v s="$RUN_START" -v e="$RUN_END" 'BEGIN{printf "%.6f", e - s}')
-    TOTAL_WALL=$(awk -v t="$TOTAL_WALL" -v r="$RUN_WALL" 'BEGIN{printf "%.6f", t + r}')
-    echo "Run ${RUN_IDX} total wall-clock time (s): ${RUN_WALL}"
+    done
 done
 
-AVG_WALL=$(awk -v t="$TOTAL_WALL" -v n="$RUNS" 'BEGIN{printf "%.6f", t / n}')
-echo "===== MULTI-RUN SUMMARY ====="
+TOTAL_TUPLES=$((${#CASES[@]} * ${#SEEDS[@]} * RUNS))
+AVG_WALL=$(awk -v t="$TOTAL_WALL" -v n="$TOTAL_TUPLES" 'BEGIN{printf "%.6f", t / n}')
+echo "===== SWEEP SUMMARY ====="
+echo "Cases: ${CASES[*]}"
+echo "Seeds: ${SEEDS[*]:-default}"
+echo "Runs per (case, seed) tuple: ${RUNS}"
+echo "Total (case, seed, run) tuples: ${TOTAL_TUPLES}"
+echo "Total query rows captured: ${TOTAL_ROWS}"
 echo "Total time (s): ${TOTAL_WALL}"
-echo "Number of runs: ${RUNS}"
-echo "Average time per run (s): ${AVG_WALL}"
+echo "Average wall-clock per tuple (s): ${AVG_WALL}"
+if [[ $RUN_TPCH -eq 1 ]]; then
+    echo "TPC-H CSV: $TPCH_CSV_PATH"
+fi
+if [[ $RUN_TPCDS -eq 1 ]]; then
+    echo "TPC-DS CSV: $TPCDS_CSV_PATH"
+fi
 if $USE_DUCKDB_PROFILING; then
     echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
 fi
