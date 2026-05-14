@@ -764,6 +764,7 @@ public:
 		PrintJoinHashTableFinalizeStats(ht);
 		sink.hash_table->GetDataCollection().VerifyEverythingPinned();
 		if (sink.build_source_is_base_table) {
+			// TODO if SetBuildSourceIsBaseTable (Phase D - swap at runtime) is ever called, `build_source_is_base_table` could be not true anymore
 			sink.hash_table->InitializeTieredHashCache();
 		} else {
 			DEBUG_LOG("[FinishEvent] Skipping THC: build source is not a base table.\n");
