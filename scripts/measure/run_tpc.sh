@@ -395,3 +395,16 @@ if $USE_DUCKDB_PROFILING; then
         fi
     fi
 fi
+# Condense each runtime CSV to one (median) row per (query, case). Runs after the
+# THC postprocess above so the median CSV also carries any Join*-* columns.
+MEDIAN_SCRIPT="$SCRIPT_DIR/median_runtime_csv.py"
+if [[ -f "$MEDIAN_SCRIPT" ]] && command -v python3 >/dev/null; then
+    if [[ $RUN_TPCH -eq 1 ]]; then
+        python3 "$MEDIAN_SCRIPT" --csv "$TPCH_CSV_PATH" || \
+            echo "warning: median_runtime_csv failed for $TPCH_CSV_PATH" >&2
+    fi
+    if [[ $RUN_TPCDS -eq 1 ]]; then
+        python3 "$MEDIAN_SCRIPT" --csv "$TPCDS_CSV_PATH" || \
+            echo "warning: median_runtime_csv failed for $TPCDS_CSV_PATH" >&2
+    fi
+fi
