@@ -17,6 +17,7 @@ USE_PERF=false
 USE_DEBUG=false
 USE_DUCKDB_PROFILING=false
 GENERATE_DATA=false
+TIMEOUT_SECONDS=""
 PERF_EVENTS="cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,mem_access,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd,branch-instructions,branch-misses,br_retired,br_mis_pred_retired"
 
 usage() {
@@ -38,6 +39,8 @@ Options:
                         augmented runtime CSV with per-join THC telemetry
                         columns Join1-*..JoinN-* (via thc_csv_postprocess.py).
   --generate            Force (re)download of the Appian database
+  --timeout <seconds>   Per-query wall-clock cap; on timeout DuckDB is killed
+                        and the run records a runtime of 9999999 in the CSV
   -h, --help            Show this help
 USAGE
 }
@@ -88,6 +91,10 @@ while [[ $# -gt 0 ]]; do
 		GENERATE_DATA=true
 		shift
 		;;
+	--timeout)
+		TIMEOUT_SECONDS="$2"
+		shift 2
+		;;
 	-h | --help)
 		usage
 		exit 0
@@ -115,6 +122,12 @@ fi
 if [[ -z "$CASE" && -z "$CASES_LIST" ]]; then
 	echo "Error: --case or --cases is required." >&2
 	exit 1
+fi
+if [[ -n "$TIMEOUT_SECONDS" ]]; then
+	if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TIMEOUT_SECONDS" -lt 1 ]]; then
+		echo "Error: --timeout must be a positive integer number of seconds (got: $TIMEOUT_SECONDS)" >&2
+		exit 1
+	fi
 fi
 
 CASES=()
@@ -322,29 +335,33 @@ run_query() {
 	local case_num="$1"
 	local seed_val="$2"
 	local query_file="$3"
-	local sql time_file runtime
+	local sql time_file runtime rc
 	sql="$(build_sql "$case_num" "$seed_val" "$query_file")"
 	time_file=$(mktemp)
+	rc=0
+	# When TIMEOUT_SECONDS is set, DuckDB (or the perf-wrapped DuckDB) is run
+	# under `timeout -k 5`, which sends SIGTERM and then SIGKILL after a 5s
+	# grace period. `timeout` exits 124 on timeout (137 if force-killed); both
+	# are treated as "query timed out" below. An empty timeout arg keeps the
+	# original, un-capped invocation.
 	if $USE_PERF; then
-		if /usr/bin/time -f "%e" -o "$time_file" bash -c \
-			'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4"' \
-			_ "$sql" "$PERF_EVENTS" "$DUCKDB_BIN" "$DB_FILE"; then
-			runtime=$(awk 'NR==1{print $1}' "$time_file")
-		else
-			rm -f "$time_file"
-			echo "Error: query ${query_file} failed (case ${case_num}, seed ${seed_val:-default})" >&2
-			exit 1
-		fi
+		/usr/bin/time -f "%e" -o "$time_file" bash -c \
+			'tt="$5"; if [[ -n "$tt" ]]; then printf "%s\n" "$1" | timeout -k 5 "$tt" sudo perf stat -e "$2" -- "$3" "$4"; else printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4"; fi' \
+			_ "$sql" "$PERF_EVENTS" "$DUCKDB_BIN" "$DB_FILE" "$TIMEOUT_SECONDS" || rc=$?
 	else
-		if /usr/bin/time -f "%e" -o "$time_file" bash -c \
-			'printf "%s\n" "$1" | "$2" "$3"' \
-			_ "$sql" "$DUCKDB_BIN" "$DB_FILE"; then
-			runtime=$(awk 'NR==1{print $1}' "$time_file")
-		else
-			rm -f "$time_file"
-			echo "Error: query ${query_file} failed (case ${case_num}, seed ${seed_val:-default})" >&2
-			exit 1
-		fi
+		/usr/bin/time -f "%e" -o "$time_file" bash -c \
+			'tt="$4"; if [[ -n "$tt" ]]; then printf "%s\n" "$1" | timeout -k 5 "$tt" "$2" "$3"; else printf "%s\n" "$1" | "$2" "$3"; fi' \
+			_ "$sql" "$DUCKDB_BIN" "$DB_FILE" "$TIMEOUT_SECONDS" || rc=$?
+	fi
+	if [[ "$rc" -eq 0 ]]; then
+		runtime=$(awk 'NR==1{print $1}' "$time_file")
+	elif [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+		echo "Warning: query ${query_file} timed out after ${TIMEOUT_SECONDS}s (case ${case_num}, seed ${seed_val:-default}); recording runtime 9999999" >&2
+		runtime=9999999
+	else
+		rm -f "$time_file"
+		echo "Error: query ${query_file} failed (case ${case_num}, seed ${seed_val:-default})" >&2
+		exit 1
 	fi
 	rm -f "$time_file"
 	LAST_RUNTIME="$runtime"
