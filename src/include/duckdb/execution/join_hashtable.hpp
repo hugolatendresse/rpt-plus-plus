@@ -532,6 +532,12 @@ public:
 		return null_values_are_equal[col_idx];
 	}
 
+	//! Base-table names of the probe/build inputs, resolved by
+	//! PhysicalHashJoin::InitializeHashTable. Empty when the input is not a
+	//! plain base-table scan. Used only for DEBUG logging.
+	string probe_table_name;
+	string build_table_name;
+
 	ClientContext &context;
 	//! BufferManager
 	BufferManager &buffer_manager;
