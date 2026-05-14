@@ -20,6 +20,10 @@
 #include "duckdb/execution/tiered_hash_cache.hpp"
 #include "duckdb/execution/ht_entry.hpp"
 
+#include <atomic>
+#include <array>
+#include <mutex>
+
 namespace duckdb {
 
 class BufferManager;
@@ -253,7 +257,26 @@ public:
 		const_data_ptr_t row_ptr;
 	};
 
-	//! There is one instance of this per thread at runtime
+	//! Per-thread state for a single probing thread. After the THC adaptive
+	//! algorithm was globalised across threads, this struct only holds:
+	//!   (a) Per-call scratch space (vectors, selection vectors) that the
+	//!       per-call probing/matching paths read and write.
+	//!   (b) Per-thread timer pointers wired to the operator state's local
+	//!       timing counters (the operator state then folds those into the
+	//!       PhysicalHashJoin sink atomics at FlushLocalTimings time).
+	//!   (c) The thread's local COLLECT buffer (`collected_entries`), drained
+	//!       via `TieredHashCache::InsertBatch<...>` when this thread next
+	//!       observes a COLLECT→READ_ONLY transition.
+	//!   (d) The thread's last-observed global phase (`observed_phase`) and
+	//!       the cycle index it captured on entry to COLLECT
+	//!       (`collecting_for_cycle`). These exist so each thread knows
+	//!       whether it has work to flush and which `first_collect_new_entries`
+	//!       bucket its first-cycle flush contributes to.
+	//!
+	//! All decision-affecting fields (phase counters, cost doubles, miss
+	//! rates, terminal flags, transition reasons, etc.) live on
+	//! `JoinHashTable::GlobalTHCAdaptiveState` and are shared by every
+	//! probing thread of this join.
 	struct ProbeState : SharedState {
 		explicit ProbeState(idx_t collected_entries_capacity = 0);
 
@@ -272,81 +295,11 @@ public:
 		SelectionVector cache_candidates_sel;
 		SelectionVector cache_miss_sel;
 
-		// ---- Adaptive THC state (per thread) ----
-		// The adaptive algorithm alternates between COLLECT and READ_ONLY phases.
-		// COLLECT collects probe-matched entries and inserts them into the shared THC.
-		// READ_ONLY probes the THC and tracks miss rate for deciding the next collect
-		// phase.
-
-		//! Current phase of the adaptive THC lifecycle
-		TieredHashCachePhase tiered_hash_cache_phase = TieredHashCachePhase::BASELINE;
-
-		//! When true, this thread has permanently abandoned the THC because
-		//! the miss rate remained high even after the THC was full.
-		//! All subsequent probes bypass the THC entirely and use the vanilla
-		//! DuckDB path, eliminating the per-probe overhead of hash densification,
-		//! ProbeAndMatch, and fallback bookkeeping.
-		bool thc_abandoned = false;
-
-		//! Number of consecutive READ_ONLY checkpoints where the miss rate
-		//! was above the abandon threshold.  Once this reaches
-		//! THC_ABANDON_CONSECUTIVE_MISSES, the THC is permanently abandoned.
-		idx_t consecutive_high_miss_checkpoints = 0;
-
-		//! How many collect -> read-only transitions have occurred so far.
-		//! cycle_count == 0 means we are either in Cmain or first collect phase.
-		//! On cycle 0, we use the regular DuckDB probe and save all matches.
-		//! On cycle > 0, we probe THC + regular fallback and save only THC-miss matches.
-		idx_t completed_collect_cycles = 0;
-
-		//! Rows processed in the current collect phase (reset each time we enter COLLECT)
-		idx_t probe_rows_in_phase = 0;
-
-		//! Buffer of {hash, row_ptr} pairs collected.
-		//! Flushed into the shared THC when probe_rows_in_phase >= COLLECT_PHASE_PROBE_ROWS.
+		//! Buffer of {hash, row_ptr} pairs collected during the current COLLECT
+		//! cycle. Flushed into the shared THC when this thread next observes a
+		//! COLLECT→READ_ONLY phase change (or, for the thread that triggers the
+		//! transition, immediately after exiting the transition critical section).
 		vector<CollectedEntry> collected_entries;
-
-		//! How many checkpoints (end-of-READ_ONLY evaluations) have occurred.
-		//! The READ_ONLY segment length is READ_ONLY_BASE_ROWS * 2^checkpoint_count.
-		idx_t completed_evaluation_cycles = 0;
-
-		//! Target number of rows for the current READ_ONLY segment.
-		//! Doubles at every checkpoint (exponential backoff).
-		idx_t read_only_rows_target = 0;
-
-		//! Rows processed so far in the current READ_ONLY segment
-		idx_t read_only_rows_processed = 0;
-
-		//! Number of THC misses accumulated during the current READ_ONLY segment.
-		//! Used to compute the miss rate at checkpoint time.
-		idx_t ro_miss_count = 0;
-
-		//! Total rows probed during the current READ_ONLY segment.
-		//! Together with ro_miss_count, gives the miss rate.
-		idx_t ro_total_count = 0;
-
-		//! Lifetime count of rows spent in collect phases across all cycles.
-		//! Compared against total_probe_rows * thc_collect_budget_fraction to enforce
-		//! the configured collect overhead cap.
-		idx_t total_collect_phase_rows = 0;
-
-		//! Lifetime count of all probe rows processed by this thread.
-		//! Used as the denominator for the collect phase budget fraction check.
-		idx_t total_probe_rows = 0;
-
-		//! Lifetime count of genuinely new entries this thread inserted into the THC
-		//! (summed across all collect phases).
-		idx_t total_new_entries = 0;
-		//! Number of unique keys inserted in the very first COLLECT flush.
-		//! This is U1 in the first-cycle multiplicity estimator.
-		idx_t first_collect_new_entries = 0;
-		//! Whether we have already executed the one-shot first-cycle
-		//! multiplicity check and made the bypass decision.
-		bool first_cycle_multiplicity_checked = false;
-
-		//! We only collect (and populate) the THC is this is true. By default it is true,
-		//! and the algorithm can set to false if we don't want to collect/populate anymore.  
-		bool thc_collection_enabled = true;
 
 		//! --- Scratch space for collecting THC-miss matches during collect phase (cycle > 0) ---
 		//! After ProbeTHCAndFallback runs, these record which miss-fallback rows actually
@@ -362,44 +315,142 @@ public:
 		//! Count of entries in thc_miss_match_sel
 		idx_t thc_miss_match_count = 0;
 
-		// ---- mu_s estimation (Probe-phase chain walking approach) ----
-		//! Sum of chain lengths walked during cycle 0 COLLECT.
-		idx_t mu_s_chain_length_sum = 0;
-		//! Number of chains walked during cycle 0 COLLECT.
-		idx_t mu_s_chain_count = 0;
+		//! Last phase TYPE this thread observed via the global state's
+		//! `phase` atomic. When `live_phase != observed_phase` we know
+		//! the global phase has changed since our previous call and we
+		//! must run the per-call phase-change actions (flush any pending
+		//! `collected_entries` to `phase_metrics[observed_phase_number]`,
+		//! update both observed_phase and observed_phase_number).
+		TieredHashCachePhase observed_phase = TieredHashCachePhase::BASELINE;
+		//! Last phase INDEX (the row `n` in the cycle-clean accumulator
+		//! table) this thread observed. Captured at chunk entry alongside
+		//! `observed_phase`. Every post-call `fetch_add` from this chunk
+		//! writes to `phase_metrics[observed_phase_number % MAX_PHASES]`,
+		//! so contributions are always tagged with the phase the chunk
+		//! was started in — even if the global phase has since advanced.
+		idx_t observed_phase_number = 0;
+	};
 
-		// ---- Cost-based adaptive tracking ----
-		//! Baseline average ns/probe measured during the BASELINE phase (main HT only).
+	//! Per-phase accumulator slot. Each (global, monotonic) phase index has
+	//! its own slot at `phase_metrics[phase_number % MAX_PHASES]`. Threads
+	//! write only to the slot tagged with the phase they captured at chunk
+	//! entry; the leader reads slots for the just-ended phase (and one or
+	//! two prior phases) when computing cost-rule metrics. Because each
+	//! phase owns exactly one slot, late `fetch_add`s from in-flight
+	//! chunks can never contaminate a future phase's metrics.
+	struct PhaseMetrics {
+		std::atomic<uint64_t> time_ns {0};       // wall-clock time accumulated during this phase
+		std::atomic<idx_t>    probe_count {0};   // input rows processed in this phase
+		std::atomic<idx_t>    miss_count {0};    // THC misses (only meaningful for RO phases)
+	};
+
+	//! Cross-thread coordination state for the adaptive THC. One instance
+	//! lives on `JoinHashTable` while the THC is active; every probing thread
+	//! reads and updates it. Decision logic that needs to fire exactly once
+	//! per phase transition runs under `transition_mutex` using
+	//! double-checked locking on the relevant atomic counter. Cycle-counter
+	//! increments and the `c_main` double are written only while holding
+	//! the mutex; everything else is plain lock-free fetch_add / load /
+	//! store traffic.
+	struct GlobalTHCAdaptiveState {
+		// ---- Phase / lifecycle ----
+		//! Current global phase. All threads switch to this phase the next
+		//! time they make a probe call.
+		std::atomic<TieredHashCachePhase> phase {TieredHashCachePhase::BASELINE};
+		//! When false, no thread should add to `collected_entries` or run a
+		//! flush; the THC is frozen (still useful for reads) or abandoned.
+		std::atomic<bool> collection_enabled {true};
+		//! When true, every probing thread short-circuits to the vanilla
+		//! probe path (no THC machinery at all).
+		std::atomic<bool> abandoned {false};
+		//! Set true by whichever thread runs the one-shot first-cycle
+		//! multiplicity / hotness / coverage check inside the transition
+		//! mutex. Ensures the check fires exactly once globally.
+		std::atomic<bool> first_cycle_multiplicity_checked {false};
+
+		// ---- Per-phase indexed accumulators ----
+		//! Maximum number of phase slots; slot for phase k is
+		//! `phase_metrics[k % MAX_PHASES]`. `phase_number` is monotonic
+		//! (never reset). When the leader increments `phase_number` to a
+		//! non-zero multiple of MAX_PHASES, it clears the entire array
+		//! inside `transition_mutex` so the next round of phases starts
+		//! in fresh slots. The clear is race-free because any in-flight
+		//! chunk's `observed_phase_number` is at most one phase behind
+		//! `phase_number` (a chunk takes microseconds while a phase spans
+		//! tens of milliseconds), so its modulo index can never collide
+		//! with the slot being reused 4096 phases later.
+		static constexpr idx_t MAX_PHASES = 4096;
+		std::array<PhaseMetrics, MAX_PHASES> phase_metrics {};
+		//! Strictly monotonic counter — the "row index" `n` of the user's
+		//! n×m mental model. Each transition increments this by one.
+		std::atomic<idx_t> phase_number {0};
+		//! Phase index of the most recent COLLECT phase. Set at every
+		//! BASELINE→COLLECT and RO→COLLECT transition (the moment a new
+		//! COLLECT begins). Read at the next RO checkpoint to compute
+		//! c_grow_current. Written only inside `transition_mutex`.
+		idx_t current_collect_phase_number = 0;
+		//! Phase index of the most recently evaluated RO segment. Set at
+		//! every RO checkpoint, after computing the cycle's metrics. Read
+		//! at the NEXT RO checkpoint to compute c_eval_prev for the
+		//! shrinkage formula. Written only inside `transition_mutex`.
+		idx_t prev_eval_phase_number = 0;
+
+		// ---- Lifetime counters (never reset; just keep growing) ----
+		//! Lifetime probe rows; the budget-fraction guard divides this.
+		std::atomic<idx_t> total_probe_rows {0};
+		//! Lifetime rows spent in COLLECT (sum across cycles).
+		std::atomic<idx_t> total_collect_phase_rows {0};
+		//! Lifetime count of THC inserts across all flushes.
+		std::atomic<idx_t> total_new_entries {0};
+		//! Count of unique keys inserted during the FIRST COLLECT phase.
+		//! Used as U1 in the cross-multiplicity estimator. Threads
+		//! contribute only when `state.observed_phase_number == 1`.
+		std::atomic<idx_t> first_collect_new_entries {0};
+
+		// ---- mu_s estimation (probe-sample method, cycle-0 only) ----
+		std::atomic<idx_t> mu_s_chain_length_sum {0};
+		std::atomic<idx_t> mu_s_chain_count {0};
+
+		// ---- Cycle counters ----
+		//! Number of COLLECT phases that have fully transitioned to READ_ONLY.
+		//! 0 → we are in BASELINE or the very first COLLECT.
+		//! 1 → first COLLECT just finished; the one-shot multiplicity check
+		//!     becomes due at the next READ_ONLY checkpoint.
+		std::atomic<idx_t> completed_collect_cycles {0};
+		//! Number of READ_ONLY checkpoints that have evaluated the decision
+		//! body (advances at every checkpoint after the high-miss
+		//! abandonment short-circuit).
+		std::atomic<idx_t> completed_evaluation_cycles {0};
+		//! Number of completed cost-rule evaluations (= t in the decision
+		//! rule). Drives the warmup gate (`<= thc_warmup_cycles`).
+		std::atomic<idx_t> eval_cycle_count {0};
+		//! Consecutive high-miss checkpoints; reset on any low-miss segment.
+		std::atomic<idx_t> consecutive_high_miss_checkpoints {0};
+		//! Length (in probe rows) of the current READ_ONLY segment.
+		std::atomic<idx_t> read_only_rows_target {0};
+
+		//! Baseline average ns/probe measured during the BASELINE phase
+		//! (main HT only). Cached as a plain double (written once inside
+		//! `transition_mutex` at the BASELINE→COLLECT transition) so it
+		//! survives any future wrap of `phase_number`. `c_grow_current`,
+		//! `c_eval_current`, and `c_eval_prev` are derived on demand from
+		//! `phase_metrics[...]` at decision time.
 		double c_main = 0.0;
-		//! Average ns/probe measured during the most recent COLLECT phase.
-		double c_grow_current = 0.0;
-		//! Average ns/probe measured during the most recent READ_ONLY (evaluation) phase.
-		double c_eval_current = 0.0;
-		//! Average ns/probe from the previous evaluation phase, used to compute delta^{t-1}.
-		double c_eval_prev = 0.0;
-		//! Accumulated wall-clock nanoseconds in the current phase.
-		uint64_t phase_time_ns = 0;
-		//! Number of probes counted in the current phase.
-		idx_t phase_probe_count = 0;
-		//! Number of completed evaluation phases (= t in the decision rule).
-		idx_t eval_cycle_count = 0;
+		// NOTE: C_Grow and C_eval are calculated in-flight by the leader of each phase 
 
-		// ---- Lifecycle telemetry surfaced via PhysicalHashJoin's profiling
-		// extra_info. Captured at the moment of the transition so the
-		// benchmark CSVs can show "after how many probed rows did the THC
-		// stop growing / get abandoned." See join_hashtable.cpp for the
-		// transition sites that write these.
-		//! total_probe_rows at the moment thc_collection_enabled flipped
-		//! false *without* an accompanying abandonment. Zero if this thread
-		//! never froze the THC.
-		idx_t probes_at_freeze = 0;
-		//! total_probe_rows at the moment thc_abandoned was set true. Zero
-		//! if this thread never abandoned the THC.
-		idx_t probes_at_abandon = 0;
-		//! Which freeze-decision rule fired, if any.
-		THCFreezeReason freeze_reason = THCFreezeReason::None;
-		//! Which abandonment rule fired, if any.
-		THCAbandonReason abandon_reason = THCAbandonReason::None;
+		// ---- Telemetry surfaced through PhysicalHashJoin's extra_info ----
+		std::atomic<idx_t> probes_at_freeze {0};
+		std::atomic<idx_t> probes_at_abandon {0};
+		std::atomic<uint8_t> freeze_reason {static_cast<uint8_t>(THCFreezeReason::None)};
+		std::atomic<uint8_t> abandon_reason {static_cast<uint8_t>(THCAbandonReason::None)};
+
+		// ---- Critical section ----
+		//! Protects (a) the cost doubles and (b) every "phase transition" /
+		//! "checkpoint decision body" so the transition logic runs once per
+		//! threshold crossing even when many threads observe the crossing
+		//! simultaneously. Use double-checked locking on the relevant
+		//! atomic counter to avoid taking the mutex on every probe call.
+		std::mutex transition_mutex;
 	};
 
 	struct InsertState : SharedState {
@@ -460,6 +511,14 @@ public:
 	//! Used by PhysicalHashJoin to emit per-join THC telemetry.
 	bool HasTieredHashCache() const {
 		return tiered_hash_cache != nullptr;
+	}
+
+	//! Read-only access to the cross-thread adaptive state.  Returns nullptr
+	//! when this join does not have an active THC (the global state is created
+	//! alongside the THC in `InitializeTieredHashCache`).  Used by
+	//! PhysicalHashJoin to emit per-join lifecycle telemetry.
+	const GlobalTHCAdaptiveState *GetGlobalTHCState() const {
+		return global_thc_state.get();
 	}
 
 	PartitionedTupleData &GetSinkCollection() {
@@ -575,6 +634,19 @@ private:
 	                        Vector &pointers_result_v, SelectionVector &match_sel,
 	                        idx_t &match_count, idx_t &cache_miss_count);
 
+	//! Drain a thread's local `collected_entries` buffer into the shared THC.
+	//! Called when a probing thread observes a COLLECT→READ_ONLY phase change
+	//! (so its cycle-K buffer is flushed before it starts cycle K+1 / READ_ONLY
+	//! work). Also called immediately by the thread that triggers the
+	//! transition. Updates `g.total_new_entries`, `g.first_collect_new_entries`
+	//! (only when `state.observed_phase_number == 1`, i.e. the very first
+	//! COLLECT — cycle 0), and the InsertBatch time on the per-phase slot
+	//! `g.phase_metrics[state.observed_phase_number % MAX_PHASES].time_ns`
+	//! so the cost is attributed to the COLLECT phase the buffer belonged
+	//! to. Sets `g.freeze_reason = THCFull` and `g.collection_enabled = false`
+	//! if the THC fills up.
+	void FlushCollectedEntriesIntoTHC(ProbeState &state, GlobalTHCAdaptiveState &g);
+
 private:
 	//! Insert the given set of locations into the HT with the given set of hashes_v
 	void InsertHashes(Vector &hashes_v, idx_t count, TupleDataChunkState &chunk_state, InsertState &insert_statebool,
@@ -601,6 +673,13 @@ private:
 	//! Shared THC for accelerating repeated probe lookups.
 	//! Created during Finalize when the hash table is large enough.
 	unique_ptr<TieredHashCache> tiered_hash_cache;
+
+	//! Cross-thread coordination state for the adaptive THC algorithm.
+	//! Created in lockstep with `tiered_hash_cache` (see
+	//! `InitializeTieredHashCache`); null when the THC is disabled or could
+	//! not be activated for this join. Every probing thread reads/updates
+	//! this struct rather than its own `ProbeState`.
+	unique_ptr<GlobalTHCAdaptiveState> global_thc_state;
 
 	//! The byte offset of the join key in each cached row
 	//! Before that key, there is the validity byte coming from data_collection
