@@ -17,6 +17,7 @@ SEEDS_COUNT=""
 USE_PERF=false
 USE_DEBUG=false
 USE_DUCKDB_PROFILING=false
+TIMEOUT_SECONDS=""
 COMMON_SETTINGS_SQL="scripts/measure/settings-common.sql"
 RUN_SETTINGS_SQL="scripts/measure/settings-run_tpc.sql"
 PERF_EVENTS="cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,mem_access,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd,branch-instructions,branch-misses,br_retired,br_mis_pred_retired"
@@ -45,6 +46,8 @@ Options:
                          under <out-dir>/profiling_<timestamp>/, plus an
                          augmented runtime CSV with per-join THC telemetry
                          columns Join1..JoinN (via thc_csv_postprocess.py).
+  --timeout <seconds>    Per-query wall-clock cap; on timeout DuckDB is killed
+                         and the run records a runtime of 9999999 in the CSV
   -h, --help             Show this help
 
 Sweep example (box plots):
@@ -70,6 +73,7 @@ while [[ $# -gt 0 ]]; do
         --perf) USE_PERF=true; shift ;;
         --debug) USE_DEBUG=true; shift ;;
         --duckdb-profiling) USE_DUCKDB_PROFILING=true; shift ;;
+        --timeout) TIMEOUT_SECONDS="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
@@ -78,6 +82,12 @@ done
 if ! [[ "$RUNS" =~ ^[0-9]+$ ]] || [[ "$RUNS" -lt 1 ]]; then
     echo "Error: --runs must be a positive integer" >&2
     exit 1
+fi
+if [[ -n "$TIMEOUT_SECONDS" ]]; then
+    if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TIMEOUT_SECONDS" -lt 1 ]]; then
+        echo "Error: --timeout must be a positive integer number of seconds (got: $TIMEOUT_SECONDS)" >&2
+        exit 1
+    fi
 fi
 
 if [[ -n "$CASE" && -n "$CASES_LIST" ]]; then
@@ -198,6 +208,43 @@ build_sql() {
     printf '%s\n' "$query_stmt"
 }
 
+# Runs one query under /usr/bin/time (optionally perf-wrapped, optionally under a
+# `timeout`). Sets the global RUNTIME to the measured seconds, or to 9999999 if
+# the query timed out. Aborts the whole sweep on any other failure.
+#
+# When TIMEOUT_SECONDS is set, DuckDB (or the perf-wrapped DuckDB) is run under
+# `timeout -k 5`, which sends SIGTERM and then SIGKILL after a 5s grace period.
+# `timeout` exits 124 on timeout (137 if force-killed); both are treated as
+# "query timed out". An empty timeout arg keeps the original, un-capped call.
+run_timed_query() {
+    local sql="$1"
+    local db_path="$2"
+    local label="$3"
+    local time_file rc
+    time_file=$(mktemp)
+    rc=0
+    if $USE_PERF; then
+        /usr/bin/time -f "%e" -o "$time_file" bash -c \
+            'tt="$5"; if [[ -n "$tt" ]]; then printf "%s\n" "$1" | timeout -k 5 "$tt" sudo perf stat -e "$2" -- "$3" "$4" >/dev/null; else printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null; fi' \
+            _ "$sql" "$PERF_EVENTS" "$DUCKDB_BIN" "$db_path" "$TIMEOUT_SECONDS" || rc=$?
+    else
+        /usr/bin/time -f "%e" -o "$time_file" bash -c \
+            'tt="$4"; if [[ -n "$tt" ]]; then printf "%s\n" "$1" | timeout -k 5 "$tt" "$2" "$3" >/dev/null; else printf "%s\n" "$1" | "$2" "$3" >/dev/null; fi' \
+            _ "$sql" "$DUCKDB_BIN" "$db_path" "$TIMEOUT_SECONDS" || rc=$?
+    fi
+    if [[ "$rc" -eq 0 ]]; then
+        RUNTIME=$(awk 'NR==1{print $1}' "$time_file")
+    elif [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+        echo "Warning: ${label} timed out after ${TIMEOUT_SECONDS}s; recording runtime 9999999" >&2
+        RUNTIME=9999999
+    else
+        rm -f "$time_file"
+        echo "Error: ${label} failed" >&2
+        exit 1
+    fi
+    rm -f "$time_file"
+}
+
 if [[ $RUN_TPCH -eq 1 ]] && [[ $GENERATE_DATA -eq 1 ]]; then
     mkdir -p "$(dirname "$TPCH_DB_PATH")"
     if ! "$DUCKDB_BIN" "$TPCH_DB_PATH" -c "LOAD tpch;" > "$DBGEN_LOG" 2>&1; then
@@ -281,7 +328,6 @@ for c in "${CASES[@]}"; do
             if [[ $RUN_TPCH -eq 1 ]]; then
                 for Q in $TPCH_QUERY_RANGE; do
                     echo "Running TPC-H query ${Q}..."
-                    TIME_FILE=$(mktemp)
                     seed_for_path="${s:-default}"
                     if $USE_DUCKDB_PROFILING; then
                         PROFILING_OUTPUT="$PROFILING_DIR/tpch_q${Q}_case${c}_seed${seed_for_path}_run${RUN_IDX}.json"
@@ -289,26 +335,8 @@ for c in "${CASES[@]}"; do
                         PROFILING_OUTPUT=""
                     fi
                     SQL="$(build_sql tpch "PRAGMA tpch(${Q});" "$c" "$s")"
-                    if $USE_PERF; then
-                        if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
-                            RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                            printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCH_CSV_PATH"
-                        else
-                            rm -f "$TIME_FILE"
-                            echo "Error: TPC-H query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
-                            exit 1
-                        fi
-                    else
-                        if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
-                            RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                            printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCH_CSV_PATH"
-                        else
-                            rm -f "$TIME_FILE"
-                            echo "Error: TPC-H query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
-                            exit 1
-                        fi
-                    fi
-                    rm -f "$TIME_FILE"
+                    run_timed_query "$SQL" "$TPCH_DB_PATH" "TPC-H query ${Q} (case ${c}, seed ${seed_disp})"
+                    printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCH_CSV_PATH"
                     TOTAL_ROWS=$((TOTAL_ROWS + 1))
                 done
             fi
@@ -316,7 +344,6 @@ for c in "${CASES[@]}"; do
             if [[ $RUN_TPCDS -eq 1 ]]; then
                 for Q in $(seq 1 99); do
                     echo "Running TPC-DS query ${Q}..."
-                    TIME_FILE=$(mktemp)
                     seed_for_path="${s:-default}"
                     if $USE_DUCKDB_PROFILING; then
                         PROFILING_OUTPUT="$PROFILING_DIR/tpcds_q${Q}_case${c}_seed${seed_for_path}_run${RUN_IDX}.json"
@@ -324,26 +351,8 @@ for c in "${CASES[@]}"; do
                         PROFILING_OUTPUT=""
                     fi
                     SQL="$(build_sql tpcds "PRAGMA tpcds(${Q});" "$c" "$s")"
-                    if $USE_PERF; then
-                        if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
-                            RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                            printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCDS_CSV_PATH"
-                        else
-                            rm -f "$TIME_FILE"
-                            echo "Error: TPC-DS query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
-                            exit 1
-                        fi
-                    else
-                        if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
-                            RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                            printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCDS_CSV_PATH"
-                        else
-                            rm -f "$TIME_FILE"
-                            echo "Error: TPC-DS query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
-                            exit 1
-                        fi
-                    fi
-                    rm -f "$TIME_FILE"
+                    run_timed_query "$SQL" "$TPCDS_DB_PATH" "TPC-DS query ${Q} (case ${c}, seed ${seed_disp})"
+                    printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCDS_CSV_PATH"
                     TOTAL_ROWS=$((TOTAL_ROWS + 1))
                 done
             fi
