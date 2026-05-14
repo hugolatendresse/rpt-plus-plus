@@ -52,6 +52,18 @@
         "$gcc"
       ],
       "hide": false
-    }
+    },
+    {
+      "label": "Move results/ to results-spy",
+      "type": "shell",
+      "command": "cd /mnt/local_ssd/spy; rsync -a results/ ../results-spy/results/; rm results/ -rf; cd ../results-spy/; git add . ; git commit -m 'more results'; git push",
+      "group": {
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "hide": false
+    },
   ]
 }

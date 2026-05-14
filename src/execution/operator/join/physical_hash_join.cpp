@@ -227,11 +227,6 @@ public:
 	void ScheduleFinalize(Pipeline &pipeline, Event &event);
 	void InitializeProbeSpill();
 	void EmitProbeTiming(ExecutionContext &context) const;
-	//! Fold the per-thread ProbeState THC lifecycle counters into the
-	//! sink-state atomics. Called once per thread from FlushLocalTimings
-	//! in HashJoinOperatorState (in-memory probe) and
-	//! HashJoinLocalSourceState (external probe).
-	void FlushProbeStateTHCTelemetry(const JoinHashTable::ProbeState &ps);
 
 	//! Override the build-source-is-base-table flag. Intended for a future
 	//! runtime build/probe swap mechanism (Phase D); not currently called.
@@ -293,22 +288,6 @@ public:
 	//! Total time spent in RowMatcher::Match from GetRowPointersInternal
 	atomic<uint64_t> match_time_ns {0};
 
-	// ---- THC lifecycle telemetry, aggregated across threads ----
-	// Sums:
-	atomic<uint64_t> thc_total_probe_rows {0};
-	atomic<uint64_t> thc_total_new_entries {0};
-	atomic<uint64_t> thc_first_collect_new_entries_sum {0};
-	// Maxes across threads (compare-exchange loop on flush):
-	atomic<uint64_t> thc_probes_at_freeze_max {0};
-	atomic<uint64_t> thc_probes_at_abandon_max {0};
-	// First-non-None wins across threads (single CAS on flush; threads
-	// usually agree on the reason anyway):
-	atomic<uint8_t> thc_freeze_reason {static_cast<uint8_t>(JoinHashTable::THCFreezeReason::None)};
-	atomic<uint8_t> thc_abandon_reason {static_cast<uint8_t>(JoinHashTable::THCAbandonReason::None)};
-	// Any-thread flags (used to derive final_state when no reason was set,
-	// e.g. a thread reached READ_ONLY but never transitioned):
-	atomic<bool> thc_any_collection_disabled {false};
-	atomic<bool> thc_any_abandoned {false};
 	// Snapshot of the build-side row count captured at sink Finalize. The
 	// regular hash table's Count() can read 0 by the time the probe phase
 	// emits profiling (perfect-hash-join path leaves the regular HT
@@ -827,21 +806,20 @@ void HashJoinGlobalSinkState::EmitProbeTiming(ExecutionContext &context) const {
 	                                  thc_probe_ns, thc_collect_ns, thc_insert_ns);
 
 	// ---- Per-join THC lifecycle telemetry ----
-	// These keys are intentionally one cell per join in the profiling JSON
-	// (the benchmark post-processor folds them into wide Join1/Join2/...
-	// columns in the runtime CSV). Empty string when the value is N/A so
-	// downstream tooling can distinguish "0 probes" from "never reached
-	// this state."
+	// Read directly from JoinHashTable::GlobalTHCAdaptiveState. All values
+	// are atomic-loaded so this is safe to call from any thread. Empty
+	// strings stay empty so downstream tooling can distinguish "0 probes"
+	// from "this state was never reached."
 	const bool instantiated = hash_table && hash_table->HasTieredHashCache();
-	const auto freeze_reason = thc_freeze_reason.load(std::memory_order_relaxed);
-	const auto abandon_reason = thc_abandon_reason.load(std::memory_order_relaxed);
-	const bool any_abandoned = thc_any_abandoned.load(std::memory_order_relaxed);
-	const bool any_collection_disabled = thc_any_collection_disabled.load(std::memory_order_relaxed);
-	const bool froze =
-	    freeze_reason != static_cast<uint8_t>(JoinHashTable::THCFreezeReason::None) ||
-	    (any_collection_disabled && !any_abandoned);
-	const bool abandoned =
-	    any_abandoned || abandon_reason != static_cast<uint8_t>(JoinHashTable::THCAbandonReason::None);
+	const auto *gthc = hash_table ? hash_table->GetGlobalTHCState() : nullptr;
+
+	const uint8_t freeze_reason = gthc ? gthc->freeze_reason.load(std::memory_order_relaxed)
+	                                   : static_cast<uint8_t>(JoinHashTable::THCFreezeReason::None);
+	const uint8_t abandon_reason = gthc ? gthc->abandon_reason.load(std::memory_order_relaxed)
+	                                    : static_cast<uint8_t>(JoinHashTable::THCAbandonReason::None);
+	const bool abandoned = gthc && gthc->abandoned.load(std::memory_order_relaxed);
+	const bool froze = gthc && !abandoned && !gthc->collection_enabled.load(std::memory_order_relaxed);
+
 	string final_state;
 	if (!instantiated) {
 		final_state = "never_instantiated";
@@ -859,11 +837,12 @@ void HashJoinGlobalSinkState::EmitProbeTiming(ExecutionContext &context) const {
 	    "%llu", static_cast<unsigned long long>(thc_build_rows_snapshot.load(std::memory_order_relaxed)));
 	info["THC Instantiated"] = instantiated ? "1" : "0";
 	info["THC Final State"] = final_state;
-	info["THC Total Probes"] =
-	    StringUtil::Format("%llu", static_cast<unsigned long long>(thc_total_probe_rows.load(std::memory_order_relaxed)));
+	info["THC Total Probes"] = StringUtil::Format(
+	    "%llu", gthc ? static_cast<unsigned long long>(gthc->total_probe_rows.load(std::memory_order_relaxed))
+	                 : 0ULL);
 	if (froze) {
 		info["THC Probes At Freeze"] = StringUtil::Format(
-		    "%llu", static_cast<unsigned long long>(thc_probes_at_freeze_max.load(std::memory_order_relaxed)));
+		    "%llu", static_cast<unsigned long long>(gthc->probes_at_freeze.load(std::memory_order_relaxed)));
 		info["THC Freeze Reason"] = FormatFreezeReason(freeze_reason);
 	} else {
 		info["THC Probes At Freeze"] = "";
@@ -871,64 +850,21 @@ void HashJoinGlobalSinkState::EmitProbeTiming(ExecutionContext &context) const {
 	}
 	if (abandoned) {
 		info["THC Probes At Abandon"] = StringUtil::Format(
-		    "%llu", static_cast<unsigned long long>(thc_probes_at_abandon_max.load(std::memory_order_relaxed)));
+		    "%llu", static_cast<unsigned long long>(gthc->probes_at_abandon.load(std::memory_order_relaxed)));
 		info["THC Abandon Reason"] = FormatAbandonReason(abandon_reason);
 	} else {
 		info["THC Probes At Abandon"] = "";
 		info["THC Abandon Reason"] = "";
 	}
-	info["THC Total New Inserts"] =
-	    StringUtil::Format("%llu", static_cast<unsigned long long>(thc_total_new_entries.load(std::memory_order_relaxed)));
+	info["THC Total New Inserts"] = StringUtil::Format(
+	    "%llu", gthc ? static_cast<unsigned long long>(gthc->total_new_entries.load(std::memory_order_relaxed))
+	                 : 0ULL);
 	info["THC First-Cycle U1"] = StringUtil::Format(
-	    "%llu", static_cast<unsigned long long>(thc_first_collect_new_entries_sum.load(std::memory_order_relaxed)));
+	    "%llu",
+	    gthc ? static_cast<unsigned long long>(gthc->first_collect_new_entries.load(std::memory_order_relaxed))
+	         : 0ULL);
 
 	context.thread.profiler.AddExtraInfo(std::move(info));
-}
-
-void HashJoinGlobalSinkState::FlushProbeStateTHCTelemetry(const JoinHashTable::ProbeState &ps) {
-	// Sums (one term per thread).
-	thc_total_probe_rows.fetch_add(ps.total_probe_rows, std::memory_order_relaxed);
-	thc_total_new_entries.fetch_add(ps.total_new_entries, std::memory_order_relaxed);
-	thc_first_collect_new_entries_sum.fetch_add(ps.first_collect_new_entries, std::memory_order_relaxed);
-
-	// Max-across-threads (CAS loop). Each thread sees at most one freeze or
-	// one abandon event, so the loop almost always lands first try.
-	if (ps.probes_at_freeze > 0) {
-		uint64_t cur = thc_probes_at_freeze_max.load(std::memory_order_relaxed);
-		while (ps.probes_at_freeze > cur &&
-		       !thc_probes_at_freeze_max.compare_exchange_weak(cur, ps.probes_at_freeze,
-		                                                        std::memory_order_relaxed)) {
-		}
-	}
-	if (ps.probes_at_abandon > 0) {
-		uint64_t cur = thc_probes_at_abandon_max.load(std::memory_order_relaxed);
-		while (ps.probes_at_abandon > cur &&
-		       !thc_probes_at_abandon_max.compare_exchange_weak(cur, ps.probes_at_abandon,
-		                                                         std::memory_order_relaxed)) {
-		}
-	}
-
-	// First-non-None wins for reasons. CAS expects None and installs our value.
-	if (ps.freeze_reason != JoinHashTable::THCFreezeReason::None) {
-		uint8_t expected = static_cast<uint8_t>(JoinHashTable::THCFreezeReason::None);
-		thc_freeze_reason.compare_exchange_strong(expected, static_cast<uint8_t>(ps.freeze_reason),
-		                                          std::memory_order_relaxed);
-	}
-	if (ps.abandon_reason != JoinHashTable::THCAbandonReason::None) {
-		uint8_t expected = static_cast<uint8_t>(JoinHashTable::THCAbandonReason::None);
-		thc_abandon_reason.compare_exchange_strong(expected, static_cast<uint8_t>(ps.abandon_reason),
-		                                           std::memory_order_relaxed);
-	}
-
-	// Any-thread booleans, in case a thread disabled collection / abandoned
-	// without our transition sites recording a reason (currently always
-	// records a reason, but kept for forward-compat).
-	if (!ps.thc_collection_enabled) {
-		thc_any_collection_disabled.store(true, std::memory_order_relaxed);
-	}
-	if (ps.thc_abandoned) {
-		thc_any_abandoned.store(true, std::memory_order_relaxed);
-	}
 }
 
 class HashJoinRepartitionTask : public ExecutorTask {
@@ -1339,12 +1275,23 @@ public:
 		sink.thc_insert_time_ns.fetch_add(thc_insert_time_ns, std::memory_order_relaxed);
 		sink.probe_for_pointers_time_ns.fetch_add(probe_for_pointers_time_ns, std::memory_order_relaxed);
 		sink.match_time_ns.fetch_add(match_time_ns, std::memory_order_relaxed);
-		sink.FlushProbeStateTHCTelemetry(probe_state);
+		// THC lifecycle telemetry lives on JoinHashTable::GlobalTHCAdaptiveState
+		// and is read directly by EmitProbeTiming — no per-thread aggregation
+		// is needed at flush time.
 		timings_flushed = true;
 	}
 
 	void Finalize(const PhysicalOperator &op, ExecutionContext &context) override {
 		FlushLocalTimings();
+		// Emit one final telemetry snapshot AFTER our own CPU-time locals
+		// have been folded into the sink atomics. EmitProbeTiming is also
+		// called many times from inside ExecuteInternal during probe, but
+		// those earlier calls happen before this thread's locals are
+		// flushed, so they slightly under-count this thread's contribution
+		// to the THC timing atomics. The latest-finishing thread's
+		// Finalize-time emit therefore produces the most complete
+		// extra_info entry for this operator.
+		sink.EmitProbeTiming(context);
 		context.thread.profiler.Flush(op);
 	}
 };
@@ -1794,7 +1741,9 @@ void HashJoinLocalSourceState::FlushLocalTimings() {
 	sink.thc_insert_time_ns.fetch_add(thc_insert_time_ns, std::memory_order_relaxed);
 	sink.probe_for_pointers_time_ns.fetch_add(probe_for_pointers_time_ns, std::memory_order_relaxed);
 	sink.match_time_ns.fetch_add(match_time_ns, std::memory_order_relaxed);
-	sink.FlushProbeStateTHCTelemetry(probe_state);
+	// THC lifecycle telemetry lives on JoinHashTable::GlobalTHCAdaptiveState
+	// and is read directly by EmitProbeTiming — no per-thread aggregation
+	// is needed at flush time.
 	timings_flushed = true;
 }
 
