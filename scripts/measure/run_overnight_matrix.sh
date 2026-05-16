@@ -58,11 +58,11 @@ add_cfg() {
 
 # 1) Baseline — settings-common-engaged.sql defaults.  All in-binary
 #    optimizations active (probe-floor, hot-fraction, adaptive-budget).
+#    Pointer-mode default is sentinel-off, so this is equivalent to ptr_off.
 add_cfg "baseline" ""
 
 # 2) Pointer-mode threshold sweep.  Probe-side row floor + hot-fraction
 #    + adaptive-budget all stay on; we vary thc_pointer_mode_min_row_size.
-add_cfg "ptr_off" "SET thc_pointer_mode_min_row_size = 18446744073709551615;"
 add_cfg "ptr_64"  "SET thc_pointer_mode_min_row_size = 64;"
 add_cfg "ptr_96"  "SET thc_pointer_mode_min_row_size = 96;"
 add_cfg "ptr_128" "SET thc_pointer_mode_min_row_size = 128;"
@@ -71,7 +71,11 @@ add_cfg "ptr_128" "SET thc_pointer_mode_min_row_size = 128;"
 #    These configs preserve the rest of the new machinery.
 add_cfg "no_probe_floor" "SET thc_collect_phase_rows = 1;"   # 2x = 2 rows; gate vacuous
 add_cfg "no_hot_fraction" "SET thc_max_estimated_perc_hot = 1.0;"  # gate never fires
-add_cfg "no_decision_log" "SET thc_emit_decision_log = false;"  # no-op for c2/c3 numbers
+
+# 4) THC fully off — sanity-check ceiling.  c2 numbers must roughly match
+#    every other config's c2 (it doesn't use THC) within noise; c3 here is
+#    effectively "what c2 would look like for a misnamed THC-off case 3".
+add_cfg "thc_disabled" "SET disable_tiered_hash_cache = true;"
 
 # Per-config runner.
 echo "Matrix start: ${TS} SHA=${SHA} PASSES=${PASSES} SEEDS=${SEEDS} CASES=${CASES}"
