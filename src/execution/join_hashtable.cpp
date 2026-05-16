@@ -2140,21 +2140,100 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          (int)pointer_mode, (unsigned long)thc_collect_phase_rows);
 }
 
-void JoinHashTable::EnsureTieredHashCacheAllocated(ProbeState &) {
+void JoinHashTable::EnsureTieredHashCacheAllocated(ProbeState &state) {
+	// Target fraction of post-trigger probe rows that the THC should cover in
+	// terms of slot count.  10% is a reasonable starting point: under uniform-
+	// ish skew the expected THC hit rate is roughly capacity / distinct_keys,
+	// so covering 10% of probe rows implies ~10% hit rate — enough to net-
+	// positive when each hit saves a data_collection LLC miss (~200 ns).
+	// Not promoted to a config knob yet; promote if benchmarking shows the
+	// optimal value is workload-dependent.
+	static constexpr double THC_PROBE_COVERAGE_FRACTION = 0.10;
+
 	// Precondition: caller has verified `thc_deferred_allocation_eligible` and
 	// that `state.thc_pre_trigger_rows >= thc_collect_phase_rows`.  Concurrent
 	// callers are blocked by std::call_once until the winning thread finishes;
 	// after call_once returns, every thread sees `tiered_hash_cache != nullptr`
 	// because call_once provides the required memory ordering.
-	std::call_once(thc_alloc_once_flag, [this]() {
+	//
+	// Probe-rate-based capacity sizing: the winning thread uses its observed
+	// `thc_pre_trigger_rows` (accumulated before this allocation fired) to
+	// project how many post-trigger probe rows remain.  If that projection
+	// implies a much smaller probe than the planner expected, we shrink the
+	// cache accordingly.  This is the primary path for recovering from over-
+	// provisioning when RPT+ Bloom filters reduce the probe input at runtime
+	// (the planner sees the pre-filter row count; we observe the post-filter
+	// reality).
+	//
+	// Only the winning call_once thread computes this; the observed_R it holds
+	// is exactly thc_collect_phase_rows (the trigger threshold it just crossed),
+	// which is the most conservatively small value — other threads may have seen
+	// slightly more rows, so this is a safe lower bound for sizing.
+	const idx_t observed_R = state.thc_pre_trigger_rows;
+	const idx_t planner_R  = estimated_probe_side_rows;
+
+	// Post-trigger probe estimate: if the planner saw more rows than we have
+	// already, assume the remainder is still coming; otherwise (BF shrunk the
+	// probe dramatically) assume the same amount we already saw is still pending
+	// — a deliberately conservative over-estimate that avoids under-sizing.
+	const idx_t post_trigger_probe_estimate =
+	    (planner_R > observed_R) ? (planner_R - observed_R) : observed_R;
+
+	// Target: size the cache to cover THC_PROBE_COVERAGE_FRACTION of post-trigger
+	// probe rows.  Under uniform-ish access the expected hit rate is roughly
+	// capacity / distinct_build_keys; covering 10% of probe rows is a reasonable
+	// starting point.  This target is a slot count, not a byte budget.
+	const idx_t target_capacity =
+	    static_cast<idx_t>(static_cast<double>(post_trigger_probe_estimate) * THC_PROBE_COVERAGE_FRACTION);
+
+	// Derive an effective budget that, when fed through ComputeCapacity, yields
+	// a properly power-of-2-rounded result that does not exceed target_capacity.
+	// ComputeCapacity floors to the largest power-of-2 ≤ (budget / stride), so
+	// passing `target_capacity * entry_stride` as the budget gives us at most
+	// target_capacity slots (and possibly fewer due to rounding down).
+	const idx_t target_budget = target_capacity * thc_entry_stride;
+	const idx_t sized_capacity =
+	    TieredHashCache::ComputeCapacity(thc_data_collection_row_size, target_budget, thc_pointer_mode_cached);
+
+	// Clamp: never go above the build-time planned capacity (already incorporates
+	// the l3 budget + build-oversize-factor constraints).  Never go below the
+	// ComputeCapacity floor of 64 entries (enforced inside ComputeCapacity).
+	const idx_t actual_capacity = MinValue<idx_t>(thc_capacity, sized_capacity);
+
+	std::call_once(thc_alloc_once_flag, [this, actual_capacity, observed_R, planner_R]() {
+		// Log a resize event when probe-rate sizing shrinks below the planned cap.
+		// This is the primary signal for post-hoc analysis of whether the probe-
+		// side sizing is helping on BF-heavy workloads.
+		if (actual_capacity < thc_capacity) {
+			const idx_t budget_used = actual_capacity * thc_entry_stride;
+			DEBUG_LOG("[JoinHashTable::EnsureTieredHashCacheAllocated] THC probe-rate resize: "
+			          "original_cap=%lu -> sized_cap=%lu (planner_R=%lu, observed_R=%lu, "
+			          "budget_used=%.2f MiB)\n",
+			          (unsigned long)thc_capacity, (unsigned long)actual_capacity,
+			          (unsigned long)planner_R, (unsigned long)observed_R,
+			          (double)budget_used / (1024.0 * 1024.0));
+			// Emit a one-time parseable record so benchmark runs can correlate
+			// probe-rate-driven resizes with runtime performance without needing
+			// to instrument every GetRowPointers call.
+			// Format: [THC_RESIZE] ht_addr,planner_R,observed_R,original_cap,sized_cap,budget_used_bytes
+			std::fprintf(stderr, "[THC_RESIZE] %p,%lu,%lu,%lu,%lu,%lu\n",
+			             static_cast<const void *>(this),
+			             static_cast<unsigned long>(planner_R),
+			             static_cast<unsigned long>(observed_R),
+			             static_cast<unsigned long>(thc_capacity),
+			             static_cast<unsigned long>(actual_capacity),
+			             static_cast<unsigned long>(budget_used));
+			std::fflush(stderr);
+		}
+
 		DEBUG_LOG("[JoinHashTable::EnsureTieredHashCacheAllocated] Instantiating THC "
 		          "(cache_capacity=%lu, row_size=%lu, key_offset=%lu, row_copy_offset=%lu, "
 		          "entry_stride=%lu, pointer_mode=%d, total=%.1f MiB)\n",
-		          (unsigned long)thc_capacity, (unsigned long)thc_data_collection_row_size,
+		          (unsigned long)actual_capacity, (unsigned long)thc_data_collection_row_size,
 		          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)thc_row_copy_offset,
 		          (unsigned long)thc_entry_stride, (int)thc_pointer_mode_cached,
-		          (double)(thc_capacity * thc_entry_stride) / (1024.0 * 1024.0));
-		tiered_hash_cache = make_uniq<TieredHashCache>(thc_capacity, thc_data_collection_row_size,
+		          (double)(actual_capacity * thc_entry_stride) / (1024.0 * 1024.0));
+		tiered_hash_cache = make_uniq<TieredHashCache>(actual_capacity, thc_data_collection_row_size,
 		                                               tiered_hash_cache_key_offset, thc_row_copy_offset,
 		                                               thc_max_load_factor, thc_pointer_mode_cached);
 	});
