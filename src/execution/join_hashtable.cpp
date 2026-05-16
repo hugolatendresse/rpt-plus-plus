@@ -779,6 +779,30 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		}
 	}
 
+	// Deferred THC allocation: count probe rows in `thc_pre_trigger_rows` (a
+	// per-thread counter, separate from `total_probe_rows` so the adaptive
+	// algorithm's accounting isn't polluted with pre-allocation probes) and
+	// trigger the one-shot allocation when this thread alone has seen at least
+	// `thc_collect_phase_rows` rows.  Skipped when:
+	//   - the THC is already allocated (some peer thread has already triggered
+	//     it, or we are past the trigger),
+	//   - any build-time gate vetoed the THC (eligibility flag false),
+	//   - this thread has been abandoned (e.g. the cascade above just fired);
+	//     no point allocating a buffer it has just decided to bypass.
+	//
+	// The reasonableness of this trigger comes from the probe-side row floor
+	// upstream: that gate refuses eligibility when
+	// `estimated_probe_side_rows < 2 * thc_collect_phase_rows`, so by the time
+	// a single thread accumulates `thc_collect_phase_rows` rows we've already
+	// observed at least ~half of the planner's expected probe.  If runtime BF
+	// shrinks the probe below that, we never trigger and never pay the alloc.
+	if (thc_deferred_allocation_eligible && !tiered_hash_cache && !state.thc_abandoned) {
+		state.thc_pre_trigger_rows += count;
+		if (state.thc_pre_trigger_rows >= thc_collect_phase_rows) {
+			EnsureTieredHashCacheAllocated(state);
+		}
+	}
+
 	// If this thread has abandoned THC (high miss rate), or if first-cycle
 	// multiplicity estimation determined THC is not worthwhile, bypass all
 	// THC logic and use the vanilla DuckDB probe path.
@@ -2060,12 +2084,56 @@ void JoinHashTable::InitializeTieredHashCache() {
 	          (double)(thc_capacity * thc_entry_stride) / (1024.0 * 1024.0));
 	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Estimated probe-side rows=%lu\n",
 	          (unsigned long)estimated_probe_side_rows);
-	tiered_hash_cache = make_uniq<TieredHashCache>(thc_capacity, data_collection_row_size, tiered_hash_cache_key_offset,
-	                                               row_copy_offset, thc_max_load_factor, pointer_mode);
-	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] pointer_mode=%d row_size=%lu\n", (int)pointer_mode,
-	          (unsigned long)data_collection_row_size);
 
+	// Cache the layout parameters so EnsureTieredHashCacheAllocated() can use
+	// them without re-running the build-time logic.  pointer_offset is final
+	// after Finalize, and the row size / pointer-mode flag don't change once
+	// chosen.
+	thc_data_collection_row_size = data_collection_row_size;
+	thc_row_copy_offset = row_copy_offset;
+	thc_pointer_mode_cached = pointer_mode;
+
+	// Snapshot the thread-count NOW (Finalize time, before probe threads spin
+	// up) so the lazy allocation path can pass it to InsertBatch's single-
+	// threaded vs CAS branch.
 	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
+
+	// Mark the THC as eligible for deferred allocation.  The 48 MiB calloc
+	// buffer + BASELINE bookkeeping setup are NOT done here; they happen in
+	// EnsureTieredHashCacheAllocated() once the first probe chunk crosses
+	// thc_collect_phase_rows rows.  This avoids committing the cache before
+	// runtime RPT+ Bloom filters have had a chance to shrink the probe input.
+	thc_deferred_allocation_eligible = true;
+
+	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] THC deferred-eligible "
+	          "(cache_capacity=%lu, row_size=%lu, key_offset=%lu, row_copy_offset=%lu, "
+	          "entry_stride=%lu, budget=%.1f MiB, pointer_mode=%d); "
+	          "allocation deferred to first probe at %lu rows\n",
+	          (unsigned long)thc_capacity, (unsigned long)data_collection_row_size,
+	          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)row_copy_offset,
+	          (unsigned long)thc_entry_stride,
+	          (double)(thc_capacity * thc_entry_stride) / (1024.0 * 1024.0),
+	          (int)pointer_mode, (unsigned long)thc_collect_phase_rows);
+}
+
+void JoinHashTable::EnsureTieredHashCacheAllocated(ProbeState &) {
+	// Precondition: caller has verified `thc_deferred_allocation_eligible` and
+	// that `state.thc_pre_trigger_rows >= thc_collect_phase_rows`.  Concurrent
+	// callers are blocked by std::call_once until the winning thread finishes;
+	// after call_once returns, every thread sees `tiered_hash_cache != nullptr`
+	// because call_once provides the required memory ordering.
+	std::call_once(thc_alloc_once_flag, [this]() {
+		DEBUG_LOG("[JoinHashTable::EnsureTieredHashCacheAllocated] Instantiating THC "
+		          "(cache_capacity=%lu, row_size=%lu, key_offset=%lu, row_copy_offset=%lu, "
+		          "entry_stride=%lu, pointer_mode=%d, total=%.1f MiB)\n",
+		          (unsigned long)thc_capacity, (unsigned long)thc_data_collection_row_size,
+		          (unsigned long)tiered_hash_cache_key_offset, (unsigned long)thc_row_copy_offset,
+		          (unsigned long)thc_entry_stride, (int)thc_pointer_mode_cached,
+		          (double)(thc_capacity * thc_entry_stride) / (1024.0 * 1024.0));
+		tiered_hash_cache = make_uniq<TieredHashCache>(thc_capacity, thc_data_collection_row_size,
+		                                               tiered_hash_cache_key_offset, thc_row_copy_offset,
+		                                               thc_max_load_factor, thc_pointer_mode_cached);
+	});
 }
 
 void JoinHashTable::CountOneUniqueBuildKey() {

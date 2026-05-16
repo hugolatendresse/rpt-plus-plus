@@ -20,6 +20,8 @@
 #include "duckdb/execution/tiered_hash_cache.hpp"
 #include "duckdb/execution/ht_entry.hpp"
 
+#include <mutex>
+
 namespace duckdb {
 
 class BufferManager;
@@ -328,6 +330,13 @@ public:
 		//! Used as the denominator for the collect phase budget fraction check.
 		idx_t total_probe_rows = 0;
 
+		//! Rows seen by this thread before the deferred THC allocation has fired.
+		//! Used only for the lazy-allocation trigger check at the top of
+		//! GetRowPointers().  Separate from total_probe_rows so the adaptive
+		//! algorithm's accounting is not affected by pre-trigger probes.  Once
+		//! tiered_hash_cache becomes non-null this field is no longer consulted.
+		idx_t thc_pre_trigger_rows = 0;
+
 		//! Lifetime count of genuinely new entries this thread inserted into the THC
 		//! (summed across all collect phases).
 		idx_t total_new_entries = 0;
@@ -585,6 +594,12 @@ private:
 	                        Vector &pointers_result_v, SelectionVector &match_sel,
 	                        idx_t &match_count, idx_t &cache_miss_count);
 
+	//! Lazily allocate the TieredHashCache once the deferred trigger threshold is reached.
+	//! Safe for concurrent callers: uses std::call_once so allocation happens exactly once
+	//! across all probe threads.  Precondition: caller has already verified
+	//! `thc_deferred_allocation_eligible` and that the trigger threshold has been crossed.
+	void EnsureTieredHashCacheAllocated(ProbeState &state);
+
 private:
 	//! Insert the given set of locations into the HT with the given set of hashes_v
 	void InsertHashes(Vector &hashes_v, idx_t count, TupleDataChunkState &chunk_state, InsertState &insert_statebool,
@@ -609,12 +624,40 @@ private:
 	unsafe_unique_array<data_t> dead_end;
 
 	//! Shared THC for accelerating repeated probe lookups.
-	//! Created during Finalize when the hash table is large enough.
+	//! Allocated lazily on the first probe chunk that crosses
+	//! `thc_collect_phase_rows` rows, rather than unconditionally at Finalize
+	//! time.  Null until `EnsureTieredHashCacheAllocated` fires;
+	//! `thc_alloc_once_flag` guarantees the allocation happens exactly once
+	//! across all probe threads even under contention.
 	unique_ptr<TieredHashCache> tiered_hash_cache;
 
 	//! The byte offset of the join key in each cached row
 	//! Before that key, there is the validity byte coming from data_collection
 	idx_t tiered_hash_cache_key_offset = 0;
+
+	// ---- Deferred THC allocation state ----
+	//! Set to true by InitializeTieredHashCache() when every build-time gate
+	//! passes (disable flag off, build-source-base-table, probe-floor,
+	//! hot-fraction, µ_SR upper bound, activation threshold, key types,
+	//! coverage).  The actual TieredHashCache object is not yet allocated;
+	//! EnsureTieredHashCacheAllocated() will allocate it once the first probe
+	//! thread sees `thc_collect_phase_rows` rows.  Remains false when any
+	//! gate vetoes the THC, preserving the existing skip-path semantics.
+	bool thc_deferred_allocation_eligible = false;
+	//! Guards the one-shot lazy allocation of tiered_hash_cache.  std::call_once
+	//! ensures exactly one thread performs the allocation even when multiple
+	//! probe threads cross the trigger threshold concurrently.
+	std::once_flag thc_alloc_once_flag;
+	//! `data_collection_row_size` snapshot from InitializeTieredHashCache,
+	//! cached for the lazy-allocation path so we don't redo the layout math.
+	idx_t thc_data_collection_row_size = 0;
+	//! `row_copy_offset` snapshot from InitializeTieredHashCache, cached for
+	//! the lazy-allocation path.
+	idx_t thc_row_copy_offset = 0;
+	//! Pointer-mode snapshot from InitializeTieredHashCache.  Determined at
+	//! Finalize time from thc_pointer_mode_min_row_size; threading a separate
+	//! field through the lazy path avoids recomputation.
+	bool thc_pointer_mode_cached = false;
 
 	//! True iff InitializeTieredHashCache() bailed out at the probe-side
 	//! row-count floor (estimated_probe_side_rows < 2 × thc_collect_phase_rows).
