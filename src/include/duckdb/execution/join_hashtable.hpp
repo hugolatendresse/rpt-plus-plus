@@ -220,6 +220,13 @@ public:
 	//!                        unique_keys)) exceeded thc_max_estimated_perc_hot,
 	//!                        meaning the cache would have to hold nearly all
 	//!                        build keys and offers no skew benefit.
+	//! NoTHCDeferredNeverTriggered: the JoinHashTable was build-time eligible for
+	//!                        a deferred THC (thc_deferred_allocation_eligible=true)
+	//!                        but this thread's pre-trigger row count never reached
+	//!                        thc_collect_phase_rows, so the lazy allocation never
+	//!                        fired.  Distinct from NoTHCAtJoin because the THC
+	//!                        was vetoed at runtime (too few probe rows), not at
+	//!                        build time.
 	//! Kept:                  cycle-1 guards passed and no later check abandoned;
 	//!                        thread is still using the THC at end-of-join.
 	//! Frozen:                cost-based rule chose FREEZE (delta<0, shrinkage<gamma).
@@ -234,6 +241,7 @@ public:
 		NoTHCAtJoin,
 		NoTHCBelowProbeFloor,
 		NoTHCHighHotnessBuildtime,
+		NoTHCDeferredNeverTriggered,
 		Kept,
 		Frozen,
 		AbandonedLowMu,

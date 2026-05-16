@@ -50,6 +50,8 @@ const char *ThcDecisionReasonLabel(JoinHashTable::ThcDecisionReason r) {
 		return "no_thc_below_probe_floor";
 	case JoinHashTable::ThcDecisionReason::NoTHCHighHotnessBuildtime:
 		return "no_thc_high_hotness_buildtime";
+	case JoinHashTable::ThcDecisionReason::NoTHCDeferredNeverTriggered:
+		return "no_thc_deferred_never_triggered";
 	case JoinHashTable::ThcDecisionReason::Kept:
 		return "kept";
 	case JoinHashTable::ThcDecisionReason::Frozen:
@@ -77,12 +79,45 @@ void JoinHashTable::EmitDecisionLogRow(ProbeState &state) const {
 	}
 	state.decision_log_emitted = true;
 
-	// Fill in the "Kept" label for threads that did real work without tripping
-	// any abandonment site.  Done at emission rather than per-probe so we don't
-	// add a branch to the hot path just to maintain the label.
-	if (state.thc_decision_reason == ThcDecisionReason::NeverActivated && state.total_probe_rows > 0 &&
-	    tiered_hash_cache) {
-		state.thc_decision_reason = ThcDecisionReason::Kept;
+	// Resolve the final label for threads whose reason is still NeverActivated.
+	// Emit-time is the right place to do this: we have full information about
+	// whether the THC was ever allocated and which build-time gate (if any)
+	// blocked it.  Assigning these labels here rather than on the hot path
+	// keeps GetRowPointers branch-free for the attribution logic.
+	if (state.thc_decision_reason == ThcDecisionReason::NeverActivated) {
+		if (tiered_hash_cache && state.total_probe_rows > 0) {
+			// THC existed and this thread did real probe work without tripping
+			// any abandonment/drop site — it is actively using the THC.
+			state.thc_decision_reason = ThcDecisionReason::Kept;
+		} else if (thc_deferred_allocation_eligible && !tiered_hash_cache && state.thc_pre_trigger_rows > 0) {
+			// Build-time eligible (all build-time gates passed) but the lazy
+			// allocation never fired: this thread's pre-trigger row count
+			// crossed some rows but never reached thc_collect_phase_rows.
+			// Distinct from NoTHCAtJoin because the THC was not vetoed at build
+			// time — the probe side was just too small at runtime (e.g. after
+			// BF filtering shrank it below the trigger threshold).
+			// `thc_pre_trigger_rows` is the right sentinel here because it is
+			// incremented on the bare-HT early-return path (before total_probe_rows
+			// can be updated, which only happens in the full THC code path).
+			state.thc_decision_reason = ThcDecisionReason::NoTHCDeferredNeverTriggered;
+		} else if (state.total_probe_rows == 0 && state.thc_pre_trigger_rows == 0) {
+			// This thread registered a ProbeState but did no actual probing
+			// (e.g. a spare thread in an over-subscribed parallel plan, or a
+			// spill-round thread that found nothing to process).  Leave the
+			// reason as NeverActivated — no outcome to attribute.
+			// (no assignment — intentionally left as NeverActivated)
+		} else if (thc_skipped_below_probe_floor) {
+			// Build-time gate: estimated probe rows < 2 × thc_collect_phase_rows.
+			state.thc_decision_reason = ThcDecisionReason::NoTHCBelowProbeFloor;
+		} else if (thc_skipped_high_hotness_buildtime) {
+			// Build-time gate: estimated hot-key fraction exceeded threshold.
+			state.thc_decision_reason = ThcDecisionReason::NoTHCHighHotnessBuildtime;
+		} else {
+			// No THC on this JoinHashTable at all: some build-time gate (other
+			// than probe-floor or hotness) vetoed it at Finalize time, or the
+			// disable flag was set.
+			state.thc_decision_reason = ThcDecisionReason::NoTHCAtJoin;
+		}
 	}
 
 	// Hash thread id into a 64-bit hex token: std::thread::id has no portable
@@ -808,21 +843,10 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// THC logic and use the vanilla DuckDB probe path.
 
 	if (!tiered_hash_cache || state.thc_abandoned) {
-		// Decision-log attribution: distinguish "this JoinHashTable never built a
-		// THC at all" (NoTHCAtJoin — single setting applies to the whole join)
-		// from "this thread is in the post-abandon fast path" (reason already
-		// set by the abandonment site that fired).  Only label NoTHCAtJoin if
-		// no other reason has been assigned yet — otherwise we'd overwrite a
-		// real abandonment reason on every subsequent probe call.
-		if (!tiered_hash_cache && state.thc_decision_reason == ThcDecisionReason::NeverActivated) {
-			if (thc_skipped_below_probe_floor) {
-				state.thc_decision_reason = ThcDecisionReason::NoTHCBelowProbeFloor;
-			} else if (thc_skipped_high_hotness_buildtime) {
-				state.thc_decision_reason = ThcDecisionReason::NoTHCHighHotnessBuildtime;
-			} else {
-				state.thc_decision_reason = ThcDecisionReason::NoTHCAtJoin;
-			}
-		}
+		// NoTHC* / deferred-never-triggered attribution is resolved at teardown
+		// inside EmitDecisionLogRow, where we have full information about whether
+		// the THC was ever allocated.  No per-chunk assignment here keeps the hot
+		// path branch-free for log attribution.
 		if (UseSalt()) {
 			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
 			                             pointers_result_v, match_sel, has_sel);
