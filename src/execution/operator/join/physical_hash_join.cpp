@@ -1071,7 +1071,8 @@ public:
 	      // to our local counters when timers are enabled; otherwise they stay
 	      // at their default nullptr and the inner ScopedHashJoinTimer scopes
 	      // become no-ops without any extra call-site check.
-	      enable_timers(ClientConfig::GetConfig(context).enable_hash_join_timers) {
+	      enable_timers(ClientConfig::GetConfig(context).enable_hash_join_timers),
+	      emit_decision_log(ClientConfig::GetConfig(context).thc_emit_decision_log) {
 		if (enable_timers) {
 			probe_state.probe_for_pointers_time_ns = &probe_for_pointers_time_ns;
 			probe_state.match_time_ns = &match_time_ns;
@@ -1114,6 +1115,9 @@ public:
 	//! (The probe_state-pointer-based timers are gated separately by leaving
 	//! those pointers nullptr when this flag is false.)
 	const bool enable_timers;
+	//! Mirror of ClientConfig.thc_emit_decision_log.  Gates the per-thread
+	//! [THC_DECISION] stderr emission in FlushLocalTimings.
+	const bool emit_decision_log;
 
 public:
 	void FlushLocalTimings() {
@@ -1127,6 +1131,9 @@ public:
 		sink.thc_insert_time_ns.fetch_add(thc_insert_time_ns, std::memory_order_relaxed);
 		sink.probe_for_pointers_time_ns.fetch_add(probe_for_pointers_time_ns, std::memory_order_relaxed);
 		sink.match_time_ns.fetch_add(match_time_ns, std::memory_order_relaxed);
+		if (emit_decision_log && sink.hash_table) {
+			sink.hash_table->EmitDecisionLogRow(probe_state);
+		}
 		timings_flushed = true;
 	}
 
@@ -1353,6 +1360,9 @@ public:
 	//! ScopedHashJoinTimer scope around ExternalProbe(). The probe_state's
 	//! `*_time_ns` pointers are gated by leaving them nullptr when false.
 	const bool enable_timers;
+	//! Mirror of ClientConfig.thc_emit_decision_log.  Gates the per-thread
+	//! [THC_DECISION] stderr emission in FlushLocalTimings.
+	bool emit_decision_log = false;
 
 private:
 	void FlushLocalTimings();
@@ -1543,6 +1553,7 @@ HashJoinLocalSourceState::HashJoinLocalSourceState(const PhysicalHashJoin &op, H
       probe_state(ClientConfig::GetConfig(sink_p.context).thc_collect_phase_rows),
       // Snapshot the runtime flag. Same rationale as HashJoinLocalSinkState.
       enable_timers(ClientConfig::GetConfig(sink_p.context).enable_hash_join_timers), sink(sink_p) {
+	emit_decision_log = ClientConfig::GetConfig(sink_p.context).thc_emit_decision_log;
 	auto &chunk_state = probe_local_scan.current_chunk_state;
 	chunk_state.properties = ColumnDataScanProperties::ALLOW_ZERO_COPY;
 
@@ -1581,6 +1592,9 @@ void HashJoinLocalSourceState::FlushLocalTimings() {
 	sink.thc_insert_time_ns.fetch_add(thc_insert_time_ns, std::memory_order_relaxed);
 	sink.probe_for_pointers_time_ns.fetch_add(probe_for_pointers_time_ns, std::memory_order_relaxed);
 	sink.match_time_ns.fetch_add(match_time_ns, std::memory_order_relaxed);
+	if (emit_decision_log && sink.hash_table) {
+		sink.hash_table->EmitDecisionLogRow(probe_state);
+	}
 	timings_flushed = true;
 }
 

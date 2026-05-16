@@ -756,6 +756,29 @@ Value ThcL3BudgetSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// THC Pointer Mode Min Row Size
+//===----------------------------------------------------------------------===//
+void ThcPointerModeMinRowSizeSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	const auto v = input.GetValue<int64_t>();
+	config.thc_pointer_mode_min_row_size = v < 0 ? static_cast<idx_t>(-1) : static_cast<idx_t>(v);
+}
+
+void ThcPointerModeMinRowSizeSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_pointer_mode_min_row_size = ClientConfig().thc_pointer_mode_min_row_size;
+}
+
+Value ThcPointerModeMinRowSizeSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	// Surface the "off" sentinel as -1 for readability in user-facing tools.
+	const auto v = config.thc_pointer_mode_min_row_size;
+	if (v == static_cast<idx_t>(-1)) {
+		return Value::BIGINT(-1);
+	}
+	return Value::BIGINT(static_cast<int64_t>(v));
+}
+
+//===----------------------------------------------------------------------===//
 // THC Collect Phase Rows
 //===----------------------------------------------------------------------===//
 void ThcCollectPhaseRowsSetting::SetLocal(ClientContext &context, const Value &input) {
@@ -890,6 +913,23 @@ void ThcLogMuSSetting::ResetLocal(ClientContext &context) {
 Value ThcLogMuSSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
 	return Value::BOOLEAN(config.thc_log_mu_s);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Emit Decision Log
+//===----------------------------------------------------------------------===//
+void ThcEmitDecisionLogSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_emit_decision_log = input.GetValue<bool>();
+}
+
+void ThcEmitDecisionLogSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_emit_decision_log = ClientConfig().thc_emit_decision_log;
+}
+
+Value ThcEmitDecisionLogSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.thc_emit_decision_log);
 }
 
 //===----------------------------------------------------------------------===//

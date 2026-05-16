@@ -201,6 +201,47 @@ public:
 		const_data_ptr_t row_ptr;
 	};
 
+	//! Why a thread ended up in its final THC state at the end of a join.
+	//! Used by the decision-log instrumentation to attribute per-thread outcomes.
+	//! NeverActivated:        the thread never reached a decision point (e.g. join
+	//!                        too small, or this thread happened not to probe).
+	//! NoTHCAtJoin:           the JoinHashTable never built a THC (e.g. build side
+	//!                        not a base table, or below activation threshold).
+	//! NoTHCBelowProbeFloor:  InitializeTieredHashCache bailed because the
+	//!                        planner's estimated_probe_side_rows was below
+	//!                        2 × thc_collect_phase_rows.  Distinct from
+	//!                        NoTHCAtJoin so the log can tell the two apart.
+	//! NoTHCHighHotnessBuildtime: InitializeTieredHashCache bailed at the
+	//!                        build-time hot-fraction estimator: the estimated
+	//!                        fraction of build keys that would be "hot"
+	//!                        (perc_hot_est = min(1, collect_phase_rows /
+	//!                        unique_keys)) exceeded thc_max_estimated_perc_hot,
+	//!                        meaning the cache would have to hold nearly all
+	//!                        build keys and offers no skew benefit.
+	//! Kept:                  cycle-1 guards passed and no later check abandoned;
+	//!                        thread is still using the THC at end-of-join.
+	//! Frozen:                cost-based rule chose FREEZE (delta<0, shrinkage<gamma).
+	//! AbandonedLowMu:        cycle-1 estimated mu_{S->R} below threshold.
+	//! AbandonedHighHotness:  cycle-1 estimated hot-fraction above threshold.
+	//! AbandonedSmallCapacity: THC too small to cover the estimated hot keys.
+	//! AbandonedHighMiss:     consecutive high-miss checkpoints exceeded budget.
+	//! AbandonedCascade:      a peer thread already abandoned; this thread short-circuited.
+	//! DroppedByCost:         cost-based rule chose DROP (delta_t >= 0).
+	enum class ThcDecisionReason : uint8_t {
+		NeverActivated = 0,
+		NoTHCAtJoin,
+		NoTHCBelowProbeFloor,
+		NoTHCHighHotnessBuildtime,
+		Kept,
+		Frozen,
+		AbandonedLowMu,
+		AbandonedHighHotness,
+		AbandonedSmallCapacity,
+		AbandonedHighMiss,
+		AbandonedCascade,
+		DroppedByCost,
+	};
+
 	//! There is one instance of this per thread at runtime
 	struct ProbeState : SharedState {
 		explicit ProbeState(idx_t collected_entries_capacity = 0);
@@ -342,6 +383,31 @@ public:
 		idx_t eval_cycle_count = 0;
 		//! True once the cost-based rule decides to freeze the THC (useful but no more growth).
 		bool thc_frozen = false;
+
+		// ---- Decision-log instrumentation (cheap; only consumed when
+		// `thc_emit_decision_log` is on, but always populated so emission
+		// stays branch-free at the decision sites themselves).
+		//! Final per-thread label for this join.  Updated at each decision
+		//! point; whatever value is set when the thread tears down its
+		//! ProbeState is what gets emitted.
+		ThcDecisionReason thc_decision_reason = ThcDecisionReason::NeverActivated;
+		//! mu_{S->R} estimate captured at the cycle-1 boundary (regardless of
+		//! whether the threshold guard fired).  Lets us correlate kept vs.
+		//! abandoned decisions against the same input distribution.
+		double first_cycle_mu_sr = 0.0;
+		//! perc_hot estimate captured at the cycle-1 boundary.
+		double first_cycle_perc_hot = 0.0;
+		//! Miss-rate observed during the first READ_ONLY phase (input to all
+		//! three cycle-1 guards plus the cost rule).
+		double first_cycle_miss_rate = 0.0;
+		//! U1 (unique keys inserted in the first COLLECT flush).  Already
+		//! recorded as first_collect_new_entries but mirrored here so the
+		//! decision-log record is self-contained.
+		idx_t first_cycle_u1 = 0;
+		//! Latched so EmitDecisionLogRow is a no-op if called twice (the
+		//! HashJoinOperatorState destructor calls FlushLocalTimings, which is
+		//! also called via the operator's explicit Finalize override).
+		bool decision_log_emitted = false;
 	};
 
 	struct InsertState : SharedState {
@@ -390,6 +456,14 @@ public:
 
 	//! Increment unique key counter during build (Build-phase approach of mu_s estimation)
 	void CountOneUniqueBuildKey();
+
+	//! Emit one [THC_DECISION] tagged CSV row to stderr summarising this thread's
+	//! final THC decision plus the inputs that drove it.  Idempotent if state has
+	//! `decision_log_emitted` set (avoids double-emission across destruction +
+	//! explicit FlushLocalTimings).  Threads that finished work but never tripped
+	//! any abandon/freeze are labeled Kept here, based on the heuristic
+	//! "reason == NeverActivated AND total_probe_rows > 0 AND THC exists".
+	void EmitDecisionLogRow(ProbeState &state) const;
 
 	idx_t Count() const {
 		return data_collection->Count();
@@ -542,6 +616,20 @@ private:
 	//! Before that key, there is the validity byte coming from data_collection
 	idx_t tiered_hash_cache_key_offset = 0;
 
+	//! True iff InitializeTieredHashCache() bailed out at the probe-side
+	//! row-count floor (estimated_probe_side_rows < 2 × thc_collect_phase_rows).
+	//! Read by GetRowPointers's NoTHCAtJoin attribution to distinguish this
+	//! gate from the other reasons a THC may not exist on the join.
+	bool thc_skipped_below_probe_floor = false;
+
+	//! True iff InitializeTieredHashCache() bailed out at the build-time
+	//! hot-fraction estimator (perc_hot_est > thc_max_estimated_perc_hot).
+	//! perc_hot_est = min(1.0, thc_collect_phase_rows / build_unique_keys_cnt)
+	//! approximates the fraction of build keys that would land in the THC after
+	//! one collect cycle.  When it exceeds the threshold the build has too few
+	//! unique keys relative to collect capacity to exhibit exploitable skew.
+	bool thc_skipped_high_hotness_buildtime = false;
+
 	// ---- Per-instance THC parameters (loaded from ClientConfig at construction) ----
 	//! The capacity of the THC (in count of entries) computed by ComputeCapacity.
 	idx_t thc_capacity;
@@ -578,6 +666,18 @@ private:
 	idx_t estimated_probe_side_rows;
 	//! True when only one thread is active, enabling non-atomic InsertUnsafe.
 	bool thc_single_threaded = false;
+
+	//! Cross-thread abandon-cascade signal.  When any probing thread's cycle-1
+	//! or high-miss abandonment heuristic fires, that thread sets this flag.
+	//! Other threads check it once per chunk at the top of GetRowPointers and
+	//! short-circuit to the bare-HT path if it is set.  Eliminates the
+	//! O(threads) × warmup overhead seen on multi-threaded joins where every
+	//! thread independently rediscovers that the THC is not helping.
+	//!
+	//! Relaxed memory order is sufficient: the flag is monotonic (false → true,
+	//! never the reverse within a single join lifetime) and missing a recent
+	//! flip just delays cascade by one chunk per straggler thread.
+	std::atomic<bool> thc_globally_abandoned {false};
 
 	// ---- mu_s estimation ----
 	//! Which mu_s estimation method(s) to run: "none", "build_count", "probe_sample", "ht_sample", "all".

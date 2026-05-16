@@ -1,0 +1,50 @@
+# name: test/sql/optimizer/thc_probe_floor.test
+# description: THC probe-side row floor skips THC instantiation on small joins; result correctness preserved
+# group: [optimizer]
+
+statement ok
+PRAGMA enable_verification
+
+# Build tables that exercise the probe-side floor.  perfect-hash-join must be
+# disabled or DuckDB will choose a path that bypasses InitializeTieredHashCache
+# entirely for small integer-range joins.
+statement ok
+SET disable_perfect_hashing = true
+
+# fact at 10k rows is well below 2 × thc_collect_phase_rows (set below to 150000,
+# so the gate fires when probe rows < 300000).
+statement ok
+CREATE TABLE dim AS SELECT range AS k, range * 2 AS v FROM range(200000)
+
+statement ok
+CREATE TABLE fact AS SELECT range % 200000 AS k FROM range(10000)
+
+# Force the THC subsystem to be enabled and the build-side threshold low enough
+# that only the probe-side floor governs instantiation.
+statement ok
+SET disable_tiered_hash_cache = false
+
+statement ok
+SET thc_activation_threshold = 1000
+
+statement ok
+SET thc_collect_phase_rows = 150000
+
+# Correctness check: the join result must match a plain count.
+query I
+SELECT count(*) FROM fact JOIN dim USING (k);
+----
+10000
+
+# Now move the floor below the probe cardinality (10000) by lowering
+# thc_collect_phase_rows so that 2 × thc_collect_phase_rows ≤ 10000.  The gate
+# no longer fires; the THC's other gates take over.  Result must be identical.
+# Using 1000 here keeps the test independent of unsigned-underflow tricks if
+# the gate ever grows a `thc_collect_phase_rows > 0` guard.
+statement ok
+SET thc_collect_phase_rows = 1000
+
+query I
+SELECT count(*) FROM fact JOIN dim USING (k);
+----
+10000

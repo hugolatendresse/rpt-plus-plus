@@ -712,6 +712,17 @@ struct ThcL3BudgetSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct ThcPointerModeMinRowSizeSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "thc_pointer_mode_min_row_size";
+	static constexpr const char *Description =
+	    "When data_collection row_size >= this, THC switches to pointer mode (default: off)";
+	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct ThcCollectPhaseRowsSetting {
 	using RETURN_TYPE = int64_t;
 	static constexpr const char *Name = "thc_collect_phase_rows";
@@ -790,6 +801,17 @@ struct ThcLogMuSSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "thc_log_mu_s";
 	static constexpr const char *Description = "Log mu_s estimates to stderr";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcEmitDecisionLogSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "thc_emit_decision_log";
+	static constexpr const char *Description =
+	    "Emit per-thread THC decision rows (tag [THC_DECISION]) to stderr at end of each join";
 	static constexpr const char *InputType = "BOOLEAN";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);

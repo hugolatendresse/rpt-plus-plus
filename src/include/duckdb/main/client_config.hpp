@@ -156,6 +156,14 @@ struct ClientConfig {
 	//! to 0.6 (was 0.875) so the effective number of useful entries is
 	//! roughly preserved (32 MiB * 0.875 ≈ 48 MiB * 0.6).  Worth retuning.
 	idx_t thc_budget_bytes = 48ULL * 1024 * 1024;
+	//! When the per-entry data_collection row size is at or above this threshold,
+	//! the THC switches to pointer mode: each entry stores [tag | data_ptr_t]
+	//! instead of [tag | full row copy].  Stride drops to 16 bytes regardless of
+	//! row width, so the THC covers proportionally more keys per budget byte.
+	//! Trade-off is one extra cache-line miss per hit (must deref into
+	//! data_collection for key compare and gather).  Default: SIZE_MAX (off);
+	//! pointer-mode is opt-in via this setting until measurement proves it out.
+	idx_t thc_pointer_mode_min_row_size = static_cast<idx_t>(-1);
 	//! Number of probe-side rows processed per THC collect phase.
 	//! Also doubles as the cycle 0 / c_main measurement window since BASELINE
 	//! was folded into cycle 0.  Smaller values mean faster warm-up (and
@@ -168,10 +176,12 @@ struct ClientConfig {
 	//! The first-cycle abandonment heuristics (low multiplicity, high hotness,
 	//! THC too small for build) fire at the end of this phase, so the value
 	//! must be small enough that they can run on a reasonable timescale.
-	//! Default: 50k.  Previously 999,999,999 — which meant the heuristics
-	//! literally never fired in default config, leaving every thread stuck on
-	//! the THC even when its own estimates said the THC wouldn't help.
-	idx_t thc_first_read_only_phase_rows = 50000;
+	//! Default: 10k.  Lowered from 50k after a JOB classification sweep showed
+	//! 7 of 10 sampled queries finished without a single thread reaching the
+	//! first checkpoint — i.e. the abandon machinery was dead code on the
+	//! majority of joins.  At 10k more joins reach evaluation and can be
+	//! correctly engaged or abandoned.
+	idx_t thc_first_read_only_phase_rows = 10000;
 	//! Maximum fraction of probe rows that can be spent in THC collect phases.
 	//! Example: 0.02 means collect overhead is capped at 2% of probe rows.
 	double thc_collect_budget_fraction = 0.02;
@@ -199,6 +209,15 @@ struct ClientConfig {
 	                   // could be done only if we are to use a THC
 	//! When true, log mu_s estimates to stderr (works in both debug and release builds).
 	bool thc_log_mu_s = false;
+	//! When true, every JoinHashTable::ProbeState that finishes a probe emits a
+	//! single tagged CSV row to stderr capturing its final THC decision plus the
+	//! inputs that drove it (cycle-1 mu_{S->R}, perc_hot, miss rate, c_main,
+	//! c_eval, total probe rows, etc.).  Tag prefix is "[THC_DECISION]" so the
+	//! harness can grep for it.  Works in both debug and release builds.
+	//! Default: false.  Intended for measurement runs only — the fprintf cost is
+	//! per-join-per-thread, not per-row, so it's negligible relative to query
+	//! runtime, but it's still measurable on tiny queries.
+	bool thc_emit_decision_log = false;
 	//! Minimum estimated mu_{S->R} to keep THC active after the first cycle.
 	double thc_min_estimated_mu_s_to_r = 4.0;
 	//! Maximum estimated fraction of hot build-side rows before abandoning THC.

@@ -37,6 +37,85 @@ JoinHashTable::ProbeState::ProbeState(idx_t collected_entries_capacity)
 	}
 }
 
+namespace {
+// Stable short labels for the decision-log CSV column.  Keep in sync with
+// ThcDecisionReason in join_hashtable.hpp.
+const char *ThcDecisionReasonLabel(JoinHashTable::ThcDecisionReason r) {
+	switch (r) {
+	case JoinHashTable::ThcDecisionReason::NeverActivated:
+		return "never_activated";
+	case JoinHashTable::ThcDecisionReason::NoTHCAtJoin:
+		return "no_thc_at_join";
+	case JoinHashTable::ThcDecisionReason::NoTHCBelowProbeFloor:
+		return "no_thc_below_probe_floor";
+	case JoinHashTable::ThcDecisionReason::NoTHCHighHotnessBuildtime:
+		return "no_thc_high_hotness_buildtime";
+	case JoinHashTable::ThcDecisionReason::Kept:
+		return "kept";
+	case JoinHashTable::ThcDecisionReason::Frozen:
+		return "frozen";
+	case JoinHashTable::ThcDecisionReason::AbandonedLowMu:
+		return "abandoned_low_mu";
+	case JoinHashTable::ThcDecisionReason::AbandonedHighHotness:
+		return "abandoned_high_hotness";
+	case JoinHashTable::ThcDecisionReason::AbandonedSmallCapacity:
+		return "abandoned_small_capacity";
+	case JoinHashTable::ThcDecisionReason::AbandonedHighMiss:
+		return "abandoned_high_miss";
+	case JoinHashTable::ThcDecisionReason::AbandonedCascade:
+		return "abandoned_cascade";
+	case JoinHashTable::ThcDecisionReason::DroppedByCost:
+		return "dropped_by_cost";
+	}
+	return "unknown";
+}
+} // namespace
+
+void JoinHashTable::EmitDecisionLogRow(ProbeState &state) const {
+	if (state.decision_log_emitted) {
+		return;
+	}
+	state.decision_log_emitted = true;
+
+	// Fill in the "Kept" label for threads that did real work without tripping
+	// any abandonment site.  Done at emission rather than per-probe so we don't
+	// add a branch to the hot path just to maintain the label.
+	if (state.thc_decision_reason == ThcDecisionReason::NeverActivated && state.total_probe_rows > 0 &&
+	    tiered_hash_cache) {
+		state.thc_decision_reason = ThcDecisionReason::Kept;
+	}
+
+	// Hash thread id into a 64-bit hex token: std::thread::id has no portable
+	// integer cast, but std::hash<thread::id> is guaranteed to exist.
+	const auto thread_id_hash = static_cast<unsigned long long>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+
+	// One tagged line per thread per join.  Numeric fields use fixed precision
+	// so awk/python parsing is unambiguous.  Header (for reference; not emitted):
+	//   ht_addr,thread,reason,cycles,evals,probe_rows,new_entries,collect_rows,
+	//   u1,mu_sr,perc_hot,miss_rate,c_main,c_eval_cur,c_eval_prev,c_grow,
+	//   ro_miss,ro_total,abandoned,frozen,planner_R
+	//
+	// `planner_R` is the JoinHashTable's `estimated_probe_side_rows`, which
+	// comes from the optimizer at plan time and DOES NOT see runtime RPT+
+	// Bloom-filter reductions.  Comparing it to `probe_rows` (actual rows
+	// this thread saw) lets task #5 audit the µ_SR estimator bias: if
+	// planner_R ≫ probe_rows on BF-heavy joins, the cycle-1 µ_SR estimator
+	// over-estimates by exactly that ratio and the low-µ gate fails to fire.
+	std::fprintf(
+	    stderr, "[THC_DECISION] %p,%llx,%s,%lu,%lu,%lu,%lu,%lu,%lu,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.4f,%lu,%lu,%d,%d,%lu\n",
+	    static_cast<const void *>(this), thread_id_hash, ThcDecisionReasonLabel(state.thc_decision_reason),
+	    static_cast<unsigned long>(state.completed_collect_cycles),
+	    static_cast<unsigned long>(state.completed_evaluation_cycles),
+	    static_cast<unsigned long>(state.total_probe_rows), static_cast<unsigned long>(state.total_new_entries),
+	    static_cast<unsigned long>(state.total_collect_phase_rows), static_cast<unsigned long>(state.first_cycle_u1),
+	    state.first_cycle_mu_sr, state.first_cycle_perc_hot, state.first_cycle_miss_rate, state.c_main,
+	    state.c_eval_current, state.c_eval_prev, state.c_grow_current,
+	    static_cast<unsigned long>(state.ro_miss_count), static_cast<unsigned long>(state.ro_total_count),
+	    state.thc_abandoned ? 1 : 0, state.thc_frozen ? 1 : 0,
+	    static_cast<unsigned long>(estimated_probe_side_rows));
+	std::fflush(stderr);
+}
+
 JoinHashTable::InsertState::InsertState(const JoinHashTable &ht)
     : SharedState(), remaining_sel(STANDARD_VECTOR_SIZE), key_match_sel(STANDARD_VECTOR_SIZE),
       rhs_row_locations(LogicalType::POINTER) {
@@ -681,11 +760,45 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_state, ProbeState &state, Vector &hashes_v,
                                    const SelectionVector *sel, idx_t &count, Vector &pointers_result_v,
                                    SelectionVector &match_sel, const bool has_sel) {
+	// Cross-thread abandon-cascade: if any peer thread on this JoinHashTable
+	// has already concluded the THC isn't helping, flip this thread to
+	// abandoned and skip THC participation for the rest of the join.  Done
+	// before the existing thc_abandoned check so it folds into the same
+	// fast-path branch.  Relaxed load: at most one extra chunk of overhead
+	// per thread if the flag flip is unobserved.
+	if (__builtin_expect(thc_globally_abandoned.load(std::memory_order_relaxed), 0) &&
+	    !state.thc_abandoned) {
+		state.thc_abandoned = true;
+		state.thc_collection_enabled = false;
+		state.collected_entries.clear();
+		// Attribution: tag the cascade as a distinct outcome so the decision
+		// log can distinguish "this thread abandoned via its own heuristic"
+		// from "this thread cascaded off a peer's abandonment".
+		if (state.thc_decision_reason == ThcDecisionReason::NeverActivated) {
+			state.thc_decision_reason = ThcDecisionReason::AbandonedCascade;
+		}
+	}
+
 	// If this thread has abandoned THC (high miss rate), or if first-cycle
 	// multiplicity estimation determined THC is not worthwhile, bypass all
 	// THC logic and use the vanilla DuckDB probe path.
 
 	if (!tiered_hash_cache || state.thc_abandoned) {
+		// Decision-log attribution: distinguish "this JoinHashTable never built a
+		// THC at all" (NoTHCAtJoin — single setting applies to the whole join)
+		// from "this thread is in the post-abandon fast path" (reason already
+		// set by the abandonment site that fired).  Only label NoTHCAtJoin if
+		// no other reason has been assigned yet — otherwise we'd overwrite a
+		// real abandonment reason on every subsequent probe call.
+		if (!tiered_hash_cache && state.thc_decision_reason == ThcDecisionReason::NeverActivated) {
+			if (thc_skipped_below_probe_floor) {
+				state.thc_decision_reason = ThcDecisionReason::NoTHCBelowProbeFloor;
+			} else if (thc_skipped_high_hotness_buildtime) {
+				state.thc_decision_reason = ThcDecisionReason::NoTHCHighHotnessBuildtime;
+			} else {
+				state.thc_decision_reason = ThcDecisionReason::NoTHCAtJoin;
+			}
+		}
 		if (UseSalt()) {
 			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
 			                             pointers_result_v, match_sel, has_sel);
@@ -883,8 +996,16 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		// Flush collected entries into the shared THC and transition
 		// to READ_ONLY. The flush is included in the COLLECT timing
 		// so that C_grow captures the full collection overhead.
+		//
+		// Also flush early if the shared THC has been saturated by another
+		// thread during this collect phase (`IsFull()`).  Without this
+		// shortcut, a multi-thread join where thread A's flush fills the
+		// THC would still have thread B accumulate up to
+		// thc_collect_phase_rows worth of `collected_entries` that all
+		// fail to insert.  Polling IsFull is a single relaxed atomic load
+		// per chunk — effectively free.
 		// ----------------------------------------------------------
-		if (state.probe_rows_in_phase >= thc_collect_phase_rows) {
+		if (state.probe_rows_in_phase >= thc_collect_phase_rows || tiered_hash_cache->IsFull()) {
 			ScopedHashJoinTimer insert_timer(state.thc_insert_time_ns);
 
 			// Insert collected entries into the shared THC in batches,
@@ -1054,10 +1175,16 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// (existing safety mechanisms, kept as supplementary early exits)
 	if (!state.first_cycle_multiplicity_checked && state.completed_collect_cycles == 1) {
 		state.first_cycle_multiplicity_checked = true;
+		// Snapshot the cycle-1 inputs for the decision log regardless of which
+		// branch fires (or none).  These let post-hoc analysis correlate the
+		// estimator outputs against eventual kept/abandoned outcomes.
+		state.first_cycle_u1 = state.first_collect_new_entries;
+		state.first_cycle_miss_rate = miss_rate;
 		if (state.first_collect_new_entries > 0) {
 			// Estimate cross-multiplicity = mu_SR = |R| (1 - p_miss) / U1
 			const double estimated_mu_s_to_r = (static_cast<double>(estimated_probe_side_rows) * (1.0 - miss_rate)) /
 			                                   static_cast<double>(state.first_collect_new_entries);
+			state.first_cycle_mu_sr = estimated_mu_s_to_r;
 			DEBUG_LOG("[THC First-Cycle Mu] |R|_est=%lu, U1=%lu, miss_rate=%.2f%%, mu_{S->R}=%.4f\n",
 			          (unsigned long)estimated_probe_side_rows, (unsigned long)state.first_collect_new_entries,
 			          miss_rate * 100.0, estimated_mu_s_to_r);
@@ -1065,7 +1192,9 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				DEBUG_LOG("[THC Low-Multiplicity Bypass] mu_{S->R}=%.4f < %.1f -> abandoning THC for this thread\n",
 				          estimated_mu_s_to_r, thc_min_estimated_mu_s_to_r);
 				state.thc_abandoned = true;
+				thc_globally_abandoned.store(true, std::memory_order_relaxed);
 				state.thc_collection_enabled = false;
+				state.thc_decision_reason = ThcDecisionReason::AbandonedLowMu;
 				state.collected_entries.clear();
 				return;
 			}
@@ -1074,12 +1203,15 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			// % hot = (U1 * u_s) / (|S| * (1-pmiss))
 			double estimated_perc_hot = (static_cast<double>(state.first_collect_new_entries) * mu_s_build_estimate) /
 			                            (static_cast<double>(Count()) * (1.0 - miss_rate));
+			state.first_cycle_perc_hot = estimated_perc_hot;
 
 			if (estimated_perc_hot > thc_max_estimated_perc_hot) {
 				DEBUG_LOG("[THC High-Hotness Bypass]: Estimated Hotness is %.2f -> abandoning THC for this thread\n",
 				          estimated_perc_hot);
 				state.thc_abandoned = true;
+				thc_globally_abandoned.store(true, std::memory_order_relaxed);
 				state.thc_collection_enabled = false;
+				state.thc_decision_reason = ThcDecisionReason::AbandonedHighHotness;
 				state.collected_entries.clear();
 				return;
 			}
@@ -1091,7 +1223,9 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				DEBUG_LOG("THC Too Small for Build Side Bypass: THC capacity needed is %.0f, THC capacity is %lu\n",
 				          thc_capacity_needed, thc_capacity);
 				state.thc_abandoned = true;
+				thc_globally_abandoned.store(true, std::memory_order_relaxed);
 				state.thc_collection_enabled = false;
+				state.thc_decision_reason = ThcDecisionReason::AbandonedSmallCapacity;
 				state.collected_entries.clear();
 				return;
 			}
@@ -1130,6 +1264,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			          "(miss_rate=%.2f%%)\n",
 			          (unsigned long)state.consecutive_high_miss_checkpoints, miss_rate * 100.0);
 			state.thc_abandoned = true;
+			thc_globally_abandoned.store(true, std::memory_order_relaxed);
+			state.thc_decision_reason = ThcDecisionReason::AbandonedHighMiss;
 			return;
 		}
 	} else {
@@ -1139,19 +1275,25 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 
 	state.completed_evaluation_cycles++;
 
-	if (!can_collect) {
-		// Stay in READ_ONLY with a doubled target.
-		// TODO parametrize the exp backoff or something. See other place in GetRowPointers where we do exp backoff.
-		// state.read_only_rows_target = thc_first_read_only_phase_rows * (idx_t(1) <<
-		// state.completed_evaluation_cycles);
-		state.read_only_rows_target = thc_first_read_only_phase_rows;
-		state.read_only_rows_processed = 0;
-		state.ro_miss_count = 0;
-		state.ro_total_count = 0;
-		return;
-	}
-
-	// ---- Cost-based three-way decision rule to decide if we go into collection, freeze the THC, or abandon the THC
+	// ---- Cost-based three-way decision rule (DROP / FREEZE / CONTINUE).
+	//
+	// Reordered (vs. earlier versions of this file) so the cost rule evaluates
+	// on EVERY checkpoint after warmup, not only on checkpoints where the
+	// `can_collect` gate is open.  The earlier ordering hid the rule behind
+	// `if (!can_collect) return;`, so a thread whose THC was stable but mildly
+	// hurting (low miss_rate → can_collect=false; small positive delta_t)
+	// would never reach DROP or FREEZE and would keep the THC for the entire
+	// query.  Surfaced by task #1 audit on a TPC-H lineitem⋈orders join where
+	// c_main=14.4, c_eval=21.0, 79 eval cycles, decision=kept.
+	//
+	// The new order is:
+	//   1) Evaluate cost rule.  DROP / FREEZE return immediately.
+	//   2) Otherwise (CONTINUE or still in warmup): use `can_collect` to decide
+	//      between re-entering COLLECT or staying in READ_ONLY for more eval
+	//      data.  During warmup we now respect `can_collect` instead of
+	//      unconditionally forcing COLLECT; staying in READ_ONLY when
+	//      can_collect=false just accumulates more eval data and stabilises
+	//      c_eval, which is the point of warmup.
 
 	// Compute decision variables BEFORE updating c_eval_prev so that
 	// shrinkage uses the previous evaluation's cost correctly.
@@ -1166,43 +1308,56 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	state.eval_cycle_count++;
 	state.c_eval_prev = state.c_eval_current;
 
-	// During warmup, unconditionally continue to give the THC time to stabilize.
 	if (state.eval_cycle_count <= thc_warmup_cycles) {
+		// Warmup: skip the DROP/FREEZE branches but still let the can_collect
+		// decision below pick between COLLECT and stay-in-READ_ONLY.  This
+		// gives c_eval time to stabilise on real eval phases.
 		DEBUG_LOG("[Eval Checkpoint] eval_cycle=%lu (warmup, need %lu), c_eval=%.2f, c_main=%.2f, "
-		          "delta=%.2f, miss_rate=%.2f%% -> CONTINUE (warmup)\n",
+		          "delta=%.2f, miss_rate=%.2f%% -> warmup-fallthrough\n",
 		          (unsigned long)current_eval_cycle, (unsigned long)thc_warmup_cycles, state.c_eval_current,
 		          state.c_main, delta_t, miss_rate * 100.0);
-		state.tiered_hash_cache_phase = TieredHashCachePhase::COLLECT;
-		state.probe_rows_in_phase = 0;
-		state.collected_entries.clear();
-		state.phase_time_ns = 0;
-		state.phase_probe_count = 0;
-		return;
-	}
+	} else {
+		if (delta_t >= 0) {
+			DEBUG_LOG("[Eval Checkpoint] eval_cycle=%lu, c_eval=%.2f, c_main=%.2f, delta=%.2f >= 0 -> DROP\n",
+			          (unsigned long)current_eval_cycle, state.c_eval_current, state.c_main, delta_t);
+			state.thc_abandoned = true;
+			thc_globally_abandoned.store(true, std::memory_order_relaxed);
+			state.thc_decision_reason = ThcDecisionReason::DroppedByCost;
+			return;
+		}
 
-	if (delta_t >= 0) {
-		DEBUG_LOG("[Eval Checkpoint] eval_cycle=%lu, c_eval=%.2f, c_main=%.2f, delta=%.2f >= 0 -> DROP\n",
-		          (unsigned long)current_eval_cycle, state.c_eval_current, state.c_main, delta_t);
-		state.thc_abandoned = true;
-		return;
-	}
+		// delta_t < 0: THC is useful. Check if further growth is worth paying for.
+		if (shrinkage < gamma_t) {
+			DEBUG_LOG("[Eval Checkpoint] eval_cycle=%lu, c_eval=%.2f, c_main=%.2f, delta=%.2f, "
+			          "shrinkage=%.2f < gamma=%.2f -> FREEZE\n",
+			          (unsigned long)current_eval_cycle, state.c_eval_current, state.c_main, delta_t, shrinkage,
+			          gamma_t);
+			state.thc_frozen = true;
+			state.thc_collection_enabled = false;
+			state.thc_decision_reason = ThcDecisionReason::Frozen;
+			state.phase_time_ns = 0;
+			state.phase_probe_count = 0;
+			return;
+		}
 
-	// delta_t < 0: THC is useful. Check if further growth is worth paying for.
-	if (shrinkage < gamma_t) {
 		DEBUG_LOG("[Eval Checkpoint] eval_cycle=%lu, c_eval=%.2f, c_main=%.2f, delta=%.2f, "
-		          "shrinkage=%.2f < gamma=%.2f -> FREEZE\n",
+		          "shrinkage=%.2f >= gamma=%.2f -> CONTINUE\n",
 		          (unsigned long)current_eval_cycle, state.c_eval_current, state.c_main, delta_t, shrinkage, gamma_t);
-		state.thc_frozen = true;
-		state.thc_collection_enabled = false;
-		state.phase_time_ns = 0;
-		state.phase_probe_count = 0;
+	}
+
+	// Cost rule said CONTINUE (or we're in warmup): decide between
+	// re-entering COLLECT and staying in READ_ONLY based on the collect gate.
+	if (!can_collect) {
+		// Stay in READ_ONLY.  Don't reset phase_time_ns / phase_probe_count so
+		// the next checkpoint's c_eval is a running average over more data.
+		state.read_only_rows_target = thc_first_read_only_phase_rows;
+		state.read_only_rows_processed = 0;
+		state.ro_miss_count = 0;
+		state.ro_total_count = 0;
 		return;
 	}
 
-	// Growth paid for itself — continue to next COLLECT phase.
-	DEBUG_LOG("[Eval Checkpoint] eval_cycle=%lu, c_eval=%.2f, c_main=%.2f, delta=%.2f, "
-	          "shrinkage=%.2f >= gamma=%.2f -> CONTINUE\n",
-	          (unsigned long)current_eval_cycle, state.c_eval_current, state.c_main, delta_t, shrinkage, gamma_t);
+	// Both gates open: enter COLLECT.
 	state.tiered_hash_cache_phase = TieredHashCachePhase::COLLECT;
 	state.probe_rows_in_phase = 0;
 	state.collected_entries.clear();
@@ -1691,6 +1846,129 @@ void JoinHashTable::InitializeTieredHashCache() {
 		return;
 	}
 
+	// ---------------------------------------------------------------
+	// Probe-side row-count floor.
+	//
+	// The adaptive THC lifecycle pays an unavoidable warmup cost: one
+	// COLLECT phase of ~thc_collect_phase_rows probe rows to populate
+	// the THC, followed by one EVAL phase before the cycle-1
+	// abandonment heuristics can fire.  If the optimizer's estimate
+	// for this join's probe input is smaller than that warmup window,
+	// the THC is guaranteed to be net overhead.
+	//
+	// `estimated_probe_side_rows` is the planner's pre-runtime
+	// cardinality estimate; it does NOT see RPT+ Bloom-filter
+	// shrinkage, so it is an upper bound on the post-BF probe count.
+	// Using it as a floor (skip when planner_R is below the threshold)
+	// is safe: the only risk is over-keeping THC on a join that BF
+	// will further shrink, which is already caught by the cycle-1
+	// heuristics inside GetRowPointers.
+	//
+	// Threshold is coupled to thc_collect_phase_rows × 2 rather than
+	// exposed as an independent knob: the floor and the collect-phase
+	// length share the same underlying question ("how many probe rows
+	// before THC adaptation completes one full cycle?").  A future
+	// change to thc_collect_phase_rows automatically updates the
+	// floor.
+	if (estimated_probe_side_rows > 0 &&
+	    estimated_probe_side_rows < 2 * thc_collect_phase_rows) {
+		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not "
+		          "instantiating THC: estimated_probe_side_rows=%lu < "
+		          "2 × thc_collect_phase_rows=%lu (probe-side floor)\n",
+		          (unsigned long)estimated_probe_side_rows,
+		          (unsigned long)(2 * thc_collect_phase_rows));
+		thc_skipped_below_probe_floor = true;
+		return;
+	}
+
+	// ---------------------------------------------------------------
+	// Pre-cycle-0 µ_{S->R} upper-bound check.
+	//
+	// The per-thread cycle-1 low-multiplicity guard inside GetRowPointers
+	// fires when estimated µ_SR < thc_min_estimated_mu_s_to_r, where
+	//   µ_SR = |R| × (1 - p_miss) / U1
+	// and U1 is the number of unique keys captured in the first COLLECT
+	// flush. U1 is data-dependent and only known after cycle 0 has run,
+	// so the per-thread guard can only fire AFTER each thread has paid
+	// ~thc_collect_phase_rows + thc_first_read_only_phase_rows of probe
+	// overhead.
+	//
+	// But U1 is bounded above by build_unique_keys_cnt (we can't collect
+	// keys the build side doesn't have), and (1 - p_miss) ≤ 1, so:
+	//   µ_SR_max ≤ |R|_est / unique_keys
+	// If even this most-generous upper bound is below the threshold, the
+	// cycle-1 guard is guaranteed to fire — but only after every thread
+	// has paid the cycle-0 + first-eval overhead.  Skip THC creation
+	// entirely instead, eliminating the floor for the whole join.
+	//
+	// Surfaced by task #1 audit: on JOB 17e all 6 joins hit cycle-1
+	// abandon (high hotness or low µ), but each abandoning thread paid
+	// ~62k probes first.  This pre-check skips that floor when the build
+	// numbers already prove the answer.
+	//
+	// Gated on the build-count µ_s method so `unique_keys` is meaningful;
+	// other methods don't increment the counter reliably.
+	if (thc_mu_s_method == "build_count" || thc_mu_s_method == "all") {
+		const idx_t unique_keys = build_unique_keys_cnt.load(std::memory_order_relaxed);
+		if (unique_keys > 0 && estimated_probe_side_rows > 0) {
+			const double mu_sr_upper =
+			    static_cast<double>(estimated_probe_side_rows) / static_cast<double>(unique_keys);
+			if (mu_sr_upper < config.thc_min_estimated_mu_s_to_r) {
+				DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Skipping THC: pre-cycle-0 µ_SR upper bound "
+				          "%.4f < threshold %.1f (|R|_est=%lu, unique_keys=%lu)\n",
+				          mu_sr_upper, config.thc_min_estimated_mu_s_to_r, (unsigned long)estimated_probe_side_rows,
+				          (unsigned long)unique_keys);
+				return;
+			}
+		}
+	}
+
+	// ---------------------------------------------------------------
+	// Build-time hot-fraction estimator.
+	//
+	// The cycle-1 AbandonedHighHotness guard inside GetRowPointers fires when
+	//   estimated_perc_hot = (U1 × µ_S_build) / (|S| × (1 - miss_rate))
+	//                      > thc_max_estimated_perc_hot   (default 0.5)
+	// where U1 is the number of distinct build keys seen by the THC after
+	// one COLLECT cycle, and miss_rate is the per-thread cache miss fraction.
+	//
+	// We can compute a build-time approximation without running any probe
+	// cycles.  Best available estimate for U1 before cycle 0:
+	//   U1_est ≈ min(thc_collect_phase_rows, build_unique_keys_cnt)
+	// — at most collect_phase_rows distinct probes arrive per cycle, and at
+	// most build_unique_keys_cnt unique keys exist on the build side.
+	//
+	// Substituting into the perc_hot formula (µ_S_build = Count() /
+	// build_unique_keys_cnt, miss_rate → 0 for the upper bound):
+	//   perc_hot_est = min(collect_phase_rows, unique_keys)
+	//                    × (Count() / unique_keys) / Count()
+	//                = min(collect_phase_rows, unique_keys) / unique_keys
+	//                = min(1.0, collect_phase_rows / unique_keys)
+	//
+	// When build_unique_keys_cnt < thc_collect_phase_rows the ratio is 1.0:
+	// the entire build side fits in one collect cycle and there is no skew to
+	// exploit (the THC would cache every key, offering no locality advantage
+	// over the plain HT).  If unique_keys >> collect_phase_rows the estimate
+	// is small and THC has a chance to find genuinely hot keys.
+	//
+	// Gated on build_count/all because those are the only µ_s_method values
+	// that populate build_unique_keys_cnt reliably.
+	if (thc_mu_s_method == "build_count" || thc_mu_s_method == "all") {
+		const idx_t unique_keys = build_unique_keys_cnt.load(std::memory_order_relaxed);
+		if (unique_keys > 0) {
+			const double perc_hot_est = std::min(
+			    1.0, static_cast<double>(thc_collect_phase_rows) / static_cast<double>(unique_keys));
+			if (perc_hot_est > config.thc_max_estimated_perc_hot) {
+				DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Skipping THC: build-time perc_hot estimate "
+				          "%.4f > threshold %.4f (collect_phase_rows=%lu, unique_keys=%lu)\n",
+				          perc_hot_est, config.thc_max_estimated_perc_hot,
+				          (unsigned long)thc_collect_phase_rows, (unsigned long)unique_keys);
+				thc_skipped_high_hotness_buildtime = true;
+				return;
+			}
+		}
+	}
+
 	if (capacity <= thc_activation_threshold) {
 		DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Not instantiating THC since capacity of %lu does not "
 		          "meet thc_activation_threshold of %lu\n",
@@ -1719,7 +1997,31 @@ void JoinHashTable::InitializeTieredHashCache() {
 	    pointer_offset + sizeof(data_ptr_t);                    // TODO might be duplicative of logic in THC
 	const idx_t row_copy_offset = 0;                            // TODO hack?
 	tiered_hash_cache_key_offset = layout_ptr->GetOffsets()[0]; // key after validity bytes // TODO this is a hack!!!
-	thc_capacity = TieredHashCache::ComputeCapacity(data_collection_row_size, thc_budget_bytes);
+	// Pointer-mode decision: opt-in via thc_pointer_mode_min_row_size. When the
+	// configured threshold is non-sentinel and the data_collection row width
+	// crosses it, switch to pointer-mode layout for this THC.  Computed once at
+	// construction so the probe hot path branches on a constant member.
+	const bool pointer_mode =
+	    (config.thc_pointer_mode_min_row_size != static_cast<idx_t>(-1)) &&
+	    (data_collection_row_size >= config.thc_pointer_mode_min_row_size);
+	// Build-side-adaptive budget: don't allocate cache space for hypothetical
+	// hot keys when the build itself is small.  Cap the effective budget at
+	// `THC_BUILD_OVERSIZE_FACTOR × build_size_in_bytes`; a THC bigger than that
+	// just allocates pages that can never be filled by genuine build rows.
+	//
+	// Factor of 4 leaves room for: (1) some duplicate-key chain slack;
+	// (2) cache-line stride rounding overhead; (3) load-factor headroom.
+	// Tunable via constant; promote to config knob only if benchmarking shows
+	// the right value depends on workload.
+	static constexpr idx_t THC_BUILD_OVERSIZE_FACTOR = 4;
+	const idx_t build_size_bytes = Count() * data_collection_row_size;
+	const idx_t effective_budget = MinValue<idx_t>(thc_budget_bytes,
+	                                               THC_BUILD_OVERSIZE_FACTOR * build_size_bytes);
+	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Effective budget %lu bytes "
+	          "(thc_budget_bytes=%lu, build_size=%lu, factor=%lu)\n",
+	          (unsigned long)effective_budget, (unsigned long)thc_budget_bytes,
+	          (unsigned long)build_size_bytes, (unsigned long)THC_BUILD_OVERSIZE_FACTOR);
+	thc_capacity = TieredHashCache::ComputeCapacity(data_collection_row_size, effective_budget, pointer_mode);
 
 	// ---------------------------------------------------------------
 	// Coverage ratio check: skip THC if it can only cache a tiny
@@ -1759,7 +2061,9 @@ void JoinHashTable::InitializeTieredHashCache() {
 	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] Estimated probe-side rows=%lu\n",
 	          (unsigned long)estimated_probe_side_rows);
 	tiered_hash_cache = make_uniq<TieredHashCache>(thc_capacity, data_collection_row_size, tiered_hash_cache_key_offset,
-	                                               row_copy_offset, thc_max_load_factor);
+	                                               row_copy_offset, thc_max_load_factor, pointer_mode);
+	DEBUG_LOG("[JoinHashTable::InitializeTieredHashCache] pointer_mode=%d row_size=%lu\n", (int)pointer_mode,
+	          (unsigned long)data_collection_row_size);
 
 	thc_single_threaded = (TaskScheduler::GetScheduler(context).NumberOfThreads() == 1);
 }

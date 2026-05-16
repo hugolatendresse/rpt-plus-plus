@@ -52,10 +52,20 @@ public:
 	//! @param max_load_factor_p maximum fraction of capacity that may be filled (0.0–1.0).
 	//!            Beyond this, we stop inserting new entries to avoid pathological
 	//!            linear-probing chains (the extreme case being an infinite loop).
+	//! @param pointer_mode_p when true, each entry stores only [tag | data_ptr_t]
+	//!        rather than [tag | full row copy].  Entry stride drops to 16 bytes
+	//!        regardless of row_size, so the THC covers ~row_size/8 more keys per
+	//!        byte of budget.  Trade-off: cache hits now require an extra deref
+	//!        into data_collection for both key compare and result gather, paying
+	//!        one extra cache line of traffic per hit.  Worthwhile when row_size
+	//!        is large enough that the copy-mode stride straddles cache lines
+	//!        anyway (>64B), or when the hot working set is much bigger than what
+	//!        copy-mode capacity can hold.
 	TieredHashCache(idx_t capacity_p, idx_t row_size_p, idx_t key_offset_in_row_p, idx_t row_copy_offset_p = 0,
-	                double max_load_factor_p = 0.6)
+	                double max_load_factor_p = 0.6, bool pointer_mode_p = false)
 	    : capacity(capacity_p), bitmask(capacity_p - 1), row_size(row_size_p), key_offset_in_row(key_offset_in_row_p),
-	      row_copy_offset(row_copy_offset_p), entry_stride(ComputeEntryStride(row_size_p)),
+	      row_copy_offset(row_copy_offset_p), pointer_mode(pointer_mode_p),
+	      entry_stride(ComputeEntryStride(row_size_p, pointer_mode_p)),
 	      max_fill(static_cast<idx_t>(static_cast<double>(capacity_p) * max_load_factor_p)), unsafe_fill_count(0) {
 		D_ASSERT(IsPowerOfTwo(capacity)); // Needed for bitmask logic
 		D_ASSERT(max_load_factor_p > 0.0 && max_load_factor_p <= 1.0);
@@ -212,6 +222,17 @@ public:
 	//! Counts how many times Insert does NOT insert an entry because its hash is already in the table
 	std::atomic<idx_t> dup_inserts_count {0};
 
+	//! Counts how many times Insert silently dropped an entry because the linear-probe
+	//! cluster around the hash slot exceeded MAX_PROBE_DISTANCE.  These are entries that
+	//! could not be cached even though the THC wasn't strictly full; they show up later
+	//! as cache misses despite the build side having a matching row.
+	//!
+	//! Diagnostic only — JoinHashTable doesn't read this.  A high ratio of
+	//! dropped_probe_dist_count to new_inserts_count means MAX_PROBE_DISTANCE is too
+	//! small for the current load factor (per Knuth: E[probes|miss] ~ 1/(1-α)²/2),
+	//! which feeds the retuning work in task #4.
+	std::atomic<idx_t> dropped_probe_dist_count {0};
+
 	//! Inserts an entry, including the row, all atomically.
 	//! Returns true if a genuinely new entry was inserted, false otherwise
 	//! (duplicate hash, table full, or probe distance exceeded).
@@ -219,9 +240,19 @@ public:
 		// Refuse to insert once we've reached the maximum load factor.
 		// Without this guard the unbounded linear-probing loop below can
 		// spin forever when the table is (nearly) full.
+		//
+		// Communication back to JoinHashTable: two paths, both already
+		// wired up:
+		//   1) InsertBatch checks GetFreeSlotsUntilMaxFilled before each
+		//      sub-batch, so it stops issuing InsertSafe calls when the
+		//      table fills mid-flush.  Repeated calls from the same flush
+		//      hit this early return at most once per saturating batch.
+		//   2) JoinHashTable::GetRowPointers polls IsFull() in the
+		//      chunk-level collect-phase guard, so a thread whose THC is
+		//      saturated by another thread bails out of COLLECT mid-phase
+		//      rather than accumulating useless `collected_entries`.
 		if (__builtin_expect(new_inserts_count.load(std::memory_order_relaxed) >= max_fill, 0)) {
-			return false; // TODO is there a way to communicate that to JoinHashTable to avoid having to try to insert
-			              // thousands of additional times?
+			return false;
 		}
 		const auto tag = ComputeTag(hash);
 		auto slot = hash & bitmask;
@@ -232,7 +263,16 @@ public:
 			tag_t expected = 0; // We only insert if the current hash is null
 			// TODO double check the choice of CAS function and third argument below
 			if (__builtin_expect(tag_atomic->compare_exchange_strong(expected, tag, std::memory_order_acq_rel), 0)) {
-				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
+				if (pointer_mode) {
+					// Store only the data_collection row pointer.  GetRowPtr will
+					// dereference on lookup.  row_copy_offset is folded into the
+					// stored pointer so key_offset_in_row stays interpretable as
+					// "offset from the cached row's effective start".
+					const_data_ptr_t target = row_data_ptr + row_copy_offset;
+					memcpy(entry_ptr + HEADER_SIZE, &target, sizeof(const_data_ptr_t));
+				} else {
+					memcpy(entry_ptr + HEADER_SIZE, row_data_ptr + row_copy_offset, row_size);
+				}
 				new_inserts_count.fetch_add(1, std::memory_order_relaxed);
 				return true;
 			}
@@ -244,8 +284,11 @@ public:
 
 			slot = (slot + 1) & bitmask; // linear probe is the hashes don't fully match
 		}
-		// Exceeded MAX_PROBE_DISTANCE -> silently drop the entry. It will be a miss later.
-		// TODO should we completely stop populating the THC if we reach here?
+		// Exceeded MAX_PROBE_DISTANCE -> silently drop the entry.  This is LOCAL
+		// congestion (one slot's cluster is too long), not a terminal state — the
+		// THC isn't full, future inserts into other slots can still succeed.  No
+		// signal back to JoinHashTable; just track it for retuning diagnostics.
+		dropped_probe_dist_count.fetch_add(1, std::memory_order_relaxed);
 		return false;
 	}
 
@@ -262,7 +305,12 @@ public:
 			tag_t stored = LoadTag(entry_ptr);
 			if (__builtin_expect(stored == 0, 0)) {
 				memcpy(entry_ptr, &tag, sizeof(tag_t));
-				memcpy(GetRowPtr(entry_ptr), row_data_ptr + row_copy_offset, row_size);
+				if (pointer_mode) {
+					const_data_ptr_t target = row_data_ptr + row_copy_offset;
+					memcpy(entry_ptr + HEADER_SIZE, &target, sizeof(const_data_ptr_t));
+				} else {
+					memcpy(entry_ptr + HEADER_SIZE, row_data_ptr + row_copy_offset, row_size);
+				}
 				unsafe_fill_count++;
 				return true;
 			}
@@ -271,6 +319,8 @@ public:
 			}
 			slot = (slot + 1) & bitmask;
 		}
+		// Same local-congestion case as InsertSafe; record for diagnostics.
+		dropped_probe_dist_count.fetch_add(1, std::memory_order_relaxed);
 		return false;
 	}
 
@@ -373,8 +423,8 @@ public:
 
 	//! Largest power-of-2 capacity that fits within the budget.
 	//! Returns the number of entries we can have in the THC
-	static idx_t ComputeCapacity(idx_t row_size, idx_t l3_budget) {
-		auto stride = ComputeEntryStride(row_size);
+	static idx_t ComputeCapacity(idx_t row_size, idx_t l3_budget, bool pointer_mode = false) {
+		auto stride = ComputeEntryStride(row_size, pointer_mode);
 		auto raw = l3_budget / stride;
 		if (raw < 64) {
 			return 64;
@@ -411,9 +461,12 @@ private:
 	//! THC is meant to minimise.  For payloads that exceed a line we fall back
 	//! to 8-byte alignment — every slot would straddle anyway, so the memory
 	//! that would be spent padding up to 128 bytes is not worth it.
-	static idx_t ComputeEntryStride(idx_t row_size) {
+	//!
+	//! In pointer mode the entry holds [tag | data_ptr_t] = 10 bytes raw, which
+	//! always rounds to 16 regardless of row_size.
+	static idx_t ComputeEntryStride(idx_t row_size, bool pointer_mode = false) {
 		static constexpr idx_t CACHE_LINE_BYTES = 64;
-		const idx_t raw = HEADER_SIZE + row_size;
+		const idx_t raw = pointer_mode ? (HEADER_SIZE + sizeof(data_ptr_t)) : (HEADER_SIZE + row_size);
 		idx_t stride;
 		if (raw <= 16) {
 			stride = 16;
@@ -424,7 +477,7 @@ private:
 		} else {
 			stride = (raw + 7) & ~idx_t(7);
 		}
-		DEBUG_LOG("[THC] Stride is %lu bytes\n", stride);
+		DEBUG_LOG("[THC] Stride is %lu bytes (pointer_mode=%d)\n", stride, (int)pointer_mode);
 		return stride;
 	}
 
@@ -448,8 +501,16 @@ private:
 		return h;
 	}
 
-	//! Pointer to the cached row data within an entry (the first byte after the hash)
-	__attribute__((always_inline)) static inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) {
+	//! Pointer to the cached row data.  In copy mode this is the inline copy
+	//! immediately after the tag; in pointer mode the inline bytes ARE a
+	//! data_ptr_t into data_collection, so we dereference once.  The branch is
+	//! predictable for the lifetime of the THC (set once at construction).
+	__attribute__((always_inline)) inline data_ptr_t GetRowPtr(data_ptr_t entry_ptr) const {
+		if (pointer_mode) {
+			data_ptr_t p;
+			memcpy(&p, entry_ptr + HEADER_SIZE, sizeof(data_ptr_t));
+			return p;
+		}
 		return entry_ptr + HEADER_SIZE;
 	}
 
@@ -458,6 +519,7 @@ private:
 	idx_t row_size;
 	idx_t key_offset_in_row;
 	idx_t row_copy_offset;
+	bool pointer_mode;                              //! [tag|data_ptr_t] entries instead of [tag|row_copy]
 	idx_t entry_stride;
 	idx_t max_fill;                   //! capacity * max load factor — Insert refuses beyond this
 	idx_t unsafe_fill_count;                        //! Non-atomic counter for InsertSafe
