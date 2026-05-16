@@ -12,6 +12,7 @@ JOB_QUERY=""
 JOB_QUERIES_LIST=""
 SEED=""
 SEEDS_COUNT=""
+PASSES=1
 CSV_PATH=""
 USE_PERF=false
 USE_DEBUG=false
@@ -29,6 +30,7 @@ Options:
   --job-queries <list>  Comma-separated JOB query list, e.g. 1a,2a,2b,4c
   --seed <int>          Override transfer_graph_seed (mutually exclusive with --seeds)
   --seeds <N>           Sweep seeds 0..N-1 (overrides transfer_graph_seed)
+  --passes <N>          Repeat every (case, seed, query) tuple N times (default: 1)
   --csv <path>          Write per-run CSV (auto-named if omitted in sweep mode)
   --perf                Run query/queries under perf stat
   --debug               Use debug build (build/debug/duckdb)
@@ -61,6 +63,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--seeds)
 		SEEDS_COUNT="$2"
+		shift 2
+		;;
+	--passes)
+		PASSES="$2"
 		shift 2
 		;;
 	--csv)
@@ -105,6 +111,10 @@ if [[ -n "$JOB_QUERY" && -n "$JOB_QUERIES_LIST" ]]; then
 fi
 if [[ -z "$CASE" && -z "$CASES_LIST" ]]; then
 	echo "Error: --case or --cases is required." >&2
+	exit 1
+fi
+if ! [[ "$PASSES" =~ ^[0-9]+$ ]] || [[ "$PASSES" -lt 1 ]]; then
+	echo "Error: --passes must be a positive integer (got: $PASSES)" >&2
 	exit 1
 fi
 
@@ -224,10 +234,10 @@ else
 fi
 
 # Decide whether to write a CSV. Sweep mode auto-names if --csv was not given;
-# single-shot mode (one case, one query, no seed sweep) only writes a CSV
+# single-shot mode (one case, one query, no seed sweep, one pass) only writes a CSV
 # when --csv is explicitly provided.
 SWEEPING=false
-if $SWEEPING_SEEDS || [[ ${#CASES[@]} -gt 1 ]] || [[ ${#QUERY_FILES[@]} -gt 1 ]]; then
+if $SWEEPING_SEEDS || [[ ${#CASES[@]} -gt 1 ]] || [[ ${#QUERY_FILES[@]} -gt 1 ]] || [[ "$PASSES" -gt 1 ]]; then
 	SWEEPING=true
 fi
 if $SWEEPING && [[ -z "$CSV_PATH" ]]; then
@@ -236,7 +246,7 @@ if $SWEEPING && [[ -z "$CSV_PATH" ]]; then
 fi
 if [[ -n "$CSV_PATH" ]]; then
 	mkdir -p "$(dirname "$CSV_PATH")"
-	printf "query,case,seed,runtime_seconds\n" >"$CSV_PATH"
+	printf "query,case,seed,pass,runtime_seconds\n" >"$CSV_PATH"
 fi
 
 build_sql() {
@@ -300,14 +310,16 @@ for c in "${CASES[@]}"; do
 		for q in "${QUERY_FILES[@]}"; do
 			query_name="${q#queries/}"
 			query_name="${query_name%.sql}"
-			echo "Executing case=${c} seed=${s:-default} query=${query_name}..."
-			run_query "$c" "$s" "$q"
-			echo "  runtime: ${LAST_RUNTIME} s"
-			if [[ -n "$CSV_PATH" ]]; then
-				printf '%s,%s,%s,%s\n' "$query_name" "$c" "$s" "$LAST_RUNTIME" >>"$CSV_PATH"
-			fi
-			TOTAL_RUNTIME=$(awk -v t="$TOTAL_RUNTIME" -v r="$LAST_RUNTIME" 'BEGIN{printf "%.6f", t + r}')
-			ROW_COUNT=$((ROW_COUNT + 1))
+			for ((p = 1; p <= PASSES; p++)); do
+				echo "Executing case=${c} seed=${s:-default} query=${query_name} pass=${p}..."
+				run_query "$c" "$s" "$q"
+				echo "  runtime: ${LAST_RUNTIME} s"
+				if [[ -n "$CSV_PATH" ]]; then
+					printf '%s,%s,%s,%s,%s\n' "$query_name" "$c" "$s" "$p" "$LAST_RUNTIME" >>"$CSV_PATH"
+				fi
+				TOTAL_RUNTIME=$(awk -v t="$TOTAL_RUNTIME" -v r="$LAST_RUNTIME" 'BEGIN{printf "%.6f", t + r}')
+				ROW_COUNT=$((ROW_COUNT + 1))
+			done
 		done
 	done
 done
