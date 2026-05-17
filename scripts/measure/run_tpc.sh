@@ -236,11 +236,14 @@ if [[ -n "$CSV_OVERRIDE" ]]; then
 fi
 
 if $SWEEP_MODE; then
+    # Write the header for whichever suite is enabled.  When --csv collapses
+    # both paths to the same file, only the first guard fires.  When the
+    # suites use separate paths (default, no --csv), each gets its own header.
     if [[ $RUN_TPCH -eq 1 ]]; then
         mkdir -p "$(dirname "$TPCH_CSV_PATH")"
         printf "query,case,pass,runtime_seconds\n" > "$TPCH_CSV_PATH"
     fi
-    if [[ $RUN_TPCDS -eq 1 ]] && [[ "$TPCH_CSV_PATH" != "$TPCDS_CSV_PATH" ]]; then
+    if [[ $RUN_TPCDS -eq 1 ]] && [[ "$TPCH_CSV_PATH" != "$TPCDS_CSV_PATH" || $RUN_TPCH -eq 0 ]]; then
         mkdir -p "$(dirname "$TPCDS_CSV_PATH")"
         printf "query,case,pass,runtime_seconds\n" > "$TPCDS_CSV_PATH"
     fi
