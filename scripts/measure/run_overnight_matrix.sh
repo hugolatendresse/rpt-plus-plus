@@ -77,6 +77,14 @@ add_cfg "no_hot_fraction" "SET thc_max_estimated_perc_hot = 1.0;"  # gate never 
 #    effectively "what c2 would look like for a misnamed THC-off case 3".
 add_cfg "thc_disabled" "SET disable_tiered_hash_cache = true;"
 
+# 5) Shorter COLLECT window (Config C from 2026-05-18 plan).  With the
+#    mid-COLLECT + mid-READ_ONLY early-abandon checkpoints in place, the
+#    full 50k COLLECT default is excess overhead for joins that DO keep
+#    the THC — every kept thread waits 50k probes before transitioning
+#    to READ_ONLY.  20k should be plenty given the abandons catch
+#    pathological joins at 5k mid-COLLECT.
+add_cfg "collect_20k" "SET thc_collect_phase_rows = 20000;"
+
 # Per-config runner.
 echo "Matrix start: ${TS} SHA=${SHA} PASSES=${PASSES} SEEDS=${SEEDS} CASES=${CASES}"
 echo "Output: ${OUT_DIR}"

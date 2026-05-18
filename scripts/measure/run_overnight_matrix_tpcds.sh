@@ -53,6 +53,7 @@ add_cfg "ptr_128" "SET thc_pointer_mode_min_row_size = 128;"
 add_cfg "no_probe_floor" "SET thc_collect_phase_rows = 1;"
 add_cfg "no_hot_fraction" "SET thc_max_estimated_perc_hot = 1.0;"
 add_cfg "thc_disabled" "SET disable_tiered_hash_cache = true;"
+add_cfg "collect_20k" "SET thc_collect_phase_rows = 20000;"
 
 echo "TPC-DS matrix start: ${TS} SHA=${SHA} PASSES=${PASSES} CASES=${CASES} SF=${SF}"
 echo "Output: ${OUT_DIR}"
