@@ -795,6 +795,29 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_state, ProbeState &state, Vector &hashes_v,
                                    const SelectionVector *sel, idx_t &count, Vector &pointers_result_v,
                                    SelectionVector &match_sel, const bool has_sel) {
+	// Fast-bypass: this JoinHashTable will never have a THC (a build-time gate
+	// vetoed at Finalize, so tiered_hash_cache stays null and deferred-
+	// allocation eligibility was never set).  Skip the cascade check, the
+	// deferred-allocation accumulator, and the per-chunk eligibility branches
+	// entirely.  Decision-log attribution falls through to EmitDecisionLogRow
+	// which handles NoTHCAtJoin / NoTHCBelowProbeFloor / NoTHCHighHotnessBuildtime
+	// at teardown.
+	//
+	// Both checked fields are immutable post-Finalize (Init runs once before
+	// any probe), so this branch is constant-condition per JoinHashTable.
+	// __builtin_expect biases toward "THC machinery is active" because the
+	// common case after gate tuning is that the THC exists.
+	if (__builtin_expect(!tiered_hash_cache && !thc_deferred_allocation_eligible, 0)) {
+		if (UseSalt()) {
+			GetRowPointersInternal<true>(keys, key_state, state, hashes_v, sel, count, *this, entries,
+			                             pointers_result_v, match_sel, has_sel);
+		} else {
+			GetRowPointersInternal<false>(keys, key_state, state, hashes_v, sel, count, *this, entries,
+			                              pointers_result_v, match_sel, has_sel);
+		}
+		return;
+	}
+
 	// Cross-thread abandon-cascade: if any peer thread on this JoinHashTable
 	// has already concluded the THC isn't helping, flip this thread to
 	// abandoned and skip THC participation for the rest of the join.  Done
@@ -1038,6 +1061,51 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		// Track collection overhead
 		state.probe_rows_in_phase += input_count;
 		state.total_collect_phase_rows += input_count;
+
+		// ----------------------------------------------------------
+		// Mid-COLLECT early-abandon checkpoint.
+		//
+		// After MID_COLLECT_CHECKPOINT_ROWS probe rows, evaluate the running
+		// match rate: collected_entries.size() / probe_rows_in_phase.  Below
+		// MID_COLLECT_MATCH_RATE_THRESHOLD (5%) the probe-key space has
+		// essentially zero overlap with the build-key space and the THC can
+		// never provide useful hits — abandon now instead of paying the rest
+		// of COLLECT plus the first READ_ONLY warmup (~60k rows total in the
+		// default config).  Decision-log harvest on TPC-H Q04 and Q21 showed
+		// both stayed at 100% miss rate through the full COLLECT phase
+		// before abandoning at cycle-1; this catches them at row ~5k.
+		//
+		// Latched via state.collect_checkpoint_evaluated so the check fires
+		// once per COLLECT phase rather than per-chunk.  The flag is reset
+		// at every COLLECT-phase entry point further down.
+		// ----------------------------------------------------------
+		if (!state.collect_checkpoint_evaluated &&
+		    state.probe_rows_in_phase >= MID_COLLECT_CHECKPOINT_ROWS) {
+			state.collect_checkpoint_evaluated = true;
+			const double match_rate =
+			    state.probe_rows_in_phase > 0
+			        ? static_cast<double>(state.collected_entries.size()) /
+			              static_cast<double>(state.probe_rows_in_phase)
+			        : 0.0;
+			if (match_rate < MID_COLLECT_MATCH_RATE_THRESHOLD) {
+				DEBUG_LOG("[THC Mid-Collect Abandon] match_rate=%.4f (< %.2f) after %lu probe rows\n",
+				          match_rate, MID_COLLECT_MATCH_RATE_THRESHOLD,
+				          (unsigned long)state.probe_rows_in_phase);
+				state.thc_abandoned = true;
+				state.thc_collection_enabled = false;
+				state.collected_entries.clear();
+				// Propagate to peers via the shared cascade flag so multi-
+				// threaded probes can short-circuit on their next chunk.
+				thc_globally_abandoned.store(true, std::memory_order_relaxed);
+				// Attribution: standard EmitDecisionLogRow at teardown will
+				// emit this as `abandoned_high_miss` in the canonical CSV
+				// format.  Setting the reason here (not deferring to emit)
+				// ensures the label survives even if the thread does no
+				// further probing.
+				state.thc_decision_reason = ThcDecisionReason::AbandonedHighMiss;
+				return;
+			}
+		}
 
 		// ----------------------------------------------------------
 		// Check if this collect phase is complete.
@@ -1411,6 +1479,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	state.collected_entries.clear();
 	state.phase_time_ns = 0;
 	state.phase_probe_count = 0;
+	// Re-arm the mid-COLLECT checkpoint for this fresh phase.
+	state.collect_checkpoint_evaluated = false;
 }
 
 void JoinHashTable::Hash(DataChunk &keys, const SelectionVector &sel, idx_t count, Vector &hashes) {

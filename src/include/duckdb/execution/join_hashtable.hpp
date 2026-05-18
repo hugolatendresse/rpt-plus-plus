@@ -198,6 +198,21 @@ public:
 	//! (those typically have 80-94% miss rates).
 	static constexpr idx_t THC_ABANDON_CONSECUTIVE_MISSES = 1;
 
+	//! Number of probe rows after which we evaluate an early-abandon check
+	//! during the COLLECT phase.  If the running match rate (probe rows that
+	//! found at least one match in the bare HT) is below 5%, the probe-key
+	//! space has essentially zero overlap with the build-key space and the
+	//! THC can never help — so we bail out immediately rather than waiting
+	//! for the full COLLECT + first READ_ONLY warmup (~60k probes/thread).
+	//! 5 000 rows is enough to distinguish the catastrophic Q04/Q21 case
+	//! (100% miss rate) from normally-operating joins with high miss rates.
+	static constexpr idx_t MID_COLLECT_CHECKPOINT_ROWS = 5000;
+
+	//! Match-rate threshold for the mid-COLLECT early abandon.  At 5%, miss
+	//! rate is >= 95% — the same boundary the existing high-miss abandon
+	//! uses for cycle-1 evaluation, just applied earlier.
+	static constexpr double MID_COLLECT_MATCH_RATE_THRESHOLD = 0.05;
+
 	struct CollectedEntry {
 		hash_t hash;
 		const_data_ptr_t row_ptr;
@@ -358,6 +373,12 @@ public:
 		//! We only collect (and populate) the THC is this is true. By default it is true,
 		//! and the algorithm can set to false if we don't want to collect/populate anymore.  
 		bool thc_collection_enabled = true;
+
+		//! True once the mid-COLLECT checkpoint has been evaluated for the
+		//! current collect phase.  Latches after the first evaluation so the
+		//! check fires only once per phase even across multiple input chunks.
+		//! Reset to false when entering a new COLLECT phase.
+		bool collect_checkpoint_evaluated = false;
 
 		//! --- Scratch space for collecting THC-miss matches during collect phase (cycle > 0) ---
 		//! After ProbeTHCAndFallback runs, these record which miss-fallback rows actually
