@@ -1199,6 +1199,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				state.phase_time_ns = 0;
 				state.phase_probe_count = 0;
 				state.completed_collect_cycles++;
+				// Re-arm the mid-READ_ONLY checkpoint for the new phase.
+				state.read_only_checkpoint_evaluated = false;
 
 				// If we collected any chain samples during cycle 0, log the probe-sampled mu_s now
 				if ((thc_mu_s_method == "probe_sample" || thc_mu_s_method == "all") &&
@@ -1260,6 +1262,45 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	state.read_only_rows_processed += input_count;
 
 	// ----------------------------------------------------------
+	// Mid-READ_ONLY early-abandon checkpoint.
+	//
+	// Symmetric to the mid-COLLECT checkpoint: once we've seen at least
+	// MID_READ_ONLY_CHECKPOINT_ROWS (2k) probe rows in this READ_ONLY
+	// segment, evaluate the running miss rate.  If every probe missed the
+	// cache (rate >= 1.0), the cache contents have no useful overlap with
+	// the probe key distribution and the THC is dead weight for the rest
+	// of the join.  Abandon now instead of waiting for the full READ_ONLY
+	// target (~10k) plus end-of-phase cost rule.
+	//
+	// Catches the Q04-second-join class: matches DID exist during COLLECT
+	// (mid-COLLECT match_rate stayed above threshold) but the cached keys
+	// don't intersect the subsequent probe stream — common when the probe
+	// table's distribution differs from the build sample we got during
+	// COLLECT.  Decision-log harvest showed both Q04 joins firing at this
+	// pattern.
+	//
+	// Latched via state.read_only_checkpoint_evaluated; re-armed at every
+	// READ_ONLY entry transition.
+	// ----------------------------------------------------------
+	if (!state.read_only_checkpoint_evaluated &&
+	    state.read_only_rows_processed >= MID_READ_ONLY_CHECKPOINT_ROWS &&
+	    state.ro_total_count > 0) {
+		state.read_only_checkpoint_evaluated = true;
+		const double mid_ro_miss_rate =
+		    static_cast<double>(state.ro_miss_count) / static_cast<double>(state.ro_total_count);
+		if (mid_ro_miss_rate >= MID_READ_ONLY_MISS_RATE_THRESHOLD) {
+			DEBUG_LOG("[THC Mid-READ_ONLY Abandon] miss_rate=%.4f (>= %.2f) after %lu probe rows\n",
+			          mid_ro_miss_rate, MID_READ_ONLY_MISS_RATE_THRESHOLD,
+			          (unsigned long)state.read_only_rows_processed);
+			state.thc_abandoned = true;
+			state.thc_collection_enabled = false;
+			thc_globally_abandoned.store(true, std::memory_order_relaxed);
+			state.thc_decision_reason = ThcDecisionReason::AbandonedHighMiss;
+			return;
+		}
+	}
+
+	// ----------------------------------------------------------
 	// Checkpoint: decide whether to enter COLLECT or keep reading.
 	// This happens when we've processed enough rows in this
 	// READ_ONLY segment (the target grows exponentially).
@@ -1315,10 +1356,22 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				return;
 			}
 
-			// Estimate the % of rows that are hot on build side
-			// % hot = (U1 * u_s) / (|S| * (1-pmiss))
-			double estimated_perc_hot = (static_cast<double>(state.first_collect_new_entries) * mu_s_build_estimate) /
+			// Estimate the fraction of build-side rows that are "hot" (likely
+			// to receive repeat probes).  Algebraically:
+			//
+			//   raw_perc_hot = (U1 × mu_s_build) / (|S| × (1 - miss_rate))
+			//                = U1 / (|unique_keys| × (1 - miss_rate))
+			//
+			// The (1 - miss_rate) divisor means the raw estimator can exceed
+			// 1.0 when the cache fills meaningfully (high U1) but the probe
+			// distribution misses most cached entries (high miss_rate).
+			// TPC-H Q09 decision-log captured perc_hot = 1.013 with
+			// miss_rate = 0.64.  Clamp to [0, 1] for sane threshold
+			// comparisons and consistent first_cycle_perc_hot values in the
+			// decision log.
+			const double raw_perc_hot = (static_cast<double>(state.first_collect_new_entries) * mu_s_build_estimate) /
 			                            (static_cast<double>(Count()) * (1.0 - miss_rate));
+			const double estimated_perc_hot = MinValue<double>(1.0, MaxValue<double>(0.0, raw_perc_hot));
 			state.first_cycle_perc_hot = estimated_perc_hot;
 
 			if (estimated_perc_hot > thc_max_estimated_perc_hot) {
@@ -1470,6 +1523,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 		state.read_only_rows_processed = 0;
 		state.ro_miss_count = 0;
 		state.ro_total_count = 0;
+		// Re-arm the mid-READ_ONLY checkpoint for the next phase.
+		state.read_only_checkpoint_evaluated = false;
 		return;
 	}
 

@@ -213,6 +213,20 @@ public:
 	//! uses for cycle-1 evaluation, just applied earlier.
 	static constexpr double MID_COLLECT_MATCH_RATE_THRESHOLD = 0.05;
 
+	//! Mid-READ_ONLY counterpart to MID_COLLECT_CHECKPOINT_ROWS.  Catches the
+	//! pattern where the cache fills meaningfully during COLLECT (so the
+	//! mid-COLLECT check doesn't fire) but then every probe misses in
+	//! READ_ONLY — the probe distribution shifted away from what got
+	//! cached.  Smaller threshold than COLLECT because READ_ONLY is shorter
+	//! by default (10k rows vs 50k) and we don't need a long sample window
+	//! to detect 100% miss rate.
+	static constexpr idx_t MID_READ_ONLY_CHECKPOINT_ROWS = 2000;
+
+	//! Miss-rate threshold for the mid-READ_ONLY abandon.  Same 100% bar as
+	//! the existing THC_ABANDON_MISS_THRESHOLD that fires at end-of-phase;
+	//! the mid-phase variant just catches it ~8k probes earlier per thread.
+	static constexpr double MID_READ_ONLY_MISS_RATE_THRESHOLD = 1.00;
+
 	struct CollectedEntry {
 		hash_t hash;
 		const_data_ptr_t row_ptr;
@@ -379,6 +393,11 @@ public:
 		//! check fires only once per phase even across multiple input chunks.
 		//! Reset to false when entering a new COLLECT phase.
 		bool collect_checkpoint_evaluated = false;
+
+		//! Mid-READ_ONLY counterpart of collect_checkpoint_evaluated.  Latches
+		//! after the first mid-phase miss-rate evaluation; re-armed at every
+		//! READ_ONLY entry transition.
+		bool read_only_checkpoint_evaluated = false;
 
 		//! --- Scratch space for collecting THC-miss matches during collect phase (cycle > 0) ---
 		//! After ProbeTHCAndFallback runs, these record which miss-fallback rows actually
