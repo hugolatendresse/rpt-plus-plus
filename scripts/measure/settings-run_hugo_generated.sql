@@ -8,3 +8,4 @@ SET disabled_optimizers = 'statistics_propagation';
 
 -- Don't stop early due to small cross multiplicity or high hotness
 SET thc_enable_first_cycle_check = false;
+SET thc_warmup_cycles = 1000000;
