@@ -766,6 +766,18 @@ struct ThcMissAbandonThresholdSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct ThcAbandonConsecutiveMissesSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "thc_abandon_consecutive_misses";
+	static constexpr const char *Description =
+	    "Consecutive checkpoints with miss rate above thc_miss_above_which_abandon required to abandon THC "
+	    "(default: 1)";
+	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct ThcActivationThresholdSetting {
 	using RETURN_TYPE = int64_t;
 	static constexpr const char *Name = "thc_activation_threshold";

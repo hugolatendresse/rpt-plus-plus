@@ -167,7 +167,7 @@ public:
 		LowCrossMultiplicity,    // first-cycle mu_{S->R} below thc_min_estimated_mu_s_to_r
 		HighHotness,        // first-cycle estimated_perc_hot above thc_max_estimated_perc_hot
 		THCTooSmallForBuildSide,   // THC capacity insufficient to cover thc_min_coverage_of_build_side hot entries
-		HighMissRate,       // miss rate stayed > thc_miss_above_which_abandon for THC_ABANDON_CONSECUTIVE_MISSES checkpoints
+		HighMissRate,       // miss rate stayed > thc_miss_above_which_abandon for thc_abandon_consecutive_misses checkpoints
 		THCIncreasesProbeCost            // cost-based decision rule: delta_t >= 0 (THC made probes slower)
 	};
 
@@ -213,30 +213,6 @@ public:
 	}
 
 // TODO most items below should be config params. Some might already be duplicates of config params
-
-	//! Number of probe-side rows each thread processes during a single collect phase.
-	//! Each collect phase has a fixed row budget. The number of collect phases is
-	//! controlled by the adaptive logic so that the row count across all collect phases
-	//! stays within thc_collect_budget_fraction of total probe rows.
-	static constexpr idx_t COLLECT_PHASE_PROBE_ROWS = 200000;
-
-	//! Initial length of the first READ_ONLY segment (in probe rows).
-	//! Subsequent READ_ONLY segments double in length (exponential backoff)
-	//! so that collection overhead decreases over time.
-	static constexpr idx_t READ_ONLY_BASE_ROWS = COLLECT_PHASE_PROBE_ROWS;
-
-	//! Default maximum fraction of total probe rows that may be spent in collect
-	//! phases. The runtime value is configurable per session through
-	//! `thc_collect_budget_fraction`.
-	static constexpr double DEFAULT_COLLECT_BUDGET_FRACTION = 0.02;
-
-	//! Set to 1 — abandon at the very first checkpoint where miss rate exceeds
-	//! the threshold. This minimises the overhead of the initial COLLECT +
-	//! READ_ONLY phases for joins where the THC is clearly too small.
-	//! A value of 1 (rather than 2) is safe because the 95% threshold already
-	//! provides sufficient margin for joins that truly benefit from the THC
-	//! (those typically have 80-94% miss rates).
-	static constexpr idx_t THC_ABANDON_CONSECUTIVE_MISSES = 1;
 
 	struct CollectedEntry {
 		hash_t hash;
@@ -692,6 +668,8 @@ private:
 	double thc_miss_below_which_skip_collect;
 	//! Miss rate threshold above which THC is abandoned.
 	double thc_miss_above_which_abandon;
+	//! Consecutive high-miss checkpoints required before abandoning THC.
+	idx_t thc_abandon_consecutive_misses;
 	//! Minimum HT capacity to activate the THC.
 	idx_t thc_activation_threshold;
 	//! Maximum THC load factor; inserts stop beyond this fill ratio.

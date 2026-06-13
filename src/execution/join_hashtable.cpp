@@ -51,7 +51,7 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
     : context(context_p), buffer_manager(BufferManager::GetBufferManager(context)), conditions(conditions_p),
       build_types(std::move(btypes)), output_columns(output_columns_p), entry_size(0), tuple_size(0),
       vfound(Value::BOOLEAN(false)), join_type(type_p), finalized(false), has_null(false),
-      radix_bits(INITIAL_RADIX_BITS), estimated_probe_side_rows(estimated_probe_side_rows_p) {
+      estimated_probe_side_rows(estimated_probe_side_rows_p), radix_bits(INITIAL_RADIX_BITS) {
 	// Load THC parameters from the client configuration.
 	// These are per-session settings that control THC sizing and adaptive behaviour
 	// so that users can tune them via SQL SET commands without recompiling.
@@ -62,6 +62,7 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
 	thc_collect_budget_fraction = config.thc_collect_budget_fraction;
 	thc_miss_below_which_skip_collect = config.thc_miss_below_which_skip_collect;
 	thc_miss_above_which_abandon = config.thc_miss_above_which_abandon;
+	thc_abandon_consecutive_misses = config.thc_abandon_consecutive_misses;
 	thc_activation_threshold = config.thc_activation_threshold;
 	thc_max_load_factor = config.thc_max_load_factor;
 	thc_min_estimated_mu_s_to_r = config.thc_min_estimated_mu_s_to_r;
@@ -635,8 +636,7 @@ void JoinHashTable::ProbeTHCAndFallback(DataChunk &keys, TupleDataChunkState &ke
 		// during COLLECT phase (cycle > 0) where the caller will consume them
 		// to insert new entries into the THC. In READ_ONLY phase this work
 		// is wasted — the data is never read.
-		D_ASSERT(global_thc_state &&
-		         global_thc_state->completed_collect_cycles.load(std::memory_order_relaxed) > 0);
+		D_ASSERT(global_thc_state && global_thc_state->completed_collect_cycles.load(std::memory_order_relaxed) > 0);
 		// We need to know whether the current call is from a COLLECT-phase
 		// caller (in which case we must populate thc_miss_match_sel for the
 		// caller to consume) or a READ_ONLY caller (in which case populating
@@ -787,8 +787,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			                              pointers_result_v, match_sel, has_sel);
 		}
 		const auto phase_t1 = std::chrono::steady_clock::now();
-		const auto delta_ns = static_cast<uint64_t>(
-		    std::chrono::duration_cast<std::chrono::nanoseconds>(phase_t1 - phase_t0).count());
+		const auto delta_ns =
+		    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(phase_t1 - phase_t0).count());
 		auto &m = g.phase_metrics[state.observed_phase_number % g.MAX_PHASES];
 		m.time_ns.fetch_add(delta_ns, std::memory_order_relaxed);
 		const idx_t new_probe_count = m.probe_count.fetch_add(input_count, std::memory_order_relaxed) + input_count;
@@ -802,9 +802,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 				auto &b = g.phase_metrics[state.observed_phase_number % g.MAX_PHASES];
 				const auto baseline_time = b.time_ns.load(std::memory_order_relaxed);
 				const auto baseline_count = b.probe_count.load(std::memory_order_relaxed);
-				g.c_main = baseline_count > 0
-				               ? static_cast<double>(baseline_time) / static_cast<double>(baseline_count)
-				               : 0.0;
+				g.c_main =
+				    baseline_count > 0 ? static_cast<double>(baseline_time) / static_cast<double>(baseline_count) : 0.0;
 				DEBUG_LOG("[BASELINE->COLLECT] c_main=%.2f ns/probe, phase_probes=%lu\n", g.c_main,
 				          (unsigned long)baseline_count);
 				const idx_t new_phase = g.phase_number.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -987,8 +986,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 			    g.phase.load(std::memory_order_relaxed) == TieredHashCachePhase::COLLECT) {
 				if (thc_first_read_only_phase_rows > 0) {
 					g.read_only_rows_target.store(thc_first_read_only_phase_rows, std::memory_order_relaxed);
-					const idx_t completed_now =
-					    g.completed_collect_cycles.fetch_add(1, std::memory_order_relaxed) + 1;
+					const idx_t completed_now = g.completed_collect_cycles.fetch_add(1, std::memory_order_relaxed) + 1;
 					// Advance phase_number to the new RO phase. Clear the
 					// array if we just wrapped past MAX_PHASES.
 					const idx_t new_phase_number = g.phase_number.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -1010,8 +1008,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 
 					// If cycle 0 just ended and probe-sample mu_s was enabled,
 					// log the global estimate.
-					if (completed_now == 1 &&
-					    (thc_mu_s_method == "probe_sample" || thc_mu_s_method == "all") &&
+					if (completed_now == 1 && (thc_mu_s_method == "probe_sample" || thc_mu_s_method == "all") &&
 					    g.mu_s_chain_count.load(std::memory_order_relaxed) > 0 && thc_log_mu_s) {
 						const double mu_s_probe_estimate =
 						    static_cast<double>(g.mu_s_chain_length_sum.load(std::memory_order_relaxed)) /
@@ -1088,32 +1085,27 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// ----- Snapshot this RO phase's metrics. -----
 	const auto eval_total_ns = ro_slot.time_ns.load(std::memory_order_relaxed);
 	const auto eval_total_count = ro_slot.probe_count.load(std::memory_order_relaxed);
-	const double c_eval_current = eval_total_count > 0
-	                                   ? static_cast<double>(eval_total_ns) / static_cast<double>(eval_total_count)
-	                                   : 0.0;
+	const double c_eval_current =
+	    eval_total_count > 0 ? static_cast<double>(eval_total_ns) / static_cast<double>(eval_total_count) : 0.0;
 	// ----- Snapshot c_grow from the COLLECT phase that fed this RO. -----
 	auto &collect_slot = g.phase_metrics[g.current_collect_phase_number % g.MAX_PHASES];
 	const auto collect_total_ns = collect_slot.time_ns.load(std::memory_order_relaxed);
 	const auto collect_total_count = collect_slot.probe_count.load(std::memory_order_relaxed);
 	const double c_grow_current = collect_total_count > 0
-	                                   ? static_cast<double>(collect_total_ns) /
-	                                         static_cast<double>(collect_total_count)
-	                                   : 0.0;
+	                                  ? static_cast<double>(collect_total_ns) / static_cast<double>(collect_total_count)
+	                                  : 0.0;
 	// ----- Snapshot c_eval_prev from the previous RO segment's slot. -----
 	double c_eval_prev = 0.0;
 	if (g.prev_eval_phase_number > 0) {
 		auto &prev_slot = g.phase_metrics[g.prev_eval_phase_number % g.MAX_PHASES];
 		const auto prev_ns = prev_slot.time_ns.load(std::memory_order_relaxed);
 		const auto prev_count = prev_slot.probe_count.load(std::memory_order_relaxed);
-		c_eval_prev = prev_count > 0
-		                  ? static_cast<double>(prev_ns) / static_cast<double>(prev_count)
-		                  : 0.0;
+		c_eval_prev = prev_count > 0 ? static_cast<double>(prev_ns) / static_cast<double>(prev_count) : 0.0;
 	}
 
 	const auto ro_total = ro_slot.probe_count.load(std::memory_order_relaxed);
 	const auto ro_miss = ro_slot.miss_count.load(std::memory_order_relaxed);
-	const double miss_rate =
-	    ro_total > 0 ? static_cast<double>(ro_miss) / static_cast<double>(ro_total) : 0.0;
+	const double miss_rate = ro_total > 0 ? static_cast<double>(ro_miss) / static_cast<double>(ro_total) : 0.0;
 
 	// ----- One-shot first-cycle multiplicity / hotness / coverage check. -----
 	const idx_t cycles_done = g.completed_collect_cycles.load(std::memory_order_relaxed);
@@ -1142,15 +1134,14 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 
 			// Estimate the % of rows that are hot on build side
 			// % hot = (U1 * u_s) / (|S| * (1−pmiss))
-			const double estimated_perc_hot = (static_cast<double>(U1) * mu_s_build_estimate) /
-			                                  (static_cast<double>(Count()) * (1.0 - miss_rate));
+			const double estimated_perc_hot =
+			    (static_cast<double>(U1) * mu_s_build_estimate) / (static_cast<double>(Count()) * (1.0 - miss_rate));
 			if (estimated_perc_hot > thc_max_estimated_perc_hot) {
 				DEBUG_LOG("[THC High-Hotness Bypass]: Estimated Hotness is %.2f -> abandoning THC globally\n",
 				          estimated_perc_hot);
 				g.probes_at_abandon.store(g.total_probe_rows.load(std::memory_order_relaxed),
 				                          std::memory_order_relaxed);
-				g.abandon_reason.store(static_cast<uint8_t>(THCAbandonReason::HighHotness),
-				                       std::memory_order_relaxed);
+				g.abandon_reason.store(static_cast<uint8_t>(THCAbandonReason::HighHotness), std::memory_order_relaxed);
 				g.collection_enabled.store(false, std::memory_order_relaxed);
 				g.abandoned.store(true, std::memory_order_release);
 				return;
@@ -1178,9 +1169,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// ----- Budget guard for the next COLLECT phase. -----
 	const idx_t total_collect = g.total_collect_phase_rows.load(std::memory_order_relaxed);
 	const idx_t total_probe = g.total_probe_rows.load(std::memory_order_relaxed);
-	const bool budget_ok =
-	    (total_collect + thc_collect_phase_rows) <=
-	    static_cast<idx_t>(static_cast<double>(total_probe) * thc_collect_budget_fraction);
+	const bool budget_ok = (total_collect + thc_collect_phase_rows) <=
+	                       static_cast<idx_t>(static_cast<double>(total_probe) * thc_collect_budget_fraction);
 	const bool can_collect = g.collection_enabled.load(std::memory_order_relaxed) &&
 	                         (miss_rate >= thc_miss_below_which_skip_collect) && budget_ok;
 
@@ -1212,14 +1202,12 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	// ----- High-miss abandonment. -----
 	if (miss_rate > thc_miss_above_which_abandon) {
 		const idx_t streak = g.consecutive_high_miss_checkpoints.fetch_add(1, std::memory_order_relaxed) + 1;
-		if (streak >= THC_ABANDON_CONSECUTIVE_MISSES) {
+		if (streak >= thc_abandon_consecutive_misses) {
 			DEBUG_LOG("[THC Abandon] global abandon after %lu consecutive high-miss checkpoints "
 			          "(miss_rate=%.2f%%)\n",
 			          (unsigned long)streak, miss_rate * 100.0);
-			g.probes_at_abandon.store(g.total_probe_rows.load(std::memory_order_relaxed),
-			                          std::memory_order_relaxed);
-			g.abandon_reason.store(static_cast<uint8_t>(THCAbandonReason::HighMissRate),
-			                       std::memory_order_relaxed);
+			g.probes_at_abandon.store(g.total_probe_rows.load(std::memory_order_relaxed), std::memory_order_relaxed);
+			g.abandon_reason.store(static_cast<uint8_t>(THCAbandonReason::HighMissRate), std::memory_order_relaxed);
 			g.abandoned.store(true, std::memory_order_release);
 			return;
 		}
@@ -1311,36 +1299,33 @@ void JoinHashTable::FlushCollectedEntriesIntoTHC(ProbeState &state, GlobalTHCAda
 	const auto t0 = std::chrono::steady_clock::now();
 	idx_t new_entries_this_phase;
 	if (thc_single_threaded) {
-		new_entries_this_phase = tiered_hash_cache->InsertBatch<true>(state.collected_entries.data(),
-		                                                              state.collected_entries.size());
+		new_entries_this_phase =
+		    tiered_hash_cache->InsertBatch<true>(state.collected_entries.data(), state.collected_entries.size());
 	} else {
-		new_entries_this_phase = tiered_hash_cache->InsertBatch<false>(state.collected_entries.data(),
-		                                                               state.collected_entries.size());
+		new_entries_this_phase =
+		    tiered_hash_cache->InsertBatch<false>(state.collected_entries.data(), state.collected_entries.size());
 	}
 	const auto t1 = std::chrono::steady_clock::now();
-	const auto delta_ns =
-	    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+	const auto delta_ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
 	// Credit InsertBatch time to the COLLECT phase this buffer was
 	// collected during, indexed by the per-thread `observed_phase_number`
 	// captured at the START of that COLLECT-phase call. Late arrivals
 	// after the leader's RO-checkpoint snapshot of c_grow are harmless —
 	// they accumulate in the just-ended phase's own slot, never
 	// contaminate any other phase.
-	g.phase_metrics[state.observed_phase_number % g.MAX_PHASES].time_ns.fetch_add(delta_ns,
-	                                                                              std::memory_order_relaxed);
+	g.phase_metrics[state.observed_phase_number % g.MAX_PHASES].time_ns.fetch_add(delta_ns, std::memory_order_relaxed);
 
 	if (tiered_hash_cache->IsFull()) {
 		DEBUG_LOG("THC has reached desired load factor - global freeze (THC-Full).\n");
 		// First thread to observe THC-full wins the freeze_reason CAS.
 		uint8_t expected_none = static_cast<uint8_t>(THCFreezeReason::None);
 		g.freeze_reason.compare_exchange_strong(expected_none, static_cast<uint8_t>(THCFreezeReason::THCFull),
-		                                         std::memory_order_relaxed);
+		                                        std::memory_order_relaxed);
 		// probes_at_freeze: take the max across observers (multiple threads
 		// may detect IsFull at slightly different probe counts).
 		const idx_t snapshot = g.total_probe_rows.load(std::memory_order_relaxed);
 		idx_t cur = g.probes_at_freeze.load(std::memory_order_relaxed);
-		while (snapshot > cur &&
-		       !g.probes_at_freeze.compare_exchange_weak(cur, snapshot, std::memory_order_relaxed)) {
+		while (snapshot > cur && !g.probes_at_freeze.compare_exchange_weak(cur, snapshot, std::memory_order_relaxed)) {
 		}
 		g.collection_enabled.store(false, std::memory_order_release);
 	}
@@ -1358,8 +1343,7 @@ void JoinHashTable::FlushCollectedEntriesIntoTHC(ProbeState &state, GlobalTHCAda
 
 	DEBUG_LOG("[Flush] phase=%lu, buffered=%lu, new_entries=%lu, total_new=%lu, fill=%lu/%lu\n",
 	          (unsigned long)state.observed_phase_number, (unsigned long)state.collected_entries.size(),
-	          (unsigned long)new_entries_this_phase,
-	          (unsigned long)g.total_new_entries.load(std::memory_order_relaxed),
+	          (unsigned long)new_entries_this_phase, (unsigned long)g.total_new_entries.load(std::memory_order_relaxed),
 	          (unsigned long)tiered_hash_cache->new_inserts_count.load(),
 	          (unsigned long)tiered_hash_cache->GetCapacity());
 
@@ -1753,7 +1737,8 @@ void JoinHashTable::AllocatePointerTable() {
 	                "//////////////////////\n");
 	fprintf(stderr, "//////////////////////////////////////////////////////////////////////////////////////////////////"
 	                "//////////////////////\n");
-	fprintf(stderr, "////////////////////   STARTING A NEW HASH JOIN BETWEEN %s AND %s   ///////////////////////////////\n",
+	fprintf(stderr,
+	        "////////////////////   STARTING A NEW HASH JOIN BETWEEN %s AND %s   ///////////////////////////////\n",
 	        probe_table_name.empty() ? "?" : probe_table_name.c_str(),
 	        build_table_name.empty() ? "?" : build_table_name.c_str());
 	fprintf(stderr, "//////////////////////////////////////////////////////////////////////////////////////////////////"

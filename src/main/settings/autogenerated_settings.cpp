@@ -842,6 +842,23 @@ Value ThcMissAbandonThresholdSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// THC Abandon Consecutive Misses
+//===----------------------------------------------------------------------===//
+void ThcAbandonConsecutiveMissesSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_abandon_consecutive_misses = static_cast<idx_t>(input.GetValue<int64_t>());
+}
+
+void ThcAbandonConsecutiveMissesSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_abandon_consecutive_misses = ClientConfig().thc_abandon_consecutive_misses;
+}
+
+Value ThcAbandonConsecutiveMissesSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BIGINT(static_cast<int64_t>(config.thc_abandon_consecutive_misses));
+}
+
+//===----------------------------------------------------------------------===//
 // THC Activation Threshold
 //===----------------------------------------------------------------------===//
 void ThcActivationThresholdSetting::SetLocal(ClientContext &context, const Value &input) {
