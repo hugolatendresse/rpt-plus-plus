@@ -825,6 +825,23 @@ Value ThcMissThresholdSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// THC Miss Abandon Threshold
+//===----------------------------------------------------------------------===//
+void ThcMissAbandonThresholdSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_miss_above_which_abandon = input.GetValue<double>();
+}
+
+void ThcMissAbandonThresholdSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_miss_above_which_abandon = ClientConfig().thc_miss_above_which_abandon;
+}
+
+Value ThcMissAbandonThresholdSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::DOUBLE(config.thc_miss_above_which_abandon);
+}
+
+//===----------------------------------------------------------------------===//
 // THC Activation Threshold
 //===----------------------------------------------------------------------===//
 void ThcActivationThresholdSetting::SetLocal(ClientContext &context, const Value &input) {

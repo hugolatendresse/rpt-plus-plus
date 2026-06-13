@@ -61,6 +61,7 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
 	thc_first_read_only_phase_rows = config.thc_first_read_only_phase_rows;
 	thc_collect_budget_fraction = config.thc_collect_budget_fraction;
 	thc_miss_below_which_skip_collect = config.thc_miss_below_which_skip_collect;
+	thc_miss_above_which_abandon = config.thc_miss_above_which_abandon;
 	thc_activation_threshold = config.thc_activation_threshold;
 	thc_max_load_factor = config.thc_max_load_factor;
 	thc_min_estimated_mu_s_to_r = config.thc_min_estimated_mu_s_to_r;
@@ -1209,7 +1210,7 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 	g.prev_eval_phase_number = state.observed_phase_number;
 
 	// ----- High-miss abandonment. -----
-	if (miss_rate >= THC_ABANDON_MISS_THRESHOLD) {
+	if (miss_rate > thc_miss_above_which_abandon) {
 		const idx_t streak = g.consecutive_high_miss_checkpoints.fetch_add(1, std::memory_order_relaxed) + 1;
 		if (streak >= THC_ABANDON_CONSECUTIVE_MISSES) {
 			DEBUG_LOG("[THC Abandon] global abandon after %lu consecutive high-miss checkpoints "

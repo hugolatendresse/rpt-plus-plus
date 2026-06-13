@@ -167,7 +167,7 @@ public:
 		LowCrossMultiplicity,    // first-cycle mu_{S->R} below thc_min_estimated_mu_s_to_r
 		HighHotness,        // first-cycle estimated_perc_hot above thc_max_estimated_perc_hot
 		THCTooSmallForBuildSide,   // THC capacity insufficient to cover thc_min_coverage_of_build_side hot entries
-		HighMissRate,       // miss rate stayed >= THC_ABANDON_MISS_THRESHOLD for THC_ABANDON_CONSECUTIVE_MISSES checkpoints
+		HighMissRate,       // miss rate stayed > thc_miss_above_which_abandon for THC_ABANDON_CONSECUTIVE_MISSES checkpoints
 		THCIncreasesProbeCost            // cost-based decision rule: delta_t >= 0 (THC made probes slower)
 	};
 
@@ -230,20 +230,6 @@ public:
 	//! `thc_collect_budget_fraction`.
 	static constexpr double DEFAULT_COLLECT_BUDGET_FRACTION = 0.02;
 
-	//! If the THC miss rate during a READ_ONLY phase is below this threshold,
-	//! we skip the next collect phase. The THC is already serving most probe
-	//! rows effectively and refreshing it would waste CPU time.
-	static constexpr double THC_MISS_SKIP_THRESHOLD = 0.10;
-
-	//! If the miss rate is above this threshold, the THC is clearly not
-	//! helping and we count it toward abandonment. Once we see this many
-	//! consecutive high-miss checkpoints, the thread permanently stops
-	//! probing the THC.
-	//! Set to 95% — the THC can still save net time even at 90%+ miss rates
-	//! because each hit completely avoids data_collection access (expensive
-	//! LLC misses). Only abandon when nearly every probe misses.
-	//! 1.00 means 100% (only abandon if all misses)
-	static constexpr double THC_ABANDON_MISS_THRESHOLD = 1.00;
 	//! Set to 1 — abandon at the very first checkpoint where miss rate exceeds
 	//! the threshold. This minimises the overhead of the initial COLLECT +
 	//! READ_ONLY phases for joins where the THC is clearly too small.
@@ -704,6 +690,8 @@ private:
 	double thc_collect_budget_fraction;
 	//! Miss rate threshold for skipping collect phases.
 	double thc_miss_below_which_skip_collect;
+	//! Miss rate threshold above which THC is abandoned.
+	double thc_miss_above_which_abandon;
 	//! Minimum HT capacity to activate the THC.
 	idx_t thc_activation_threshold;
 	//! Maximum THC load factor; inserts stop beyond this fill ratio.

@@ -166,6 +166,9 @@ struct ClientConfig {
 	//! THC miss rate threshold (0.0–1.0). If the miss rate in a READ_ONLY
 	//! segment is below this, we skip the next collect phase.
 	double thc_miss_below_which_skip_collect = 0.10;
+	//! THC miss rate threshold (0.0–1.0). If the miss rate in a READ_ONLY
+	//! segment is strictly above this value, THC is abandoned.
+	double thc_miss_above_which_abandon = 1.00;
 	//! Minimum HT capacity (in entries) to activate the THC.
 	//! Hash tables smaller than this are assumed to fit in L3 naturally.
 	idx_t thc_activation_threshold = 10ULL * 1024 * 1024 / sizeof(uint64_t);
