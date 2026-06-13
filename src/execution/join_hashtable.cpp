@@ -66,6 +66,7 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
 	thc_min_estimated_mu_s_to_r = config.thc_min_estimated_mu_s_to_r;
 	thc_max_estimated_perc_hot = config.thc_max_estimated_perc_hot;
 	thc_min_coverage_of_build_side = config.thc_min_coverage_of_build_side;
+	thc_enable_first_cycle_check = config.thc_enable_first_cycle_check;
 	thc_warmup_cycles = config.thc_warmup_cycles;
 	// mu_s estimation controls (per-session)
 	thc_mu_s_method = config.thc_mu_s_method;
@@ -1115,7 +1116,8 @@ void JoinHashTable::GetRowPointers(DataChunk &keys, TupleDataChunkState &key_sta
 
 	// ----- One-shot first-cycle multiplicity / hotness / coverage check. -----
 	const idx_t cycles_done = g.completed_collect_cycles.load(std::memory_order_relaxed);
-	if (!g.first_cycle_multiplicity_checked.load(std::memory_order_relaxed) && cycles_done == 1) {
+	if (thc_enable_first_cycle_check && !g.first_cycle_multiplicity_checked.load(std::memory_order_relaxed) &&
+	    cycles_done == 1) {
 		g.first_cycle_multiplicity_checked.store(true, std::memory_order_relaxed);
 		const idx_t U1 = g.first_collect_new_entries.load(std::memory_order_relaxed);
 		if (U1 > 0) {

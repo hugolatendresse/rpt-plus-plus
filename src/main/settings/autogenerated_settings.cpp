@@ -944,6 +944,23 @@ Value ThcMinCoverageOfBuildSideSetting::GetSetting(const ClientContext &context)
 }
 
 //===----------------------------------------------------------------------===//
+// THC Enable First Cycle Check
+//===----------------------------------------------------------------------===//
+void ThcEnableFirstCycleCheckSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_enable_first_cycle_check = input.GetValue<bool>();
+}
+
+void ThcEnableFirstCycleCheckSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_enable_first_cycle_check = ClientConfig().thc_enable_first_cycle_check;
+}
+
+Value ThcEnableFirstCycleCheckSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.thc_enable_first_cycle_check);
+}
+
+//===----------------------------------------------------------------------===//
 // THC Warmup Cycles
 //===----------------------------------------------------------------------===//
 void ThcWarmupCyclesSetting::SetLocal(ClientContext &context, const Value &input) {

@@ -829,6 +829,17 @@ struct ThcMinCoverageOfBuildSideSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct ThcEnableFirstCycleCheckSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "thc_enable_first_cycle_check";
+	static constexpr const char *Description =
+	    "Enable one-time first-cycle multiplicity/hotness/coverage THC abandon check (default: true)";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct ThcWarmupCyclesSetting {
 	using RETURN_TYPE = int64_t;
 	static constexpr const char *Name = "thc_warmup_cycles";

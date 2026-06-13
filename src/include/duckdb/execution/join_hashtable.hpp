@@ -712,6 +712,8 @@ private:
 	double thc_max_estimated_perc_hot;
 	//! Minimum coverage factor: THC is abandoned when thc_size_needed * this > thc_size.
 	double thc_min_coverage_of_build_side;
+	//! Toggle for the one-shot first-cycle multiplicity/hotness/coverage abandon check.
+	bool thc_enable_first_cycle_check;
 	//! Number of COLLECT+EVAL cycles that must complete before the cost-based
 	//! decision rule (drop/freeze/continue) activates. During warmup, every
 	//! evaluation checkpoint unconditionally proceeds to the next COLLECT phase.
