@@ -23,7 +23,18 @@ if [[ -n "$RUN_SETTINGS_SQL" ]] && [[ ! -f "$RUN_SETTINGS_SQL" ]]; then
     exit 1
 fi
 
-{
+drop_os_page_cache() {
+    if [[ "${DROP_OS_CACHE:-false}" != "true" ]]; then
+        return
+    fi
+    # A fresh DuckDB process clears DuckDB's own buffers, but the Linux page
+    # cache survives. Keep this opt-in because it requires sudo and affects the
+    # whole host.
+    echo "Dropping Linux page cache before DuckDB benchmark/profiling query..." >&2
+    sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+}
+
+emit_settings_sql() {
     grep '^SET ' "$COMMON_SETTINGS_SQL" || true
     if [[ -n "$RUN_SETTINGS_SQL" ]]; then
         grep '^SET ' "$RUN_SETTINGS_SQL" || true
@@ -31,6 +42,10 @@ fi
     if [[ -n "${CASE_SETTINGS:-}" ]]; then
         printf '%s\n' "${CASE_SETTINGS}"
     fi
+}
+
+emit_benchmark_sql() {
+    emit_settings_sql
     echo "CREATE OR REPLACE TEMP TABLE generator_counts AS SELECT * FROM generator_counts_persistent;"
     echo ".read ASH-datagen/query_${QUERY}.sql"
 
@@ -42,15 +57,25 @@ fi
     done
     echo ".timer off"
     echo "SET VARIABLE t_end = epoch_ms(now());"
+}
 
-    # If profiling was requested (via PROFILING_PRAGMAS env var), re-run the
-    # raw SELECT (not EXECUTE) so the profiling output captures the actual
-    # query text and plan rather than "EXECUTE benchmark_query;".
-    if [[ -n "${PROFILING_PRAGMAS:-}" ]]; then
-        printf '%s\n' "$PROFILING_PRAGMAS"
-        # Extract the SELECT body from the PREPARE statement in the query
-        # file (everything between "PREPARE ... AS" and the closing ";").
-        sed -n '/^PREPARE/,/;/{/^PREPARE/!p}' "ASH-datagen/query_${QUERY}.sql"
-        echo "PRAGMA enable_profiling = 'no_output';"
-    fi
-} | "$@"
+emit_profile_sql() {
+    emit_settings_sql
+    echo "CREATE OR REPLACE TEMP TABLE generator_counts AS SELECT * FROM generator_counts_persistent;"
+    echo ".output /dev/null"
+    printf '%s\n' "$PROFILING_PRAGMAS"
+    # Extract the SELECT body from the PREPARE statement in the query file
+    # (everything between "PREPARE ... AS" and the closing ";"). Profiling the
+    # raw SELECT keeps the JSON tied to the actual query text instead of
+    # "EXECUTE benchmark_query;".
+    sed -n '/^PREPARE/,/;/{/^PREPARE/!p}' "ASH-datagen/query_${QUERY}.sql"
+    echo "PRAGMA enable_profiling = 'no_output';"
+}
+
+drop_os_page_cache
+emit_benchmark_sql | "$@"
+
+if [[ -n "${PROFILING_PRAGMAS:-}" ]]; then
+    drop_os_page_cache
+    emit_profile_sql | "$@"
+fi

@@ -2,6 +2,29 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESULTS="$SCRIPT_DIR/results.txt"
+DROP_OS_CACHE=false
+
+usage() {
+  echo "Usage: scripts/measure/run_measurements.sh [--drop-os-cache]"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --drop-os-cache) DROP_OS_CACHE=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
+  esac
+done
+
+drop_os_page_cache() {
+  if ! $DROP_OS_CACHE; then
+    return
+  fi
+  # Linux page cache survives across DuckDB CLI processes. Keep cold-cache
+  # measurements explicit because this sudo operation affects the whole host.
+  echo "Dropping Linux page cache before measurement SQL file..." >&2
+  sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+}
 
 : > "$RESULTS"
 
@@ -19,6 +42,7 @@ SQL_FILES=(
 
 for base in "${SQL_FILES[@]}"; do
   echo "running ${base}"
+  drop_os_page_cache
   build/release/duckdb -f "$SCRIPT_DIR/${base}.sql"   # TODO uncomment
 done
 

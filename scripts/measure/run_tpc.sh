@@ -17,6 +17,7 @@ SEEDS_COUNT=""
 USE_PERF=false
 USE_DEBUG=false
 USE_DUCKDB_PROFILING=false
+DROP_OS_CACHE=false
 TIMEOUT_SECONDS=""
 COMMON_SETTINGS_SQL="scripts/measure/settings-common.sql"
 RUN_SETTINGS_SQL="scripts/measure/settings-run_tpc.sql"
@@ -46,6 +47,8 @@ Options:
                          under <out-dir>/profiling_<timestamp>/, plus an
                          augmented runtime CSV with per-join THC telemetry
                          columns Join1..JoinN (via thc_csv_postprocess.py).
+  --drop-os-cache        Run sync + drop Linux page cache before each measured
+                         DuckDB query. Requires sudo and affects the whole host.
   --timeout <seconds>    Per-query wall-clock cap; on timeout DuckDB is killed
                          and the run records a runtime of 9999999 in the CSV
   -h, --help             Show this help
@@ -73,6 +76,7 @@ while [[ $# -gt 0 ]]; do
         --perf) USE_PERF=true; shift ;;
         --debug) USE_DEBUG=true; shift ;;
         --duckdb-profiling) USE_DUCKDB_PROFILING=true; shift ;;
+        --drop-os-cache) DROP_OS_CACHE=true; shift ;;
         --timeout) TIMEOUT_SECONDS="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
@@ -208,6 +212,16 @@ build_sql() {
     printf '%s\n' "$query_stmt"
 }
 
+drop_os_page_cache() {
+    if ! $DROP_OS_CACHE; then
+        return
+    fi
+    # Linux page cache survives across DuckDB CLI processes. Keep cold-cache
+    # measurements explicit because this sudo operation affects the whole host.
+    echo "Dropping Linux page cache before measured DuckDB query..." >&2
+    sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+}
+
 # Runs one query under /usr/bin/time (optionally perf-wrapped, optionally under a
 # `timeout`). Sets the global RUNTIME to the measured seconds, or to 9999999 if
 # the query timed out. Aborts the whole sweep on any other failure.
@@ -223,6 +237,7 @@ run_timed_query() {
     local time_file rc
     time_file=$(mktemp)
     rc=0
+    drop_os_page_cache
     if $USE_PERF; then
         /usr/bin/time -f "%e" -o "$time_file" bash -c \
             'tt="$5"; if [[ -n "$tt" ]]; then printf "%s\n" "$1" | timeout -k 5 "$tt" sudo perf stat -e "$2" -- "$3" "$4" >/dev/null; else printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null; fi' \

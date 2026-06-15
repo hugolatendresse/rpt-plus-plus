@@ -9,6 +9,7 @@ set -euo pipefail
 PERF=false
 USE_DUCKDB_PROFILING=false
 USE_TASKSET=true
+DROP_OS_CACHE=false
 RUNS=1
 CASE=""
 CASES_LIST=""
@@ -36,6 +37,9 @@ Options:
   --runs <N>            EXECUTE iterations per (case,query,seed) (default 1)
   --perf                Run benchmark phase under perf stat
   --duckdb-profiling    Enable DuckDB JSON profiling, output to ash_datagen_results.json
+  --drop-os-cache       Run sync + drop Linux page cache before measured and
+                        profiled DuckDB queries. Requires sudo and affects the
+                        whole host.
   --no-taskset          Don't taskset to cores 4-59
   -h, --help            Show this help
 USAGE
@@ -53,6 +57,7 @@ while [[ $# -gt 0 ]]; do
         --runs) RUNS="$2"; shift 2 ;;
         --perf) PERF=true; shift ;;
         --duckdb-profiling) USE_DUCKDB_PROFILING=true; shift ;;
+        --drop-os-cache) DROP_OS_CACHE=true; shift ;;
         --no-taskset) USE_TASKSET=false; shift ;;
         -h|--help) usage; exit 0 ;;
         --*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
@@ -186,6 +191,16 @@ if $USE_TASKSET; then
     TASKSET_PREFIX=(taskset -c 4-59)
 fi
 
+drop_os_page_cache() {
+    if ! $DROP_OS_CACHE; then
+        return
+    fi
+    # Linux page cache survives across DuckDB CLI processes. Keep cold-cache
+    # measurements explicit because this sudo operation affects the whole host.
+    echo "Dropping Linux page cache before DuckDB benchmark/profiling query..." >&2
+    sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+}
+
 # --- Single-shot mode (one case, one query, no CSV requested) -------------
 # Preserves the legacy behavior of run_benchmark.sh, including EXPLAIN ANALYZE
 # at the end of the run, so users invoking this script the old way see the
@@ -209,6 +224,7 @@ if ! $SWEEPING && [[ -z "$CSV_PATH" ]]; then
     COMMON_SETTINGS_SQL="$COMMON_SETTINGS_SQL" RUN_SETTINGS_SQL="$RUN_SETTINGS_SQL" \
         CASE_SETTINGS="$case_settings_str" \
         PROFILING_PRAGMAS="$profiling_env" \
+        DROP_OS_CACHE="$DROP_OS_CACHE" \
         "ASH-datagen/run_benchmark.sh" "$q" "$RUNS" "$DB" "${CMD[@]}"
     if $USE_DUCKDB_PROFILING; then
         echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
@@ -250,14 +266,25 @@ build_sweep_sql() {
         echo "SELECT printf('PERRUN_S=%d=%.6f', ${i}, (epoch_ms(now()) - getvariable('_t0_${i}')) / 1000.0);"
         echo ".output /dev/null"
     done
-    # If profiling was requested, re-run the raw SELECT (not EXECUTE) so the
-    # profiling output captures the actual query text rather than
-    # "EXECUTE benchmark_query;".
-    if $USE_DUCKDB_PROFILING; then
-        printf '%s\n' "$PROFILING_PRAGMAS"
-        sed -n '/^PREPARE/,/;/{/^PREPARE/!p}' "ASH-datagen/query_${query_name}.sql"
-        echo "PRAGMA enable_profiling = 'no_output';"
+}
+
+build_profile_sql() {
+    local case_num="$1"
+    local seed_val="$2"
+    local query_name="$3"
+    grep '^SET ' "$COMMON_SETTINGS_SQL" || true
+    grep '^SET ' "$RUN_SETTINGS_SQL" || true
+    case_settings_for "$case_num"
+    if [[ -n "$seed_val" ]]; then
+        printf 'SET transfer_graph_seed = %s;\n' "$seed_val"
     fi
+    echo "CREATE OR REPLACE TEMP TABLE generator_counts AS SELECT * FROM generator_counts_persistent;"
+    echo ".output /dev/null"
+    printf '%s\n' "$PROFILING_PRAGMAS"
+    # Profile the raw SELECT in its own DuckDB process so --drop-os-cache can
+    # run immediately before the profiled query instead of before warmups.
+    sed -n '/^PREPARE/,/;/{/^PREPARE/!p}' "ASH-datagen/query_${query_name}.sql"
+    echo "PRAGMA enable_profiling = 'no_output';"
 }
 
 if $PERF; then
@@ -276,6 +303,7 @@ for c in "${CASES[@]}"; do
             echo "=== case=${c} query=${q} seed=${seed_disp} runs=${RUNS} ==="
             sql="$(build_sweep_sql "$c" "$s" "$q")"
             tmp_out="$(mktemp)"
+            drop_os_page_cache
             if ! printf '%s\n' "$sql" | "${DUCKDB_CMD[@]}" >"$tmp_out" 2>&1; then
                 cat "$tmp_out" >&2
                 rm -f "$tmp_out"
@@ -305,6 +333,10 @@ for c in "${CASES[@]}"; do
             fi
             TOTAL_RUNS=$((TOTAL_RUNS + run_count))
             rm -f "$tmp_out"
+            if $USE_DUCKDB_PROFILING; then
+                drop_os_page_cache
+                build_profile_sql "$c" "$s" "$q" | "${DUCKDB_CMD[@]}"
+            fi
         done
     done
 done

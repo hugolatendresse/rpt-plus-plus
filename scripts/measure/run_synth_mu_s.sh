@@ -27,6 +27,7 @@ DUCKDB_BIN="./build/release/duckdb"
 DB_DIR="../benchmark_data/synth"
 OUT_DIR="./results/tpch/synth_mu_s"
 THREADS=16
+DROP_OS_CACHE=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -36,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --methods) METHODS="$2"; shift 2 ;;
     --duckdb) DUCKDB_BIN="$2"; shift 2 ;;
     --out) OUT_DIR="$2"; shift 2 ;;
+    --drop-os-cache) DROP_OS_CACHE=true; shift ;;
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -48,6 +50,16 @@ if [[ ! -x "$DUCKDB_BIN" ]]; then
 fi
 
 log() { echo "[synth_mu_s] $*"; }
+
+drop_os_page_cache() {
+  if ! $DROP_OS_CACHE; then
+    return
+  fi
+  # Linux page cache survives across DuckDB CLI processes. Keep cold-cache
+  # measurements explicit because this sudo operation affects the whole host.
+  log "Dropping Linux page cache before profiled query"
+  sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+}
 
 # Helper: write SQL to generate skewed build/probe tables for a target average mu
 # Approach: choose m_hot = round(2*mu), m_cold = max(1, round(0.5*mu)); K ~ N / (0.1*m_hot + 0.9*m_cold)
@@ -147,6 +159,7 @@ PRAGMA profiling_coverage='SELECT';
     SELECT COUNT(*) FROM build b JOIN probe p USING (k);
 Q
 )
+      drop_os_page_cache
       echo -e "$SETTINGS\n$QUERY" | "$DUCKDB_BIN" "$DB" 2>"$LOG_ERR" >/dev/null || true
       # Copy profiling file if present
       if [[ -f results.json ]]; then

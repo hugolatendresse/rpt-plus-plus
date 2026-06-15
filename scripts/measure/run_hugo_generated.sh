@@ -24,6 +24,7 @@
 #   --generate      (Re)generate the data before running the query
 #   --perf          Run under perf stat
 #   --profile       Enable DuckDB JSON profiling output
+#   --drop-os-cache Drop Linux page cache before measured/profiled DuckDB runs
 #   --debug         Use debug build (build/debug/duckdb) instead of release for the benchmark
 #   --no-taskset    Don't pin DuckDB to cores 4-59 via taskset (pinning is on by default)
 #
@@ -48,6 +49,7 @@ CSV_PATH=""
 GENERATE=false
 USE_PERF=false
 PROFILE=false
+DROP_OS_CACHE=false
 USE_TASKSET=true
 NO_WARMUP=false
 BUILD_TYPE=release
@@ -72,6 +74,9 @@ Options:
   --perf                Run under perf stat
   --profile, --duckdb-profiling
                         Enable DuckDB JSON profiling output
+  --drop-os-cache       Run sync + drop Linux page cache before measured and
+                        profiled DuckDB queries. Requires sudo and affects the
+                        whole host.
   --debug               Use debug build (build/debug/duckdb) instead of release
   --no-taskset          Don't pin DuckDB to cores 4-59 via taskset
   -h, --help            Show this help
@@ -92,6 +97,7 @@ while [[ $# -gt 0 ]]; do
         --generate)  GENERATE=true;  shift ;;
         --perf)      USE_PERF=true;  shift ;;
         --profile|--duckdb-profiling)   PROFILE=true;   shift ;;
+        --drop-os-cache) DROP_OS_CACHE=true; shift ;;
         --debug)     BUILD_TYPE=debug;   shift ;;
         --no-taskset) USE_TASKSET=false; shift ;;
         --no-warmup) NO_WARMUP=true; shift ;;
@@ -220,6 +226,16 @@ else
     CMD=("${TASKSET_PREFIX[@]}" build/${BUILD_TYPE}/duckdb "$DB")
 fi
 
+drop_os_page_cache() {
+    if ! $DROP_OS_CACHE; then
+        return
+    fi
+    # Linux page cache survives across DuckDB CLI processes. This is opt-in
+    # because it requires sudo and disrupts every workload on the host.
+    echo "Dropping Linux page cache before DuckDB benchmark/profiling query..." >&2
+    sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+}
+
 # Sweep mode: any time we span more than a single (case, seed) tuple,
 # or whenever the user explicitly asks for a CSV.
 SWEEPING=false
@@ -270,20 +286,30 @@ if ! $SWEEPING && [[ -z "$CSV_PATH" ]]; then
         echo "SET VARIABLE t1 = epoch_ms(now());"
         echo ""
         echo "SELECT printf('Average run time: %.3f s', (getvariable('t1') - getvariable('t0')) / ${RUNS}.0 / 1000.0) AS info;"
-        # If profiling was requested, re-run the raw SELECT (not EXECUTE) so
-        # the profiling output captures the actual query text.
-        if $PROFILE; then
-            printf '%s\n' "$PROFILING_HEADER"
-            echo "SELECT min(b.valueB1)"
-            echo "FROM a"
-            echo "JOIN b ON a.keyB1 = b.keyB1;"
-            echo "PRAGMA enable_profiling = 'no_output';"
+    }
+
+    build_profile_sql() {
+        grep '^SET ' "$COMMON_SETTINGS_SQL" || true
+        grep '^SET ' "$RUN_SETTINGS_SQL" || true
+        case_settings_for "$c"
+        if [[ -n "$s" ]]; then
+            printf 'SET transfer_graph_seed = %s;\n' "$s"
         fi
+        printf '%s\n' "$PROFILING_HEADER"
+        # Run the raw SELECT in a fresh process so cache-dropping happens
+        # immediately before the profiled query, not before earlier warmups.
+        echo "SELECT min(b.valueB1)"
+        echo "FROM a"
+        echo "JOIN b ON a.keyB1 = b.keyB1;"
+        echo "PRAGMA enable_profiling = 'no_output';"
     }
 
     echo "=== Running query: ${DB_NAME} (Case #$c, warmup + $RUNS runs) ==="
+    drop_os_page_cache
     build_bench_sql | "${CMD[@]}"
     if $PROFILE; then
+        drop_os_page_cache
+        build_profile_sql | "${CMD[@]}"
         echo "DuckDB profiling output written to: $PROFILE_JSON"
     fi
     exit 0
@@ -325,15 +351,24 @@ build_sweep_sql() {
         echo "SELECT printf('PERRUN_S=%d=%.6f', ${i}, (epoch_ms(now()) - getvariable('_t0_${i}')) / 1000.0);"
         echo ".output /dev/null"
     done
-    # If profiling was requested, re-run the raw SELECT (not EXECUTE) so the
-    # profiling output captures the actual query text.
-    if $PROFILE; then
-        printf '%s\n' "$PROFILING_HEADER"
-        echo "SELECT min(b.valueB1)"
-        echo "FROM a"
-        echo "JOIN b ON a.keyB1 = b.keyB1;"
-        echo "PRAGMA enable_profiling = 'no_output';"
+}
+
+build_profile_sql() {
+    local case_num="$1"
+    local seed_val="$2"
+    grep '^SET ' "$COMMON_SETTINGS_SQL" || true
+    grep '^SET ' "$RUN_SETTINGS_SQL" || true
+    case_settings_for "$case_num"
+    if [[ -n "$seed_val" ]]; then
+        printf 'SET transfer_graph_seed = %s;\n' "$seed_val"
     fi
+    printf '%s\n' "$PROFILING_HEADER"
+    # Run profiling as its own DuckDB process so --drop-os-cache can clear the
+    # OS page cache immediately before the profiled SELECT.
+    echo "SELECT min(b.valueB1)"
+    echo "FROM a"
+    echo "JOIN b ON a.keyB1 = b.keyB1;"
+    echo "PRAGMA enable_profiling = 'no_output';"
 }
 
 echo "Starting hugo-generated sweep (cases: ${CASES[*]}, seeds: ${SEEDS[*]:-default}, runs/tuple: ${RUNS}, db: ${DB_NAME})..."
@@ -345,6 +380,7 @@ for c in "${CASES[@]}"; do
         echo "=== case=${c} seed=${seed_disp} runs=${RUNS} ==="
         sql="$(build_sweep_sql "$c" "$s")"
         tmp_out="$(mktemp)"
+        drop_os_page_cache
         if ! printf '%s\n' "$sql" | "${CMD[@]}" >"$tmp_out" 2>&1; then
             cat "$tmp_out" >&2
             rm -f "$tmp_out"
@@ -374,6 +410,10 @@ for c in "${CASES[@]}"; do
         fi
         TOTAL_RUNS=$((TOTAL_RUNS + run_count))
         rm -f "$tmp_out"
+        if $PROFILE; then
+            drop_os_page_cache
+            build_profile_sql "$c" "$s" | "${CMD[@]}"
+        fi
     done
 done
 

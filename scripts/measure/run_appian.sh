@@ -17,6 +17,7 @@ USE_PERF=false
 USE_DEBUG=false
 USE_DUCKDB_PROFILING=false
 GENERATE_DATA=false
+DROP_OS_CACHE=false
 TIMEOUT_SECONDS=""
 PERF_EVENTS="cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,mem_access,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd,branch-instructions,branch-misses,br_retired,br_mis_pred_retired"
 
@@ -39,6 +40,8 @@ Options:
                         augmented runtime CSV with per-join THC telemetry
                         columns Join1-*..JoinN-* (via thc_csv_postprocess.py).
   --generate            Force (re)download of the Appian database
+  --drop-os-cache       Run sync + drop Linux page cache before each measured
+                        DuckDB query. Requires sudo and affects the whole host.
   --timeout <seconds>   Per-query wall-clock cap; on timeout DuckDB is killed
                         and the run records a runtime of 9999999 in the CSV
   -h, --help            Show this help
@@ -89,6 +92,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--generate)
 		GENERATE_DATA=true
+		shift
+		;;
+	--drop-os-cache)
+		DROP_OS_CACHE=true
 		shift
 		;;
 	--timeout)
@@ -328,6 +335,17 @@ build_sql() {
 	cat "$query_file"
 }
 
+drop_os_page_cache() {
+	if ! $DROP_OS_CACHE; then
+		return
+	fi
+	# Linux page cache is process-external, so a fresh DuckDB process is not
+	# enough for cold I/O measurements. This is opt-in because it requires sudo
+	# and disrupts every workload on the host.
+	echo "Dropping Linux page cache before measured DuckDB query..." >&2
+	sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+}
+
 # Match run_job.sh: cd into the benchmark dir so relative query paths resolve.
 cd "$REPO_ROOT/benchmark/appian_benchmarks"
 
@@ -339,6 +357,7 @@ run_query() {
 	sql="$(build_sql "$case_num" "$seed_val" "$query_file")"
 	time_file=$(mktemp)
 	rc=0
+	drop_os_page_cache
 	# When TIMEOUT_SECONDS is set, DuckDB (or the perf-wrapped DuckDB) is run
 	# under `timeout -k 5`, which sends SIGTERM and then SIGKILL after a 5s
 	# grace period. `timeout` exits 124 on timeout (137 if force-killed); both
