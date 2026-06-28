@@ -19,7 +19,7 @@ SET thc_miss_below_which_skip_collect = 0.0;
 
 -- General Parameters
 SET max_temp_directory_size='0KiB';
-SET threads = 8;
+SET threads = 1;
 SET pin_threads = 'on';
 
 -- Populate fine-grained hash-join timers (Build Time, Probe Time, Match Time,
