@@ -27,6 +27,7 @@ public:
 
 public:
 	// Operator interface
+	unique_ptr<GlobalOperatorState> GetGlobalOperatorState(ClientContext &context) const override;
 	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 
 	bool ParallelOperator() const override {
