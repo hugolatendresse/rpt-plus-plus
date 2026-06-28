@@ -50,7 +50,7 @@ SET enable_hash_join_timers = false;
 -- SET drop_bf_at_runtime = false; -- Give up BF creation at runtime due to selectivity or memory usage
 
 -- -- OLD OPTIMIZER
-SET disable_perfect_hashing = false;
+SET disable_perfect_hashing = true;
 SET transfer_graph_seed = 0;
 SET use_seeded_root = false;
 SET use_seeded_transfer_order = false;
