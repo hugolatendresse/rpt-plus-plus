@@ -1678,7 +1678,7 @@ static void InsertHashesLoop(atomic<ht_entry_t> entries[], Vector &row_locations
 				// Only count when the slot was truly empty (no race). In non-parallel builds,
 				// InsertRowToEntry always returns nullptr here.
 				if (!PARALLEL) {
-					ht.CountOneUniqueBuildKey();
+					// ht.CountOneUniqueBuildKey();
 				} else {
 					// if the insertion was not successful, the entry was occupied in the meantime, so we have to
 					// compare the keys and insert the row to the next entry
@@ -1690,7 +1690,7 @@ static void InsertHashesLoop(atomic<ht_entry_t> entries[], Vector &row_locations
 						salt_match_count += 1;
 					} else {
 						// truly first insertion into this slot -> new unique key chain
-						ht.CountOneUniqueBuildKey();
+						// ht.CountOneUniqueBuildKey();
 					}
 				}
 
