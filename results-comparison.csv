@@ -1,0 +1,4 @@
+spy commit,spy commit date,command,Case 1,Case 2,Case 3,Case 4
+748762827b,4/1,cd /mnt/local_ssd/spy/ash; ./launch_release.sh rs ,,0.597,0.552,0.584
+9895b41ec0c45fc4d4df4c6f6b9c12fd59ee76f8,6/15,cd /mnt/local_ssd/spy/ash; ./launch_release.sh rs ,,0.704,0.694,0.692
+9895b41ec0c45fc4d4df4c6f6b9c12fd59ee76f8,6/15,"cd /mnt/local_ssd/spy/; scripts/measure/run_ash_datagen_release.sh --cases 2,3,4 --query rs",,1.02,1.02,0.64
