@@ -5,6 +5,7 @@ set -euo pipefail
 
 PERF=false
 USE_TASKSET=true
+DROP_OS_CACHE=false
 RUNS=1
 CASE=""
 COMMON_SETTINGS_SQL="scripts/measure/settings-common.sql"
@@ -15,10 +16,11 @@ while [[ "${1:-}" == --* ]]; do
     case "$1" in
         --perf) PERF=true; shift ;;
         --no-taskset) USE_TASKSET=false; shift ;;
+        --drop-os-cache) DROP_OS_CACHE=true; shift ;;
         --runs) RUNS="$2"; shift 2 ;;
         --case) CASE="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--perf] [--no-taskset] [--runs N] --case <1|2|3|4> rs|rst"
+            echo "Usage: $0 [--perf] [--no-taskset] [--drop-os-cache] [--runs N] --case <1|2|3|4> rs|rst"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -76,4 +78,4 @@ else
     CMD=("${TASKSET_PREFIX[@]}" build/debug/duckdb "$DB")
 fi
 
-COMMON_SETTINGS_SQL="$COMMON_SETTINGS_SQL" RUN_SETTINGS_SQL="$RUN_SETTINGS_SQL" CASE_SETTINGS="$CASE_SETTINGS" "ASH-datagen/run_benchmark.sh" "$QUERY" "$RUNS" "$DB" "${CMD[@]}"
+COMMON_SETTINGS_SQL="$COMMON_SETTINGS_SQL" RUN_SETTINGS_SQL="$RUN_SETTINGS_SQL" CASE_SETTINGS="$CASE_SETTINGS" DROP_OS_CACHE="$DROP_OS_CACHE" "ASH-datagen/run_benchmark.sh" "$QUERY" "$RUNS" "$DB" "${CMD[@]}"

@@ -7,8 +7,10 @@
 set -euo pipefail
 
 PERF=false
+USE_DUCKDB_PROFILING=false
 USE_TASKSET=true
-RUNS=5
+DROP_OS_CACHE=false
+RUNS=1
 CASE=""
 CASES_LIST=""
 QUERY=""
@@ -32,14 +34,18 @@ Options:
   --seed <int>          Override transfer_graph_seed (mutually exclusive with --seeds)
   --seeds <N>           Sweep seeds 0..N-1 (overrides transfer_graph_seed)
   --csv <path>          Write per-run CSV (auto-named if omitted in sweep mode)
-  --runs <N>            EXECUTE iterations per (case,query,seed) (default 5)
+  --runs <N>            EXECUTE iterations per (case,query,seed) (default 1)
   --perf                Run benchmark phase under perf stat
+  --duckdb-profiling    Enable DuckDB JSON profiling, output to ash_datagen_results.json
+  --drop-os-cache       Run sync + drop Linux page cache before measured and
+                        profiled DuckDB queries. Requires sudo and affects the
+                        whole host.
   --no-taskset          Don't taskset to cores 4-59
   -h, --help            Show this help
 USAGE
 }
 
-while [[ $# -gt 0 && ( "${1:-}" == --* || "${1:-}" == "-h" ) ]]; do
+while [[ $# -gt 0 ]]; do
     case "$1" in
         --case) CASE="$2"; shift 2 ;;
         --cases) CASES_LIST="$2"; shift 2 ;;
@@ -50,17 +56,21 @@ while [[ $# -gt 0 && ( "${1:-}" == --* || "${1:-}" == "-h" ) ]]; do
         --csv) CSV_PATH="$2"; shift 2 ;;
         --runs) RUNS="$2"; shift 2 ;;
         --perf) PERF=true; shift ;;
+        --duckdb-profiling) USE_DUCKDB_PROFILING=true; shift ;;
+        --drop-os-cache) DROP_OS_CACHE=true; shift ;;
         --no-taskset) USE_TASKSET=false; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
+        --*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
+        *)
+            # Back-compat: positional <query> argument (rs|rst).
+            if [[ -z "$QUERY" && -z "$QUERIES_LIST" ]]; then
+                QUERY="$1"; shift
+            else
+                echo "Unexpected argument: $1" >&2; usage; exit 1
+            fi
+            ;;
     esac
 done
-
-# Back-compat: positional <query> argument (rs|rst).
-if [[ -z "$QUERY" && -z "$QUERIES_LIST" && $# -gt 0 ]]; then
-    QUERY="$1"
-    shift || true
-fi
 
 if [[ -n "$CASE" && -n "$CASES_LIST" ]]; then
     echo "Error: --case and --cases are mutually exclusive." >&2; exit 1
@@ -138,6 +148,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Absolute path so the file is easy to locate regardless of the script's CWD.
+PROFILING_OUTPUT="$REPO_ROOT/ash_datagen_results.json"
+# See https://duckdb.org/docs/stable/dev/profiling
+PROFILING_PRAGMAS="PRAGMA enable_profiling = 'json';
+PRAGMA profiling_output = '$PROFILING_OUTPUT';
+PRAGMA profiling_coverage = 'SELECT';"
+
 DB="ASH-datagen/bench.duckdb"
 
 if [[ ! -f "$COMMON_SETTINGS_SQL" ]]; then
@@ -174,6 +191,16 @@ if $USE_TASKSET; then
     TASKSET_PREFIX=(taskset -c 4-59)
 fi
 
+drop_os_page_cache() {
+    if ! $DROP_OS_CACHE; then
+        return
+    fi
+    # Linux page cache survives across DuckDB CLI processes. Keep cold-cache
+    # measurements explicit because this sudo operation affects the whole host.
+    echo "Dropping Linux page cache before DuckDB benchmark/profiling query..." >&2
+    sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+}
+
 # --- Single-shot mode (one case, one query, no CSV requested) -------------
 # Preserves the legacy behavior of run_benchmark.sh, including EXPLAIN ANALYZE
 # at the end of the run, so users invoking this script the old way see the
@@ -192,9 +219,16 @@ if ! $SWEEPING && [[ -z "$CSV_PATH" ]]; then
     else
         CMD=("${TASKSET_PREFIX[@]}" build/release/duckdb "$DB")
     fi
+    profiling_env=""
+    if $USE_DUCKDB_PROFILING; then profiling_env="$PROFILING_PRAGMAS"; fi
     COMMON_SETTINGS_SQL="$COMMON_SETTINGS_SQL" RUN_SETTINGS_SQL="$RUN_SETTINGS_SQL" \
         CASE_SETTINGS="$case_settings_str" \
+        PROFILING_PRAGMAS="$profiling_env" \
+        DROP_OS_CACHE="$DROP_OS_CACHE" \
         "ASH-datagen/run_benchmark.sh" "$q" "$RUNS" "$DB" "${CMD[@]}"
+    if $USE_DUCKDB_PROFILING; then
+        echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
+    fi
     exit 0
 fi
 
@@ -234,6 +268,25 @@ build_sweep_sql() {
     done
 }
 
+build_profile_sql() {
+    local case_num="$1"
+    local seed_val="$2"
+    local query_name="$3"
+    grep '^SET ' "$COMMON_SETTINGS_SQL" || true
+    grep '^SET ' "$RUN_SETTINGS_SQL" || true
+    case_settings_for "$case_num"
+    if [[ -n "$seed_val" ]]; then
+        printf 'SET transfer_graph_seed = %s;\n' "$seed_val"
+    fi
+    echo "CREATE OR REPLACE TEMP TABLE generator_counts AS SELECT * FROM generator_counts_persistent;"
+    echo ".output /dev/null"
+    printf '%s\n' "$PROFILING_PRAGMAS"
+    # Profile the raw SELECT in its own DuckDB process so --drop-os-cache can
+    # run immediately before the profiled query instead of before warmups.
+    sed -n '/^PREPARE/,/;/{/^PREPARE/!p}' "ASH-datagen/query_${query_name}.sql"
+    echo "PRAGMA enable_profiling = 'no_output';"
+}
+
 if $PERF; then
     DUCKDB_CMD=(sudo perf stat -e "$PERF_EVENTS" -- "${TASKSET_PREFIX[@]}" build/release/duckdb "$DB")
 else
@@ -250,6 +303,7 @@ for c in "${CASES[@]}"; do
             echo "=== case=${c} query=${q} seed=${seed_disp} runs=${RUNS} ==="
             sql="$(build_sweep_sql "$c" "$s" "$q")"
             tmp_out="$(mktemp)"
+            drop_os_page_cache
             if ! printf '%s\n' "$sql" | "${DUCKDB_CMD[@]}" >"$tmp_out" 2>&1; then
                 cat "$tmp_out" >&2
                 rm -f "$tmp_out"
@@ -279,6 +333,10 @@ for c in "${CASES[@]}"; do
             fi
             TOTAL_RUNS=$((TOTAL_RUNS + run_count))
             rm -f "$tmp_out"
+            if $USE_DUCKDB_PROFILING; then
+                drop_os_page_cache
+                build_profile_sql "$c" "$s" "$q" | "${DUCKDB_CMD[@]}"
+            fi
         done
     done
 done
@@ -286,4 +344,7 @@ done
 echo "Sweep complete. Captured ${TOTAL_RUNS} run(s)."
 if [[ -n "$CSV_PATH" ]]; then
     echo "CSV written to: $CSV_PATH"
+fi
+if $USE_DUCKDB_PROFILING; then
+    echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
 fi
