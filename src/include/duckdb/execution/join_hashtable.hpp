@@ -461,6 +461,10 @@ public:
 
 	//! Increment unique key counter during build (Build-phase approach of mu_s estimation)
 	void CountOneUniqueBuildKey();
+	//! Whether this join needs the build phase to populate build_unique_keys_cnt.
+	bool ShouldCountUniqueBuildKeys() const {
+		return thc_count_unique_build_keys;
+	}
 
 	idx_t Count() const {
 		return data_collection->Count();
@@ -703,6 +707,8 @@ private:
 	bool thc_log_mu_s = false;
 	//! Build-phase approach: count of unique keys inserted during build (Finalize). Atomic for parallel Finalize.
 	std::atomic<idx_t> build_unique_keys_cnt {0};
+	//! Avoid paying the build-count estimator cost when no enabled THC decision will use it.
+	bool thc_count_unique_build_keys = false;
 	//! Build phase approach result: mu_s computed after Finalize as Count() / build_unique_keys.
 	double mu_s_build_estimate = 0.0;
 	//! Hash table sampling approach: mu_s from post-finalize HT sampling.

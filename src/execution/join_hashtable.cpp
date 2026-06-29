@@ -75,6 +75,7 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
 	thc_log_mu_s = config.thc_log_mu_s;
 	thc_mu_s_method = config.thc_mu_s_method;
 	thc_log_mu_s = config.thc_log_mu_s;
+	thc_count_unique_build_keys = thc_mu_s_method == "build_count" || thc_mu_s_method == "all";
 	for (idx_t i = 0; i < conditions.size(); ++i) {
 		auto &condition = conditions[i];
 		D_ASSERT(condition.left->return_type == condition.right->return_type);
@@ -1639,6 +1640,7 @@ static void InsertHashesLoop(atomic<ht_entry_t> entries[], Vector &row_locations
 
 	// use the ht bitmask to make the modulo operation faster but keep the salt bits intact
 	idx_t capacity_mask = ht.bitmask | ht_entry_t::SALT_MASK;
+	const bool count_unique_build_keys = ht.ShouldCountUniqueBuildKeys();
 	while (remaining_count > 0) {
 		idx_t salt_match_count = 0;
 
@@ -1678,7 +1680,9 @@ static void InsertHashesLoop(atomic<ht_entry_t> entries[], Vector &row_locations
 				// Only count when the slot was truly empty (no race). In non-parallel builds,
 				// InsertRowToEntry always returns nullptr here.
 				if (!PARALLEL) {
-					// ht.CountOneUniqueBuildKey();
+					if (count_unique_build_keys) {
+						ht.CountOneUniqueBuildKey();
+					}
 				} else {
 					// if the insertion was not successful, the entry was occupied in the meantime, so we have to
 					// compare the keys and insert the row to the next entry
@@ -1688,9 +1692,9 @@ static void InsertHashesLoop(atomic<ht_entry_t> entries[], Vector &row_locations
 						state.keys_to_compare_sel.set_index(salt_match_count, row_index);
 						rhs_row_locations[salt_match_count] = potential_collided_ptr;
 						salt_match_count += 1;
-					} else {
+					} else if (count_unique_build_keys) {
 						// truly first insertion into this slot -> new unique key chain
-						// ht.CountOneUniqueBuildKey();
+						ht.CountOneUniqueBuildKey();
 					}
 				}
 
