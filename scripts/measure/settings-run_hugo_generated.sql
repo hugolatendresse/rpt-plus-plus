@@ -5,11 +5,6 @@
 -- statistics propagation removes the cold portion 
 SET disabled_optimizers = 'statistics_propagation';
 
-
--- Don't stop early due to small cross multiplicity or high hotness
-SET thc_enable_first_cycle_check = false;
--- SET thc_warmup_cycles = 1000000;
-
 SET thc_activation_threshold = 1_000_000;
 SET thc_collect_budget_fraction = 0.25;
 SET thc_collect_phase_rows = 1_000_000;
@@ -34,4 +29,4 @@ SET pin_threads = 'on';
 
 -- Populate fine-grained hash-join timers (Build Time, Probe Time, Match Time,
 -- THC Collect/Insert/Probe Time, ...) in the DuckDB profiling JSON. 
-SET enable_hash_join_timers = false;
+SET enable_hash_join_timers = true;

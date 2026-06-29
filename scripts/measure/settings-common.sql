@@ -28,15 +28,15 @@ SET enable_hash_join_timers = false; -- CAREFUL - makes ASH-datagen take swings!
 
 
 -- Optimizer
-SET disable_perfect_hashing = true;
-SET transfer_graph_seed = 0;
-SET use_seeded_root = false;
-SET use_seeded_transfer_order = true;
-SET join_order_mode = 'seeded_left_deep'; -- Is what we want in the end and does not cause the issue
-SET allow_build_probe_side_swap = false; -- Is what we want in the end and does not cause the issue
-SET skip_unfiltered_tables_create_bf_plan = false; -- Run RPT+ logic to not create BF for tables with filters (during CreateBloomFilterPlan) // Is what we want in the end and does not cause the issue
-SET skip_unfiltered_tables_graph_creation = false; -- Same as above but during TransferGraphCreation // CULPRIT!!!!
-SET drop_bf_at_runtime = false; -- Give up BF creation at runtime due to selectivity or memory usage // Is what we want in the end and does not cause the issue
+-- SET disable_perfect_hashing = true;
+-- SET transfer_graph_seed = 0;
+-- SET use_seeded_root = false;
+-- SET use_seeded_transfer_order = true;
+-- SET join_order_mode = 'seeded_left_deep'; -- Is what we want in the end and does not cause the issue
+-- SET allow_build_probe_side_swap = false; -- Is what we want in the end and does not cause the issue
+-- SET skip_unfiltered_tables_create_bf_plan = false; -- Run RPT+ logic to not create BF for tables with filters (during CreateBloomFilterPlan) // Is what we want in the end and does not cause the issue
+-- SET skip_unfiltered_tables_graph_creation = false; -- Same as above but during TransferGraphCreation // CULPRIT!!!!
+-- SET drop_bf_at_runtime = false; -- Give up BF creation at runtime due to selectivity or memory usage // Is what we want in the end and does not cause the issue
 
 -- -- NEW OPTIMIZER
 -- SET disable_perfect_hashing = true;
