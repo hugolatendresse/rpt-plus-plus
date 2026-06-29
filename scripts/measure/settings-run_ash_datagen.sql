@@ -3,7 +3,11 @@
 -- Add SET/SET VARIABLE statements here when needed.
 
 -- statistics propagation removes the cold portion 
-SET disabled_optimizers = 'statistics_propagation';
+SET disabled_optimizers = 'join_order,build_side_probe_side,statistics_propagation';
+
+-- TODO ASH-datagen needs those those things once they exist
+-- SET skip_unfiltered_tables_graph_creation = true;
+-- SET thc_mu_s_method = 'none';
 
 SET VARIABLE scale_factor = 40_000;
 
