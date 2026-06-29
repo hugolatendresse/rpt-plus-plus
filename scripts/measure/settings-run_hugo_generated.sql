@@ -5,6 +5,9 @@
 -- statistics propagation removes the cold portion 
 SET disabled_optimizers = 'statistics_propagation';
 
+SET thc_first_read_only_phase_rows = 1_000_000;
+
+
 SET join_order_mode = 'duckdb';
 
 SET max_temp_directory_size='0KiB';
