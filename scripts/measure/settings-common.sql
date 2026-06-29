@@ -4,9 +4,9 @@
 SET thc_activation_threshold = 1_000_000;
 SET thc_collect_budget_fraction = 1.00;
 -- SET thc_collect_phase_rows = 1_000_000;
-SET thc_collect_phase_rows = 100_000;
+SET thc_collect_phase_rows = 1_000_000;
 -- SET thc_collect_phase_rows = 8192;
-SET thc_first_read_only_phase_rows = 100_000;
+SET thc_first_read_only_phase_rows = 1_000_000;
 -- SET thc_first_read_only_phase_rows = 100_000;
 -- SET thc_first_read_only_phase_rows = 8192;
 -- SET thc_l3_budget = 16_777_216; -- 16M
