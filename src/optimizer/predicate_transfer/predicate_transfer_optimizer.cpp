@@ -10,6 +10,7 @@
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
+#include "duckdb/main/client_config.hpp"
 
 namespace duckdb {
 
@@ -19,23 +20,29 @@ unique_ptr<LogicalOperator> PredicateTransferOptimizer::PreOptimize(unique_ptr<L
 }
 
 unique_ptr<LogicalOperator> PredicateTransferOptimizer::Optimize(unique_ptr<LogicalOperator> plan) {
-	auto &ordered_nodes = graph_manager.transfer_order;
+	auto &config = ClientConfig::GetConfig(graph_manager.context);
+	if (!config.disable_rpt) {
+		auto &ordered_nodes = graph_manager.transfer_order;
 
-	// **Forward pass**: Process nodes in reverse order (from last to first)
-	// - Generate Bloom Filters (BFs) based on predicates
-	// - Add BFs to the corresponding edges in the graph
-	for (auto it = ordered_nodes.rbegin(); it != ordered_nodes.rend(); ++it) {
-		auto *current_node = *it;
-		for (auto &BF_plan : CreateBloomFilterPlan(*current_node, false)) {
-			graph_manager.AddFilterPlan(BF_plan.first, BF_plan.second, false);
+		// **Forward pass**: Process nodes in reverse order (from last to first)
+		// - Generate Bloom Filters (BFs) based on predicates
+		// - Add BFs to the corresponding edges in the graph
+		for (auto it = ordered_nodes.rbegin(); it != ordered_nodes.rend(); ++it) {
+			auto *current_node = *it;
+			for (auto &BF_plan : CreateBloomFilterPlan(*current_node, false)) {
+				graph_manager.AddFilterPlan(BF_plan.first, BF_plan.second, false);
+			}
 		}
-	}
 
-	// **Backward pass**: Process nodes in original order (from first to last)
-	// - Similar to the forward pass, but for backward edges
-	for (auto *current_node : ordered_nodes) {
-		for (auto &BF_plan : CreateBloomFilterPlan(*current_node, true)) {
-			graph_manager.AddFilterPlan(BF_plan.first, BF_plan.second, true);
+		// **Backward pass**: Process nodes in original order (from first to last)
+		// - Similar to the forward pass, but for backward edges
+		// - Skipped when rpt_forward_only is set
+		if (!config.rpt_forward_only) {
+			for (auto *current_node : ordered_nodes) {
+				for (auto &BF_plan : CreateBloomFilterPlan(*current_node, true)) {
+					graph_manager.AddFilterPlan(BF_plan.first, BF_plan.second, true);
+				}
+			}
 		}
 	}
 

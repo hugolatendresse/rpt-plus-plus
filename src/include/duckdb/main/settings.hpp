@@ -556,6 +556,198 @@ struct EnableHTTPLoggingSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct JoinOrderModeSetting {
+	using RETURN_TYPE = string;
+	static constexpr const char *Name = "join_order_mode";
+	static constexpr const char *Description = "Join order enumeration strategy: duckdb, exact_left_deep, random_bushy, random_left_deep";
+	static constexpr const char *InputType = "VARCHAR";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct RptForwardOnlySetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "rpt_forward_only";
+	static constexpr const char *Description = "When enabled, only the forward pass of RPT+ is executed (backward pass is skipped)";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct DisableRptSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "disable_rpt";
+	static constexpr const char *Description = "When enabled, neither the forward pass nor the backward pass of RPT+ are executed (both are skipped)";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct DisablePerfectHashingSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "disable_perfect_hashing";
+	static constexpr const char *Description = "When enabled, perfect hash join is never used";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct DisableTieredHashCacheSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "disable_tiered_hash_cache";
+	static constexpr const char *Description = "When enabled, skip initializing the tiered hash cache";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct EnableHashJoinTimersSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "enable_hash_join_timers";
+	static constexpr const char *Description =
+	    "When enabled, populate fine-grained hash-join timers (build/probe/match/THC) in profiling output";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcL3BudgetSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "thc_l3_budget";
+	static constexpr const char *Description = "Memory budget in bytes for the Tiered Hash Cache (default: 6 MiB)";
+	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcCollectPhaseRowsSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "thc_collect_phase_rows";
+	static constexpr const char *Description = "Number of probe-side rows per THC collect phase (default: 200000)";
+	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcFirstReadOnlyPhaseRowsSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "thc_first_read_only_phase_rows";
+	static constexpr const char *Description = "Base length (in probe rows) of the first THC READ_ONLY phase (default: 200000)";
+	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcCollectBudgetFractionSetting {
+	using RETURN_TYPE = double;
+	static constexpr const char *Name = "thc_collect_budget_fraction";
+	static constexpr const char *Description =
+	    "Maximum fraction of probe rows that can be spent in THC collect phases (default: 0.02)";
+	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcMissThresholdSetting {
+	using RETURN_TYPE = double;
+	static constexpr const char *Name = "thc_miss_below_which_skip_collect";
+	static constexpr const char *Description = "THC miss rate threshold below which collect phases are skipped (default: 0.10)";
+	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcActivationThresholdSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "thc_activation_threshold";
+	static constexpr const char *Description = "Minimum HT capacity (entries) to activate the THC (default: ~1.3M)";
+	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcMaxLoadFactorSetting {
+	using RETURN_TYPE = double;
+	static constexpr const char *Name = "thc_max_load_factor";
+	static constexpr const char *Description = "Maximum load factor for the THC (default: 0.875)";
+	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcMuSMethodSetting {
+	using RETURN_TYPE = string;
+	static constexpr const char *Name = "thc_mu_s_method";
+	static constexpr const char *Description = "Which mu_s estimation method to use: none, build_count, probe_sample, ht_sample, all";
+	static constexpr const char *InputType = "VARCHAR";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcLogMuSSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "thc_log_mu_s";
+	static constexpr const char *Description = "Log mu_s estimates to stderr";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcMinEstimatedMuSToRSetting {
+	using RETURN_TYPE = double;
+	static constexpr const char *Name = "thc_min_estimated_mu_s_to_r";
+	static constexpr const char *Description = "Minimum estimated mu_{S->R} to keep THC active after the first cycle (default: 4.0)";
+	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcMaxEstimatedPercHotSetting {
+	using RETURN_TYPE = double;
+	static constexpr const char *Name = "thc_max_estimated_perc_hot";
+	static constexpr const char *Description = "Maximum estimated fraction of hot build-side rows before abandoning THC (default: 0.5)";
+	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcMinCoverageOfBuildSideSetting {
+	using RETURN_TYPE = double;
+	static constexpr const char *Name = "thc_min_coverage_of_build_side";
+	static constexpr const char *Description = "Minimum coverage factor: THC is abandoned when thc_size_needed * this > thc_size (default: 5.0)";
+	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcWarmupCyclesSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "thc_warmup_cycles";
+	static constexpr const char *Description = "Number of collect+eval cycles before the cost-based decision rule activates (default: 2)";
+	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct EnableHTTPMetadataCacheSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "enable_http_metadata_cache";
@@ -1042,6 +1234,17 @@ struct PerfectHtThresholdSetting {
 	static constexpr const char *InputType = "UBIGINT";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct PinThreadsSetting {
+	using RETURN_TYPE = ThreadPinMode;
+	static constexpr const char *Name = "pin_threads";
+	static constexpr const char *Description =
+	    "Whether to pin threads to cores (Linux only, default AUTO: on when there are more than 64 cores)";
+	static constexpr const char *InputType = "VARCHAR";
+	static void SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &parameter);
+	static void ResetGlobal(DatabaseInstance *db, DBConfig &config);
 	static Value GetSetting(const ClientContext &context);
 };
 

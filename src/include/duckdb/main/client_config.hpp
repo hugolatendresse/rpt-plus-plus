@@ -10,6 +10,7 @@
 
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/enums/join_order_mode.hpp"
 #include "duckdb/common/enums/output_type.hpp"
 #include "duckdb/common/enums/profiler_format.hpp"
 #include "duckdb/common/progress_bar/progress_bar.hpp"
@@ -72,6 +73,65 @@ struct ClientConfig {
 	bool verify_serializer = false;
 	//! Enable the running of optimizers
 	bool enable_optimizer = true;
+	//! Which join order enumeration strategy to use (default: DuckDB's DPhyp)
+	JoinOrderMode join_order_mode = JoinOrderMode::DPHYP;
+	//! When true, only the forward pass of RPT+ is executed (backward pass is skipped)
+	bool rpt_forward_only = false;
+	//! When true, all of RPT+ is disable (both forward and backware passes are skipped)
+	bool disable_rpt = false;
+	//! When true, skip initializing the tiered hash cache
+	bool disable_tiered_hash_cache = false;
+	//! When true, never use perfect hash join
+	bool disable_perfect_hashing = false;
+	//! When true, populate fine-grained hash-join timing counters
+	//! (Build Time, Probe Time, Match Time, THC Collect/Insert/Probe Time, ...)
+	//! into the query profiler output. Off by default because each timer adds
+	//! a pair of `std::chrono::steady_clock::now()` calls per scoped region,
+	//! which is non-trivial overhead on the hottest probe paths.
+	//! Replaces the historical DUCKDB_ENABLE_HASH_JOIN_TIMERS compile-time flag,
+	//! so the timers can be toggled at SQL level (PRAGMA / SET) without rebuilding.
+	bool enable_hash_join_timers = false;
+	//! Memory budget (in bytes) for the Tiered Hash Cache.
+	//! Controls how much of L3 the THC is allowed to occupy.
+	//! Default: 32 MiB (sized for typical L3 caches).
+	idx_t thc_budget_bytes = 32ULL * 1024 * 1024;
+	//! Number of probe-side rows processed per THC collect phase.
+	//! Smaller values mean faster warm-up but more frequent collect/flush cycles.
+	idx_t thc_collect_phase_rows = 200000;
+	//! Base length (in probe rows) of the first READ_ONLY phase after a collect.
+	//! Subsequent READ_ONLY phases double this via exponential backoff.
+	idx_t thc_first_read_only_phase_rows = 999999999;
+	//! Maximum fraction of probe rows that can be spent in THC collect phases.
+	//! Example: 0.02 means collect overhead is capped at 2% of probe rows.
+	double thc_collect_budget_fraction = 0.02;
+	//! THC miss rate threshold (0.0–1.0). If the miss rate in a READ_ONLY
+	//! segment is below this, we skip the next collect phase.
+	double thc_miss_below_which_skip_collect = 0.10;
+	//! Minimum HT capacity (in entries) to activate the THC.
+	//! Hash tables smaller than this are assumed to fit in L3 naturally.
+	idx_t thc_activation_threshold = 10ULL * 1024 * 1024 / sizeof(uint64_t);
+	//! Maximum load factor for the THC (0.0–1.0).
+	//! Beyond this fill ratio, THC does not insert new entries. This
+	//! is to avoid pathological linear-probing chains.
+	double thc_max_load_factor = 0.875;
+	//! Which mu_s (within-build side multiplicity) estimation method(s) to run during hash join.
+	//! Values: "none", "build_count", "probe_sample", "ht_sample", or "all".
+	//! "none" bypasses mu_s estimation
+	//! "build_count" is during hash table build
+	//! "probe_sample" is during the first cycle of probing
+	//! "ht_sample" is between building and probing
+	std::string thc_mu_s_method = "build_count"; // TODO we are now incurring a cost on every single build. Other methods are less precise but could be done only if we are to use a THC
+	//! When true, log mu_s estimates to stderr (works in both debug and release builds).
+	bool thc_log_mu_s = false;
+	//! Minimum estimated mu_{S->R} to keep THC active after the first cycle.
+	double thc_min_estimated_mu_s_to_r = 4.0;
+	//! Maximum estimated fraction of hot build-side rows before abandoning THC.
+	double thc_max_estimated_perc_hot = 0.5;
+	//! Minimum coverage factor: THC is abandoned when thc_size < thc_size_needed * this.
+	double thc_min_coverage_of_build_side = 0.1;
+	//! Number of COLLECT+EVAL cycles that must complete before the cost-based
+	//! decision rule (drop/freeze/continue) activates.
+	idx_t thc_warmup_cycles = 4;
 	//! Enable caching operators
 	bool enable_caching_operators = true;
 	//! Force parallelism of small tables, used for testing

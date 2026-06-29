@@ -1,3 +1,7 @@
+Hard fork of https://github.com/embryo-labs/dynamic-predicate-transfer
+
+_______________________________________________________________________
+
 ## Dynamic Predicate Transfer (RPT+)
 
 This repository contains the implementation of **Dynamic Predicate Transfer (RPT+)**, built on top of [DuckDB v1.3.0](https://github.com/duckdb/duckdb/tree/v1.3-ossivalis). 

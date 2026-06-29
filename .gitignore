@@ -265,9 +265,10 @@ venv/
 .csettings
 
 # Visual Studio
-.vs
-settings.json
-.vscode
+# .vs
+# settings.json
+# .vscode
+.github/copilot-instructions.md
 
 # QtCreator files
 *.user
@@ -297,6 +298,7 @@ CMakeUserPresets.json
 
 # Generated documentation
 docs
+
 
 # tests
 test/test.sql
@@ -358,3 +360,10 @@ extension_external
 
 test/sql/pragma/output.json
 tools/pythonpkg/duckdb_build/
+scripts/measure/data/
+scripts/measure/*.json
+*.tgz
+join-order-benchmark/*.csv
+join-order-benchmark/*.json
+result.json
+.claude/

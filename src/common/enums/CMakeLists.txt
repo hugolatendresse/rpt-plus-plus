@@ -7,6 +7,7 @@ add_library_unity(
   expression_type.cpp
   file_compression_type.cpp
   http_status_code.cpp
+  join_order_mode.cpp
   join_type.cpp
   logical_operator_type.cpp
   metric_type.cpp

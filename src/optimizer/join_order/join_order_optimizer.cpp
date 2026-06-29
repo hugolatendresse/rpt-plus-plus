@@ -5,6 +5,7 @@
 #include "duckdb/common/pair.hpp"
 #include "duckdb/optimizer/join_order/cost_model.hpp"
 #include "duckdb/optimizer/join_order/plan_enumerator.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/planner/expression/list.hpp"
 #include "duckdb/planner/operator/list.hpp"
 
@@ -44,7 +45,21 @@ unique_ptr<LogicalOperator> JoinOrderOptimizer::Optimize(unique_ptr<LogicalOpera
 
 		// Initialize the leaf/single node plans
 		plan_enumerator.InitLeafPlans();
-		plan_enumerator.SolveJoinOrder();
+		switch (context.config.join_order_mode) {
+		case JoinOrderMode::EXACT_LEFT_DEEP:
+			plan_enumerator.SolveJoinOrderLeftDeep();
+			break;
+		case JoinOrderMode::RANDOM_BUSHY:
+			plan_enumerator.SolveJoinOrderRandom();
+			break;
+		case JoinOrderMode::RANDOM_LEFT_DEEP:
+			plan_enumerator.SolveJoinOrderLeftDeepRandom();
+			break;
+		case JoinOrderMode::DPHYP:
+		default:
+			plan_enumerator.SolveJoinOrder();
+			break;
+		}
 		// now reconstruct a logical plan from the query graph plan
 		query_graph_manager.plans = &plan_enumerator.GetPlans();
 

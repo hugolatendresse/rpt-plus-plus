@@ -6,6 +6,7 @@
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception/transaction_exception.hpp"
 #include "duckdb/common/progress_bar/progress_bar.hpp"
+#include "duckdb/common/debug_log.hpp"
 #include "duckdb/common/serializer/buffered_file_writer.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/execution/column_binding_resolver.hpp"
@@ -368,6 +369,7 @@ ClientContext::CreatePreparedStatementInternal(ClientContextLock &lock, const st
 		}
 	}
 
+	// Planner
 	logical_planner.CreatePlan(std::move(statement));
 	D_ASSERT(logical_planner.plan || !logical_planner.properties.bound_all_parameters);
 	profiler.EndPhase();
@@ -384,6 +386,8 @@ ClientContext::CreatePreparedStatementInternal(ClientContextLock &lock, const st
 #ifdef DEBUG
 	logical_plan->Verify(*this);
 #endif
+
+	// Optimizer
 	if (config.enable_optimizer && logical_plan->RequireOptimizer()) {
 		profiler.StartPhase(MetricsType::ALL_OPTIMIZERS);
 		Optimizer optimizer(*logical_planner.binder, *this);
@@ -396,7 +400,8 @@ ClientContext::CreatePreparedStatementInternal(ClientContextLock &lock, const st
 #endif
 	}
 
-	// Convert the logical query plan into a physical query plan.
+	// Convert the logical query plan into a physical query plan
+	// with Physical Plan Generator.
 	profiler.StartPhase(MetricsType::PHYSICAL_PLANNER);
 	PhysicalPlanGenerator physical_planner(*this);
 	result->physical_plan = physical_planner.Plan(std::move(logical_plan));

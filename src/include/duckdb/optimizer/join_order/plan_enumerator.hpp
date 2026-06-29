@@ -36,6 +36,9 @@ public:
 	static constexpr idx_t THRESHOLD_TO_SWAP_TO_APPROXIMATE = 12;
 
 	//! Perform the join order solving
+	void SolveJoinOrderLeftDeep();
+	void SolveJoinOrderRandom();
+	void SolveJoinOrderLeftDeepRandom();
 	void SolveJoinOrder();
 	void InitLeafPlans();
 
