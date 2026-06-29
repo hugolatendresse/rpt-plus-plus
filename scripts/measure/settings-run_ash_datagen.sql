@@ -3,7 +3,14 @@
 -- Add SET/SET VARIABLE statements here when needed.
 
 -- statistics propagation removes the cold portion 
-SET disabled_optimizers = 'statistics_propagation';
+SET disabled_optimizers = 'join_order,build_side_probe_side,statistics_propagation';
+
+-- Reproduce the original ASH rs microbenchmark regime. The common settings file
+-- enables detailed hash-join timing for profiling-oriented scripts, but this
+-- benchmark is sensitive enough that per-operator timer collection changes the
+-- measured case ordering.
+SET enable_hash_join_timers = false;
+SET thc_mu_s_method = 'none';
 
 SET VARIABLE scale_factor = 40_000;
 

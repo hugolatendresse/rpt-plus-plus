@@ -1,0 +1,4 @@
+query,case,seed,runtime_seconds
+rs,2,,0.557000
+rs,3,,0.552000
+rs,4,,0.541000
