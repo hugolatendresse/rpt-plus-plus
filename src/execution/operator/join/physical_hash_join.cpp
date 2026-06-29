@@ -1338,12 +1338,12 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 
 	if (sink.hash_table->Count() == 0) {
 		if (EmptyResultIfRHSIsEmpty()) {
-			// sink.EmitProbeTiming(context);
+			sink.EmitProbeTiming(context); // TODO decide if we should Emit so often. It adds 0.1s to ASH-datagen run, uniformly across all Cases. But if there a benefit to Emitting often?
 			return OperatorResultType::FINISHED;
 		}
 		state.lhs_output.ReferenceColumns(input, lhs_output_columns.col_idxs);
 		ConstructEmptyJoinResult(sink.hash_table->join_type, sink.hash_table->has_null, state.lhs_output, chunk);
-		// sink.EmitProbeTiming(context);
+		sink.EmitProbeTiming(context); // TODO decide if we should Emit so often. It adds 0.1s to ASH-datagen run, uniformly across all Cases. But if there a benefit to Emitting often?
 		return OperatorResultType::NEED_MORE_INPUT;
 	}
 
@@ -1352,7 +1352,7 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 		state.lhs_output.ReferenceColumns(input, lhs_output_columns.col_idxs);
 		auto result = sink.perfect_join_executor->ProbePerfectHashTable(context, input, state.lhs_output, chunk,
 		                                                                *state.perfect_hash_join_state);
-		// sink.EmitProbeTiming(context);
+		sink.EmitProbeTiming(context); // TODO decide if we should Emit so often. It adds 0.1s to ASH-datagen run, uniformly across all Cases. But if there a benefit to Emitting often?
 		return result;
 	}
 
@@ -1393,10 +1393,10 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 
 	if (state.scan_structure.PointersExhausted() && chunk.size() == 0) {
 		state.scan_structure.is_null = true;
-		// sink.EmitProbeTiming(context);
+		sink.EmitProbeTiming(context);  // TODO decide if we should Emit so often. It adds 0.1s to ASH-datagen run, uniformly across all Cases. But if there a benefit to Emitting often?
 		return OperatorResultType::NEED_MORE_INPUT;
 	}
-	// sink.EmitProbeTiming(context);
+	sink.EmitProbeTiming(context); // TODO decide if we should Emit so often. It adds 0.1s to ASH-datagen run, uniformly across all Cases. But if there a benefit to Emitting often?
 	return OperatorResultType::HAVE_MORE_OUTPUT;
 }
 
