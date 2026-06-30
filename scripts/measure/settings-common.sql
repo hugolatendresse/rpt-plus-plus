@@ -26,6 +26,10 @@ SET pin_threads = 'on';
 -- THC Collect/Insert/Probe Time, ...) in the DuckDB profiling JSON. 
 SET enable_hash_join_timers = false; -- CAREFUL - makes ASH-datagen take swings!
 
+-- Runtime checks to freeze/abandon the THC
+SET thc_enable_delta_check = false; -- Abandons if THC increases probe cost
+SET thc_enable_shrinkage_check = false; -- Freezes if marginal gain not worth collection cost
+
 
 -- Optimizer
 -- SET disable_perfect_hashing = true;
