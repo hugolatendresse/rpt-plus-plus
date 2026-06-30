@@ -203,6 +203,14 @@ struct ClientConfig {
 	//! Number of COLLECT+EVAL cycles that must complete before the cost-based
 	//! decision rule (drop/freeze/continue) activates.
 	idx_t thc_warmup_cycles = 4;
+	//! Toggle the cost-rule abandon check `delta_t >= 0`, which drops THC
+	//! when the current READ_ONLY probe cost is no better than the baseline
+	//! hash-table probe cost.
+	bool thc_enable_delta_check = true;
+	//! Toggle the cost-rule freeze check `shrinkage < gamma_t`, which stops
+	//! further collection when the marginal evaluation improvement no longer
+	//! pays for the previous collection cost.
+	bool thc_enable_shrinkage_check = true;
 	//! Enable caching operators
 	bool enable_caching_operators = true;
 	//! Force parallelism of small tables, used for testing

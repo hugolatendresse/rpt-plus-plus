@@ -874,6 +874,28 @@ struct ThcWarmupCyclesSetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct ThcEnableDeltaCheckSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "thc_enable_delta_check";
+	static constexpr const char *Description =
+	    "Enable THC cost-rule abandon check delta_t >= 0 (default: true)";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcEnableShrinkageCheckSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "thc_enable_shrinkage_check";
+	static constexpr const char *Description =
+	    "Enable THC cost-rule freeze check shrinkage < gamma_t (default: true)";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
 struct EnableHTTPMetadataCacheSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "enable_http_metadata_cache";

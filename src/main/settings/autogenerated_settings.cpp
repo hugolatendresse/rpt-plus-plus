@@ -1012,6 +1012,40 @@ Value ThcWarmupCyclesSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// THC Enable Delta Check
+//===----------------------------------------------------------------------===//
+void ThcEnableDeltaCheckSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_enable_delta_check = input.GetValue<bool>();
+}
+
+void ThcEnableDeltaCheckSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_enable_delta_check = ClientConfig().thc_enable_delta_check;
+}
+
+Value ThcEnableDeltaCheckSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.thc_enable_delta_check);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Enable Shrinkage Check
+//===----------------------------------------------------------------------===//
+void ThcEnableShrinkageCheckSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_enable_shrinkage_check = input.GetValue<bool>();
+}
+
+void ThcEnableShrinkageCheckSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_enable_shrinkage_check = ClientConfig().thc_enable_shrinkage_check;
+}
+
+Value ThcEnableShrinkageCheckSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.thc_enable_shrinkage_check);
+}
+
+//===----------------------------------------------------------------------===//
 // Enable H T T P Metadata Cache
 //===----------------------------------------------------------------------===//
 void EnableHTTPMetadataCacheSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {

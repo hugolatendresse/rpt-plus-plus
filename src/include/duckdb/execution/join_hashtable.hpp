@@ -352,9 +352,10 @@ public:
 		//! c_grow_current. Written only inside `transition_mutex`.
 		idx_t current_collect_phase_number = 0;
 		//! Phase index of the most recently evaluated RO segment. Set at
-		//! every RO checkpoint, after computing the cycle's metrics. Read
-		//! at the NEXT RO checkpoint to compute c_eval_prev for the
-		//! shrinkage formula. Written only inside `transition_mutex`.
+		//! every RO checkpoint while the shrinkage check is enabled, after
+		//! computing the cycle's metrics. Read at the NEXT RO checkpoint to
+		//! compute c_eval_prev for the shrinkage formula. Written only
+		//! inside `transition_mutex`.
 		idx_t prev_eval_phase_number = 0;
 
 		// ---- Lifetime counters (never reset; just keep growing) ----
@@ -688,6 +689,10 @@ private:
 	//! decision rule (drop/freeze/continue) activates. During warmup, every
 	//! evaluation checkpoint unconditionally proceeds to the next COLLECT phase.
 	idx_t thc_warmup_cycles;
+	//! Toggle for abandoning THC when current eval cost is no better than baseline.
+	bool thc_enable_delta_check;
+	//! Toggle for freezing THC when marginal gain is lower than collect cost.
+	bool thc_enable_shrinkage_check;
 	//! If the estimated probe multiplicity mu_{S->R} after the first
 	//! COLLECT+READ_ONLY cycle is below this threshold, THC is skipped
 	//! entirely and probing falls back to the regular hash table path.
