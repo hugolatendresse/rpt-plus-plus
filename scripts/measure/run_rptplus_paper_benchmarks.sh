@@ -32,12 +32,12 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-scripts/measure/run_appian.sh --cases 1,2,3,4 --duckdb-profiling --seeds 10 --timeout 60 "${DROP_OS_CACHE_ARG[@]}"
-scripts/measure/run_job.sh --cases 1,2,3,4 --duckdb-profiling --seeds 10 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
-scripts/measure/run_tpc.sh --sf 10 --generate --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 10 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
-scripts/measure/run_tpc.sh --sf 20 --generate --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 10 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
-scripts/measure/run_tpc.sh --sf 50 --generate --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 10 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
-scripts/measure/run_tpc.sh --sf 100 --generate --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 10 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
+scripts/measure/run_appian.sh --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 60 "${DROP_OS_CACHE_ARG[@]}"
+scripts/measure/run_job.sh --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
+scripts/measure/run_tpc.sh --sf 10 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
+scripts/measure/run_tpc.sh --sf 20 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
+scripts/measure/run_tpc.sh --sf 50 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
+scripts/measure/run_tpc.sh --sf 100 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
 
 # scripts/measure/run_appian.sh --cases 1,2,3,4 --duckdb-profiling --seeds 1
 # scripts/measure/run_job.sh --cases 1,2,3,4 --duckdb-profiling --seeds 1
