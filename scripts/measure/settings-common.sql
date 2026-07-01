@@ -43,8 +43,10 @@ SET thc_enable_shrinkage_check = false; -- Freezes if marginal gain not worth co
 -- SET drop_bf_at_runtime = false; -- Give up BF creation at runtime due to selectivity or memory usage // Is what we want in the end and does not cause the issue
 
 -- -- NEW OPTIMIZER
-SET disable_perfect_hashing = true;
-SET transfer_graph_seed = 0;
+-- GENERAL guideline: keep everything that duckdb has. Everything that RPT+ brings in additiona to duckdb is only set to True in our fifth boxplot. 
+-- FINAL ANSWER: keep all RPT+ optimizations on in all cases.
+SET disable_perfect_hashing = true; -- don't disable for all Cases. Just add a value of 1T in Ash-datagen so that it's not triggered. Never disable it - makes paper more honest.
+SET transfer_graph_seed = 0;  -- 
 SET use_seeded_root = false;
 SET use_seeded_transfer_order = true;
 SET join_order_mode = 'seeded_left_deep';
