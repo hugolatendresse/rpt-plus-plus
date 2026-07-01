@@ -39,9 +39,10 @@ SET skip_unfiltered_tables_graph_creation = true; -- Same as above but during Tr
 SET drop_bf_at_runtime = true; -- Give up BF creation at runtime due to selectivity or memory usage // Is what we want in the end and does not cause the issue
 
 -- Runtime checks to freeze/abandon the THC
+SET thc_enable_first_cycle_check = false;
+SET thc_mu_s_method = 'none';
 SET thc_enable_delta_check = false; -- Abandons if THC increases probe cost
 SET thc_enable_shrinkage_check = false; -- Freezes if marginal gain not worth collection cost
-
 
 -- -- NEW OPTIMIZER
 -- SET disable_perfect_hashing = true; -- don't disable for all Cases. Just add a value of 1T in Ash-datagen so that it's not triggered. Never disable it - makes paper more honest.

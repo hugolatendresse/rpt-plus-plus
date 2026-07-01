@@ -75,8 +75,6 @@ JoinHashTable::JoinHashTable(ClientContext &context_p, const vector<JoinConditio
 	// mu_s estimation controls (per-session)
 	thc_mu_s_method = config.thc_mu_s_method;
 	thc_log_mu_s = config.thc_log_mu_s;
-	thc_mu_s_method = config.thc_mu_s_method;
-	thc_log_mu_s = config.thc_log_mu_s;
 	thc_count_unique_build_keys = thc_mu_s_method == "build_count" || thc_mu_s_method == "all";
 	for (idx_t i = 0; i < conditions.size(); ++i) {
 		auto &condition = conditions[i];
