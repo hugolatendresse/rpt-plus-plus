@@ -6,9 +6,11 @@
 # scripts/measure/run_rptplus_paper_benchmarks.sh
 # To detach: Ctrl-b then d
 # Later: tmux attach -t bench
-# The results csv and medians csv should be created automatically, but I can do
+#
+# The results csv and medians csv should be created automatically, but I can do this to create boxplots
 # scripts/measure/plot_runtime_boxplots.py --csv <csv path of the csv that does NOT end in `_median`> 
-# to create boxplots
+# 
+# Dont' forget to run the "Move results/ to results-spy" VS code task
 
 set -euo pipefail
 
