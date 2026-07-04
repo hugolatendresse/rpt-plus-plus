@@ -27,7 +27,7 @@ CASE_NAMES = {
     "1": "DuckDB",
     "2": "Forward-Only",
     "3": "THC",
-    "4": "RPT",
+    "4": "RPT+",
 }
 
 

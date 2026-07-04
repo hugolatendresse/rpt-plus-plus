@@ -3,7 +3,7 @@
 # To run, do:
 # Generate TPC-H 100 if it doesn't exist!!!!!
 # tmux new -s bench
-# scripts/measure/run_rptplus_paper_benchmarks.sh
+# scripts/measure/run_rptplus_paper_benchmarks.sh --drop-os-cache
 # To detach: Ctrl-b then d
 # Later: tmux attach -t bench
 #
