@@ -17,6 +17,7 @@ CSV_PATH=""
 USE_PERF=false
 USE_DEBUG=false
 USE_DUCKDB_PROFILING=false
+CREATE_BOXPLOTS=false
 DROP_OS_CACHE=false
 TIMEOUT_SECONDS=""
 PERF_EVENTS="cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,mem_access,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd,branch-instructions,branch-misses,br_retired,br_mis_pred_retired"
@@ -40,6 +41,7 @@ Options:
                         under results/job/profiling_<timestamp>/, plus an
                         augmented runtime CSV with per-join THC telemetry
                         columns Join1..JoinN (via thc_csv_postprocess.py).
+  --create-boxplots     Create runtime boxplot PNGs from the final runtime CSV
   --drop-os-cache       Run sync + drop Linux page cache before each measured
                         DuckDB query. Requires sudo and affects the whole host.
   --timeout <seconds>   Per-query wall-clock cap; on timeout DuckDB is killed
@@ -92,6 +94,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--duckdb-profiling)
 		USE_DUCKDB_PROFILING=true
+		shift
+		;;
+	--create-boxplots)
+		CREATE_BOXPLOTS=true
 		shift
 		;;
 	--drop-os-cache)
@@ -255,6 +261,10 @@ if $SWEEPING && [[ -z "$CSV_PATH" ]]; then
 	CSV_PATH="$REPO_ROOT/results/job/job_runtimes_$(date +%Y%m%d_%H%M%S).csv"
 fi
 if [[ -n "$CSV_PATH" ]]; then
+	case "$CSV_PATH" in
+	/*) ;;
+	*) CSV_PATH="$(pwd)/$CSV_PATH" ;;
+	esac
 	mkdir -p "$(dirname "$CSV_PATH")"
 	printf "query,case,seed,run_idx,runtime_seconds\n" >"$CSV_PATH"
 fi
@@ -384,4 +394,15 @@ MEDIAN_SCRIPT="$SCRIPT_DIR/median_runtime_csv.py"
 if [[ -n "$CSV_PATH" ]] && [[ -f "$MEDIAN_SCRIPT" ]] && command -v python3 >/dev/null; then
 	python3 "$MEDIAN_SCRIPT" --csv "$CSV_PATH" || \
 		echo "warning: median_runtime_csv failed for $CSV_PATH" >&2
+fi
+BOXPLOT_SCRIPT="$SCRIPT_DIR/plot_runtime_boxplots.py"
+if $CREATE_BOXPLOTS; then
+	if [[ -z "$CSV_PATH" ]]; then
+		echo "warning: --create-boxplots requested, but no runtime CSV was written" >&2
+	elif [[ -f "$BOXPLOT_SCRIPT" ]] && command -v python3 >/dev/null; then
+		python3 "$BOXPLOT_SCRIPT" --csv "$CSV_PATH" || \
+			echo "warning: plot_runtime_boxplots failed for $CSV_PATH" >&2
+	else
+		echo "warning: cannot create boxplots because $BOXPLOT_SCRIPT or python3 is missing" >&2
+	fi
 fi

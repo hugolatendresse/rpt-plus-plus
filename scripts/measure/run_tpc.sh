@@ -17,6 +17,7 @@ SEEDS_COUNT=""
 USE_PERF=false
 USE_DEBUG=false
 USE_DUCKDB_PROFILING=false
+CREATE_BOXPLOTS=false
 DROP_OS_CACHE=false
 TIMEOUT_SECONDS=""
 COMMON_SETTINGS_SQL="scripts/measure/settings-common.sql"
@@ -47,6 +48,7 @@ Options:
                          under <out-dir>/profiling_<timestamp>/, plus an
                          augmented runtime CSV with per-join THC telemetry
                          columns Join1..JoinN (via thc_csv_postprocess.py).
+  --create-boxplots      Create runtime boxplot PNGs from each final runtime CSV
   --drop-os-cache        Run sync + drop Linux page cache before each measured
                          DuckDB query. Requires sudo and affects the whole host.
   --timeout <seconds>    Per-query wall-clock cap; on timeout DuckDB is killed
@@ -76,6 +78,7 @@ while [[ $# -gt 0 ]]; do
         --perf) USE_PERF=true; shift ;;
         --debug) USE_DEBUG=true; shift ;;
         --duckdb-profiling) USE_DUCKDB_PROFILING=true; shift ;;
+        --create-boxplots) CREATE_BOXPLOTS=true; shift ;;
         --drop-os-cache) DROP_OS_CACHE=true; shift ;;
         --timeout) TIMEOUT_SECONDS="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -421,5 +424,20 @@ if [[ -f "$MEDIAN_SCRIPT" ]] && command -v python3 >/dev/null; then
     if [[ $RUN_TPCDS -eq 1 ]]; then
         python3 "$MEDIAN_SCRIPT" --csv "$TPCDS_CSV_PATH" || \
             echo "warning: median_runtime_csv failed for $TPCDS_CSV_PATH" >&2
+    fi
+fi
+BOXPLOT_SCRIPT="$SCRIPT_DIR/plot_runtime_boxplots.py"
+if $CREATE_BOXPLOTS; then
+    if [[ -f "$BOXPLOT_SCRIPT" ]] && command -v python3 >/dev/null; then
+        if [[ $RUN_TPCH -eq 1 ]]; then
+            python3 "$BOXPLOT_SCRIPT" --csv "$TPCH_CSV_PATH" || \
+                echo "warning: plot_runtime_boxplots failed for $TPCH_CSV_PATH" >&2
+        fi
+        if [[ $RUN_TPCDS -eq 1 ]]; then
+            python3 "$BOXPLOT_SCRIPT" --csv "$TPCDS_CSV_PATH" || \
+                echo "warning: plot_runtime_boxplots failed for $TPCDS_CSV_PATH" >&2
+        fi
+    else
+        echo "warning: cannot create boxplots because $BOXPLOT_SCRIPT or python3 is missing" >&2
     fi
 fi

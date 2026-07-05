@@ -3,26 +3,31 @@
 # To run, do:
 # Generate TPC-H 100 if it doesn't exist!!!!!
 # tmux new -s bench
-# scripts/measure/run_rptplus_paper_benchmarks.sh --drop-os-cache
+# scripts/measure/run_rptplus_paper_benchmarks.sh --drop-os-cache --create-boxplots
 # To detach: Ctrl-b then d
 # Later: tmux attach -t bench
 #
-# The results csv and medians csv should be created automatically, but I can do this to create boxplots
-# scripts/measure/plot_runtime_boxplots.py --csv <csv path of the csv that does NOT end in `_median`> 
+# The results csv and medians csv are created automatically; pass
+# --create-boxplots to also create the per-query runtime boxplots.
 # 
 # Dont' forget to run the "Move results/ to results-spy" VS code task
 
 set -euo pipefail
 
 DROP_OS_CACHE_ARG=()
+CREATE_BOXPLOTS_ARG=()
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--drop-os-cache)
 		DROP_OS_CACHE_ARG=(--drop-os-cache)
 		shift
 		;;
+	--create-boxplots)
+		CREATE_BOXPLOTS_ARG=(--create-boxplots)
+		shift
+		;;
 	-h | --help)
-		echo "Usage: scripts/measure/run_rptplus_paper_benchmarks.sh [--drop-os-cache]"
+		echo "Usage: scripts/measure/run_rptplus_paper_benchmarks.sh [--drop-os-cache] [--create-boxplots]"
 		exit 0
 		;;
 	*)
@@ -32,13 +37,9 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-scripts/measure/run_appian.sh --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 60 "${DROP_OS_CACHE_ARG[@]}"
-scripts/measure/run_job.sh --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
-scripts/measure/run_tpc.sh --sf 10 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
-scripts/measure/run_tpc.sh --sf 20 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
-scripts/measure/run_tpc.sh --sf 50 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
-scripts/measure/run_tpc.sh --sf 100 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}"
-
-# scripts/measure/run_appian.sh --cases 1,2,3,4 --duckdb-profiling --seeds 1
-# scripts/measure/run_job.sh --cases 1,2,3,4 --duckdb-profiling --seeds 1
-# scripts/measure/run_tpc.sh --sf 100 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 1
+scripts/measure/run_appian.sh --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 60 "${DROP_OS_CACHE_ARG[@]}" "${CREATE_BOXPLOTS_ARG[@]}"
+scripts/measure/run_job.sh --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}" "${CREATE_BOXPLOTS_ARG[@]}"
+scripts/measure/run_tpc.sh --sf 10 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}" "${CREATE_BOXPLOTS_ARG[@]}"
+scripts/measure/run_tpc.sh --sf 20 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}" "${CREATE_BOXPLOTS_ARG[@]}"
+scripts/measure/run_tpc.sh --sf 50 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}" "${CREATE_BOXPLOTS_ARG[@]}"
+scripts/measure/run_tpc.sh --sf 100 --tpch-only --cases 1,2,3,4 --duckdb-profiling --seeds 20 --timeout 300 "${DROP_OS_CACHE_ARG[@]}" "${CREATE_BOXPLOTS_ARG[@]}"
