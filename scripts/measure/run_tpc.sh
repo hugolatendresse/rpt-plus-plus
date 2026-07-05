@@ -9,6 +9,7 @@ RUN_TPCH=1
 RUN_TPCDS=1
 DB_BASE_PATH="../benchmark_data"
 TPCH_QUERY=""
+TPCDS_QUERY=""
 RUNS=1
 CASE=""
 CASES_LIST=""
@@ -37,6 +38,7 @@ Options:
   --tpch-only            Run only TPC-H
   --tpcds-only           Run only TPC-DS
   --tpch-query <1..22>   Run one TPC-H query (implies --tpch-only)
+  --tpcds-query <1..99>  Run one TPC-DS query (implies --tpcds-only)
   --runs <N>             Number of benchmark runs per (case, seed) tuple (default: 1)
   --case <1|2|3|4>       Optimizer case (mutually exclusive with --cases)
   --cases <list>         Comma-separated case list, e.g. 2,3,4
@@ -70,6 +72,7 @@ while [[ $# -gt 0 ]]; do
         --tpch-only) RUN_TPCH=1; RUN_TPCDS=0; shift ;;
         --tpcds-only) RUN_TPCH=0; RUN_TPCDS=1; shift ;;
         --tpch-query) TPCH_QUERY="$2"; RUN_TPCH=1; RUN_TPCDS=0; shift 2 ;;
+        --tpcds-query) TPCDS_QUERY="$2"; RUN_TPCH=0; RUN_TPCDS=1; shift 2 ;;
         --runs) RUNS="$2"; shift 2 ;;
         --case) CASE="$2"; shift 2 ;;
         --cases) CASES_LIST="$2"; shift 2 ;;
@@ -317,6 +320,16 @@ else
     TPCH_QUERY_RANGE=$(seq 1 22)
 fi
 
+if [[ -n "$TPCDS_QUERY" ]]; then
+    if ! [[ "$TPCDS_QUERY" =~ ^[0-9]+$ ]] || [[ "$TPCDS_QUERY" -lt 1 ]] || [[ "$TPCDS_QUERY" -gt 99 ]]; then
+        echo "Error: --tpcds-query must be between 1 and 99" >&2
+        exit 1
+    fi
+    TPCDS_QUERY_RANGE="$TPCDS_QUERY"
+else
+    TPCDS_QUERY_RANGE=$(seq 1 99)
+fi
+
 if [[ $RUN_TPCH -eq 1 ]]; then
     printf "query,case,seed,run_idx,runtime_seconds\n" > "$TPCH_CSV_PATH"
 fi
@@ -360,7 +373,7 @@ for c in "${CASES[@]}"; do
             fi
 
             if [[ $RUN_TPCDS -eq 1 ]]; then
-                for Q in $(seq 1 99); do
+                for Q in $TPCDS_QUERY_RANGE; do
                     echo "Running TPC-DS query ${Q}..."
                     seed_for_path="${s:-default}"
                     if $USE_DUCKDB_PROFILING; then
