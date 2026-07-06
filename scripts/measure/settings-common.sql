@@ -18,7 +18,7 @@ SET thc_l3_budget = 37_748_736; -- 36MB
 SET thc_miss_below_which_skip_collect = 0.0;
 
 -- General Parameters
-SET max_temp_directory_size='0KiB';
+-- SET max_temp_directory_size='0KiB'; -- Setting this to 0 prevents spilling
 SET threads = 64;
 SET pin_threads = 'on';
 

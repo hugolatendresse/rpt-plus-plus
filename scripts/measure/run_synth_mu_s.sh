@@ -61,6 +61,13 @@ drop_os_page_cache() {
   sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
 }
 
+# Keep long synthetic sweeps interpretable: DuckDB OOM/temp-spill-limit failures
+# are resource misses, not ordinary latency samples.
+is_recoverable_duckdb_resource_error() {
+  local error_file="$1"
+  grep -Eiq 'Out of Memory Error|failed to offload data block|max_temp_directory_size' "$error_file"
+}
+
 # Helper: write SQL to generate skewed build/probe tables for a target average mu
 # Approach: choose m_hot = round(2*mu), m_cold = max(1, round(0.5*mu)); K ~ N / (0.1*m_hot + 0.9*m_cold)
 # Then build rows = H*m_hot + (K-H)*m_cold ~ N (close enough for large N)
@@ -160,13 +167,19 @@ PRAGMA profiling_coverage='SELECT';
 Q
 )
       drop_os_page_cache
-      echo -e "$SETTINGS\n$QUERY" | "$DUCKDB_BIN" "$DB" 2>"$LOG_ERR" >/dev/null || true
+      rc=0
+      echo -e "$SETTINGS\n$QUERY" | "$DUCKDB_BIN" "$DB" 2>"$LOG_ERR" >/dev/null || rc=$?
       # Copy profiling file if present
       if [[ -f results.json ]]; then
         cp results.json "$RES_JSON"
       fi
       # Extract latency
-      LAT=$(jq -r '.latency' "$RES_JSON" 2>/dev/null || echo "NaN")
+      if [[ "$rc" -ne 0 ]] && is_recoverable_duckdb_resource_error "$LOG_ERR"; then
+        log "DuckDB OOM/temp-spill limit for method=$METHOD mu=$MU run=$r; recording 8888888"
+        LAT=8888888
+      else
+        LAT=$(jq -r '.latency' "$RES_JSON" 2>/dev/null || echo "NaN")
+      fi
       echo "$LAT" >> "$RUN_DIR/times.txt"
       # Extract last mu_s line if any
       tail -n 50 "$LOG_ERR" | sed -n 's/.*\(\[mu_s [^]]*\].*\)/\1/p' >> "$RUN_DIR/mu_s.log" || true

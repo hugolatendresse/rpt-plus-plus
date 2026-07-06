@@ -236,6 +236,13 @@ drop_os_page_cache() {
     sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
 }
 
+# DuckDB resource failures are per-query benchmark misses for sweep CSVs: record
+# them explicitly and keep later cases/seeds running.
+is_recoverable_duckdb_resource_error() {
+    local error_file="$1"
+    grep -Eiq 'Out of Memory Error|failed to offload data block|max_temp_directory_size' "$error_file"
+}
+
 # Sweep mode: any time we span more than a single (case, seed) tuple,
 # or whenever the user explicitly asks for a CSV.
 SWEEPING=false
@@ -383,6 +390,17 @@ for c in "${CASES[@]}"; do
         drop_os_page_cache
         if ! printf '%s\n' "$sql" | "${CMD[@]}" >"$tmp_out" 2>&1; then
             cat "$tmp_out" >&2
+            if is_recoverable_duckdb_resource_error "$tmp_out"; then
+                echo "Warning: query hit DuckDB OOM/temp-spill limit (case ${c}, seed ${seed_disp}); recording runtime 8888888" >&2
+                if [[ -n "$CSV_PATH" ]]; then
+                    for ((i = 1; i <= RUNS; i++)); do
+                        printf '%s,%s,%s,%s\n' "$DB_NAME" "$c" "$s" "8888888" >>"$CSV_PATH"
+                    done
+                fi
+                TOTAL_RUNS=$((TOTAL_RUNS + RUNS))
+                rm -f "$tmp_out"
+                continue
+            fi
             rm -f "$tmp_out"
             echo "Error: query failed (case ${c}, seed ${seed_disp})" >&2
             exit 1
@@ -411,8 +429,23 @@ for c in "${CASES[@]}"; do
         TOTAL_RUNS=$((TOTAL_RUNS + run_count))
         rm -f "$tmp_out"
         if $PROFILE; then
+            tmp_profile="$(mktemp)"
             drop_os_page_cache
-            build_profile_sql "$c" "$s" | "${CMD[@]}"
+            if ! build_profile_sql "$c" "$s" | "${CMD[@]}" >"$tmp_profile" 2>&1; then
+                cat "$tmp_profile" >&2
+                if is_recoverable_duckdb_resource_error "$tmp_profile"; then
+                    echo "Warning: profiling hit DuckDB OOM/temp-spill limit (case ${c}, seed ${seed_disp}); continuing sweep" >&2
+                    rm -f "$tmp_profile"
+                    continue
+                fi
+                rm -f "$tmp_profile"
+                echo "Error: profiling failed (case ${c}, seed ${seed_disp})" >&2
+                exit 1
+            fi
+            if [[ -s "$tmp_profile" ]]; then
+                cat "$tmp_profile"
+            fi
+            rm -f "$tmp_profile"
         fi
     done
 done

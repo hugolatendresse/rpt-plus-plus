@@ -6,9 +6,9 @@ thc_csv_postprocess.py) down to one row per (query, case).
 
 For each (query, case) group the rows are sorted by `runtime_seconds` and the
 row at index `len(group) // 2` is kept -- the true median for an odd number of
-runs, and the upper of the two middle rows for an even number. Timeout sentinel
-rows (`runtime_seconds == 9999999`) sort to the top and are kept as legitimate
-data points.
+runs, and the upper of the two middle rows for an even number. OOM/temp-spill
+and timeout sentinel rows (`runtime_seconds == 8888888` or `9999999`) sort to
+the top and are kept as legitimate data points.
 
 The selected rows are written to a new CSV (default: the input path with
 `_median` inserted before the `.csv` extension) with the same header and the

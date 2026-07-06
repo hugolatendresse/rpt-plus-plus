@@ -45,7 +45,9 @@ Options:
   --drop-os-cache       Run sync + drop Linux page cache before each measured
                         DuckDB query. Requires sudo and affects the whole host.
   --timeout <seconds>   Per-query wall-clock cap; on timeout DuckDB is killed
-                        and the run records a runtime of 9999999 in the CSV
+                        and the run records a runtime of 9999999 in the CSV.
+                        DuckDB OOM/temp-spill-limit failures record 8888888
+                        so long sweeps can continue.
   -h, --help            Show this help
 USAGE
 }
@@ -359,40 +361,92 @@ drop_os_page_cache() {
 # Match run_job.sh: cd into the benchmark dir so relative query paths resolve.
 cd "$REPO_ROOT/benchmark/appian_benchmarks"
 
+# DuckDB can reject a query because it cannot allocate memory or because the
+# configured temp directory limit prevents spilling. Treat those as per-query
+# benchmark misses, distinct from timeout misses, rather than losing a sweep.
+is_recoverable_duckdb_resource_error() {
+	local error_file="$1"
+	grep -Eiq 'Out of Memory Error|failed to offload data block|max_temp_directory_size' "$error_file"
+}
+
+process_group_alive() {
+	local pid="$1"
+	kill -0 -- "-$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null
+}
+
+terminate_process_group() {
+	local pid="$1"
+	local grace_seconds=5
+	local waited=0
+
+	kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+	while process_group_alive "$pid" && [[ "$waited" -lt "$grace_seconds" ]]; do
+		sleep 1
+		waited=$((waited + 1))
+	done
+	if process_group_alive "$pid"; then
+		kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+	fi
+}
+
 run_query() {
 	local case_num="$1"
 	local seed_val="$2"
 	local query_file="$3"
-	local sql time_file runtime rc
+	local sql sql_file error_file cmd_pid runtime rc timed_out start_time end_time deadline
 	sql="$(build_sql "$case_num" "$seed_val" "$query_file")"
-	time_file=$(mktemp)
+	sql_file=$(mktemp)
+	error_file=$(mktemp)
 	rc=0
+	timed_out=0
+	printf '%s\n' "$sql" >"$sql_file"
 	drop_os_page_cache
-	# When TIMEOUT_SECONDS is set, DuckDB (or the perf-wrapped DuckDB) is run
-	# under `timeout -k 5`, which sends SIGTERM and then SIGKILL after a 5s
-	# grace period. `timeout` exits 124 on timeout (137 if force-killed); both
-	# are treated as "query timed out" below. An empty timeout arg keeps the
-	# original, un-capped invocation.
+	start_time=$(date +%s.%N)
+	# Run DuckDB in its own process group so timeout cleanup also kills any
+	# DuckDB child that would otherwise keep the database lock alive.
 	if $USE_PERF; then
-		/usr/bin/time -f "%e" -o "$time_file" bash -c \
-			'tt="$5"; if [[ -n "$tt" ]]; then printf "%s\n" "$1" | timeout -k 5 "$tt" sudo perf stat -e "$2" -- "$3" "$4"; else printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4"; fi' \
-			_ "$sql" "$PERF_EVENTS" "$DUCKDB_BIN" "$DB_FILE" "$TIMEOUT_SECONDS" || rc=$?
+		setsid bash -c 'exec sudo perf stat -e "$1" -- "$2" "$3" < "$4" 2>"$5"' \
+			_ "$PERF_EVENTS" "$DUCKDB_BIN" "$DB_FILE" "$sql_file" "$error_file" &
 	else
-		/usr/bin/time -f "%e" -o "$time_file" bash -c \
-			'tt="$4"; if [[ -n "$tt" ]]; then printf "%s\n" "$1" | timeout -k 5 "$tt" "$2" "$3"; else printf "%s\n" "$1" | "$2" "$3"; fi' \
-			_ "$sql" "$DUCKDB_BIN" "$DB_FILE" "$TIMEOUT_SECONDS" || rc=$?
+		setsid bash -c 'exec "$1" "$2" < "$3" 2>"$4"' \
+			_ "$DUCKDB_BIN" "$DB_FILE" "$sql_file" "$error_file" &
+	fi
+	cmd_pid=$!
+	if [[ -n "$TIMEOUT_SECONDS" ]]; then
+		deadline=$(($(date +%s) + TIMEOUT_SECONDS))
+		while process_group_alive "$cmd_pid"; do
+			if [[ "$(date +%s)" -ge "$deadline" ]]; then
+				timed_out=1
+				break
+			fi
+			sleep 0.1
+		done
+	fi
+	if [[ "$timed_out" -eq 1 ]]; then
+		terminate_process_group "$cmd_pid"
+		wait "$cmd_pid" 2>/dev/null || true
+		rc=124
+	else
+		wait "$cmd_pid" || rc=$?
+	fi
+	end_time=$(date +%s.%N)
+	if [[ -s "$error_file" ]]; then
+		cat "$error_file" >&2
 	fi
 	if [[ "$rc" -eq 0 ]]; then
-		runtime=$(awk 'NR==1{print $1}' "$time_file")
+		runtime=$(awk -v s="$start_time" -v e="$end_time" 'BEGIN{printf "%.2f", e - s}')
 	elif [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
 		echo "Warning: query ${query_file} timed out after ${TIMEOUT_SECONDS}s (case ${case_num}, seed ${seed_val:-default}); recording runtime 9999999" >&2
 		runtime=9999999
+	elif is_recoverable_duckdb_resource_error "$error_file"; then
+		echo "Warning: query ${query_file} hit DuckDB OOM/temp-spill limit (case ${case_num}, seed ${seed_val:-default}); recording runtime 8888888" >&2
+		runtime=8888888
 	else
-		rm -f "$time_file"
+		rm -f "$sql_file" "$error_file"
 		echo "Error: query ${query_file} failed (case ${case_num}, seed ${seed_val:-default})" >&2
 		exit 1
 	fi
-	rm -f "$time_file"
+	rm -f "$sql_file" "$error_file"
 	LAST_RUNTIME="$runtime"
 }
 
