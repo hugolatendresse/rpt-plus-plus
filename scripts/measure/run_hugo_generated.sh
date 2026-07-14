@@ -250,8 +250,8 @@ if $SWEEPING_SEEDS || [[ ${#CASES[@]} -gt 1 ]]; then
     SWEEPING=true
 fi
 if $SWEEPING && [[ -z "$CSV_PATH" ]]; then
-    mkdir -p "$REPO_ROOT/hugo_generated_results"
-    CSV_PATH="$REPO_ROOT/hugo_generated_results/hugo_generated_runtimes_$(date +%Y%m%d_%H%M%S).csv"
+    mkdir -p "$REPO_ROOT/results/hugo_generated"
+    CSV_PATH="$REPO_ROOT/results/hugo_generated/hugo_generated_runtimes_$(date +%Y%m%d_%H%M%S).csv"
 fi
 if [[ -n "$CSV_PATH" ]]; then
     mkdir -p "$(dirname "$CSV_PATH")"
