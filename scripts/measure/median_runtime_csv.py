@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Condense a benchmark runtime CSV (written by scripts/measure/run_tpc.sh,
-run_job.sh, or run_appian.sh, possibly already augmented by
-thc_csv_postprocess.py) down to one row per (query, case).
+Condense a benchmark runtime CSV written by a scripts/measure benchmark
+driver, possibly already augmented by thc_csv_postprocess.py, down to one row
+per (query, case).
 
 For each (query, case) group the rows are sorted by `runtime_seconds` and the
 row at index `len(group) // 2` is kept -- the true median for an odd number of
