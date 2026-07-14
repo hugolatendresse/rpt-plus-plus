@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+ #!/usr/bin/env bash
 # Run THC benchmark: generate data (optionally) then run the join query under perf (optionally).
 #
 # Usage:
@@ -456,4 +456,11 @@ if [[ -n "$CSV_PATH" ]]; then
 fi
 if $PROFILE; then
     echo "DuckDB profiling output written to: $PROFILE_JSON"
+fi
+# Condense the runtime CSV to one (median) row per (query, case), matching the
+# postprocessing performed by the JOB, Appian, and TPC benchmark drivers.
+MEDIAN_SCRIPT="$SCRIPT_DIR/median_runtime_csv.py"
+if [[ -n "$CSV_PATH" ]] && [[ -f "$MEDIAN_SCRIPT" ]] && command -v python3 >/dev/null; then
+    python3 "$MEDIAN_SCRIPT" --csv "$CSV_PATH" || \
+        echo "warning: median_runtime_csv failed for $CSV_PATH" >&2
 fi
