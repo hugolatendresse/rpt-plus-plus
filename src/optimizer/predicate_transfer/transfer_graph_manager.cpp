@@ -1,11 +1,15 @@
 #include "duckdb/optimizer/predicate_transfer/transfer_graph_manager.hpp"
 
+#include "duckdb/common/debug_log.hpp"
+#include "duckdb/common/types/hash.hpp"
+#include "duckdb/main/client_config.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/optimizer/predicate_transfer/predicate_transfer_optimizer.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 
+#include <algorithm>
 #include <queue>
 
 namespace duckdb {
@@ -55,16 +59,40 @@ bool TransferGraphManager::Build(LogicalOperator &plan) {
 	}
 
 	// 2. Getting graph edges information from join operators
+	// NOTE: the FILTER_PUSHDOWN optimization (using FilterCombiner) creates join conditions
+	// based on equivalence classes. Hence, we might see edges below that are not in the 
+	// original plan. 
 	ExtractEdgesInfo(joins);
 	if (neighbor_matrix.empty()) {
 		return false;
 	}
 
-	// 3. Unfiltered Table only receives Bloom filters, they will not generate Bloom filters.
-	SkipUnfilteredTable(joins);
+	auto &cfg = ClientConfig::GetConfig(context);
 
-	// 4. Create the transfer graph
-	CreateTransferPlanUpdated();
+	// 3. Unfiltered tables only receive Bloom filters, they will not generate Bloom filters.
+	//    Gated by skip_unfiltered_tables_graph_creation so the edge-pruning pass can be
+	//    toggled independently of the transfer-order strategy. Disabling it
+	//    lets CreateTransferPlanSPY explore plans where unfiltered tables
+	//    also create BFs.
+	if (cfg.skip_unfiltered_tables_graph_creation) {
+		SkipUnfilteredTable(joins);
+	}
+
+	// 4. Create the transfer graph. Root selection and non-root growth are
+	//    controlled by two independent flags so all four combinations work:
+	//      - use_seeded_root=false, use_seeded_transfer_order=false: pure
+	//        RPT+ paper behavior. Root is the largest filtered/intermediate
+	//        table; subsequent nodes are picked greedily by cardinality.
+	//      - use_seeded_root=false, use_seeded_transfer_order=true: RPT+
+	//        root pick combined with seed-driven growth.
+	//      - use_seeded_root=true,  use_seeded_transfer_order=false: seed
+	//        picks the root, then greedy cardinality-driven growth.
+	//      - use_seeded_root=true,  use_seeded_transfer_order=true: fully
+	//        seed-driven (every choice from the seed).
+	//    `transfer_graph_seed` is consulted only when at least one of the
+	//    two strategies is seeded. The seed value itself (including 0) only
+	//    affects which plan is enumerated; it is never random.
+	CreateTransferPlanSPY(cfg.use_seeded_root, cfg.use_seeded_transfer_order, cfg.transfer_graph_seed);
 
 	return true;
 }
@@ -154,8 +182,19 @@ void TransferGraphManager::PrintTransferPlan() {
 	          << "\n";
 }
 
+//! Go through list of join operators and grab all the edges, ie all the equi-join conditions.
+//! Populate neighbor_matrix with all those conditions
+//!
+//! We use union-find to build join-key equivalence classes (ie JoinKeyTableGroup) into `table_groups`.
+//! An equivalent class is basically one column's value: columns from tables that are expected to have the
+//! same value based on equijoin predicates are in the same equivalence class.
+//! NOTE: union-find / equivalence classes:
+//! - directly affect the backward pass, which collapses chains of equijoins into a single broadcast  
+//! - indirectly affects the forward pass since tables can be 'unfiltered' or 'intermediate' based on
+//!   whether they are in multiple equivalent classes.   
 void TransferGraphManager::ExtractEdgesInfo(const vector<reference<LogicalOperator>> &join_operators) {
-	// Deduplicate join conditions
+	// Deduplicate join conditions.
+	// Two join predicates are the same if they involve the same columns from the same tables (in any order)
 	unordered_set<hash_t> existed_set;
 	auto ComputeConditionHash = [](const JoinCondition &cond) {
 		return cond.left->Hash() + cond.right->Hash();
@@ -262,6 +301,7 @@ void TransferGraphManager::ExtractEdgesInfo(const vector<reference<LogicalOperat
 	ClassifyTables();
 }
 
+// Classify all tables into three categories: intermediate table, unfiltered table, and filtered table.
 void TransferGraphManager::ClassifyTables() {
 	for (auto &pair : table_operator_manager.table_operators) {
 		auto id = pair.first;
@@ -554,75 +594,298 @@ void TransferGraphManager::LargestRoot(vector<LogicalOperator *> &sorted_nodes) 
 		constructed_set.insert(selected_edge.second);
 	}
 }
-void TransferGraphManager::LargestRootUpdated(vector<LogicalOperator *> &sorted_nodes) {
-	unordered_set<idx_t> constructed_set, unconstructed_set;
-	int prior_flag = static_cast<int>(table_operator_manager.table_operators.size()) - 1;
-	idx_t root = std::numeric_limits<idx_t>::max();
 
-	// Try to choose the largest filtered or intermediate table as the root
-	for (auto it = sorted_nodes.rbegin(); it != sorted_nodes.rend(); ++it) {
-		auto &node = *it;
-		auto id = table_operator_manager.GetScalarTableIndex(node);
-		if (filtered_table.count(id) || intermediate_table.count(id)) {
-			root = id;
-			break;
-		}
+//! Build the predicate-transfer spanning tree for any of the four
+//! (seeded_root, seeded_growth) strategy combinations, then run the shared
+//! forward/backward edge-wiring pass.
+//!
+//! The function tracks progress via local `constructed_set` /
+//! `unconstructed_set` and never erases entries from
+//! `table_operator_manager.table_operators`, so all four combos can rely on
+//! `GetTableOperator(id)` staying valid for the full lifetime of the call.
+//! Disconnected components are handled inline by picking a fresh root from
+//! the leftovers using the current root strategy.
+//!
+//! `cardinality_order` invariant (used by the wiring pass below):
+//!   - The init loop hands out distinct values `n-1 .. 0` to every table.
+//!   - Every child placement overwrites the value with `prior_flag--`,
+//!     which becomes negative once the init range is exhausted.
+//!   - Initial roots and disconnected new roots keep their (>=0) init value.
+//!   - For every recorded edge, parent.cardinality_order > child.cardinality_order
+//!     because the parent was placed first. The "smaller table on the left"
+//!     swap in WireTransferGraph relies on this strict ordering.
+void TransferGraphManager::CreateTransferPlanSPY(bool seeded_root, bool seeded_growth, uint64_t seed) {
+	if (table_operator_manager.table_operators.empty()) {
+		return;
 	}
 
-	// If we cannot find it, all tables have no filter
-	if (root == std::numeric_limits<idx_t>::max()) {
-		auto &node = sorted_nodes.back();
-		root = table_operator_manager.GetScalarTableIndex(node);
-	}
+	auto &sorted_nodes = table_operator_manager.sorted_table_operators;
 
-	// Initialize nodes
-	for (auto &entry : table_operator_manager.table_operators) {
-		idx_t id = entry.first;
-		if (id == root) {
-			constructed_set.insert(id);
-		} else {
-			unconstructed_set.insert(id);
+	// Deterministic name lookup. Matches the pattern used by PrintTransferPlan
+	// so the enumeration is anchored on table names when available.
+	auto GetName = [](LogicalOperator *op) -> string {
+		auto params = op->ParamsToString();
+		if (params.contains("Table")) {
+			return params.at("Table");
 		}
+		return string("Unknown");
+	};
 
-		auto node = make_uniq<GraphNode>(id, prior_flag--);
-		transfer_graph[id] = std::move(node);
-	}
+	// Use the current seed to pick an index in [0, n), then advance the seed
+	// via MurmurHash64. Advance-after-use means the very first call consumes
+	// the original seed directly. Only invoked along seeded code paths.
+	auto PickMod = [&](size_t n) -> size_t {
+		size_t result = static_cast<size_t>(seed % n);
+		seed = MurmurHash64(seed);
+		return result;
+	};
 
-	// Add root
-	transfer_order.push_back(table_operator_manager.GetTableOperator(root));
-	table_operator_manager.table_operators.erase(root);
-	for (auto &col_binding : table_join_keys[root]) {
-		auto &group = table_groups[col_binding];
-		if (group) {
-			group->RegisterLeader(root, col_binding);
-		}
-	}
-
-	// Build graph
-	while (!unconstructed_set.empty()) {
-		auto selected_edge = FindEdge(constructed_set, unconstructed_set);
-		if (selected_edge.first == std::numeric_limits<idx_t>::max()) {
-			break;
-		}
-
-		auto &edge = neighbor_matrix[selected_edge.first][selected_edge.second];
-		selected_edges.emplace_back(std::move(edge));
-
-		auto node = transfer_graph[selected_edge.second].get();
-		node->cardinality_order = prior_flag--;
-
-		transfer_order.push_back(table_operator_manager.GetTableOperator(node->id));
-		table_operator_manager.table_operators.erase(node->id);
-		for (auto &col_binding : table_join_keys[node->id]) {
+	// Register `id` as the leader for every join-key group it participates in.
+	// `table_groups` is populated by ExtractEdgesInfo via UnionBindings, so an
+	// entry exists only for bindings that participated in at least one
+	// unprotected equijoin (protected edges -- e.g. the outer side of a
+	// LEFT/RIGHT/MARK join -- skip the union step). Bindings outside any
+	// group leave `group` null, which is why the null check is needed.
+	auto RegisterLeaders = [&](idx_t id) {
+		for (auto &col_binding : table_join_keys[id]) {
 			auto &group = table_groups[col_binding];
 			if (group) {
-				group->RegisterLeader(node->id, col_binding);
+				group->RegisterLeader(id, col_binding);
 			}
 		}
+	};
 
-		unconstructed_set.erase(selected_edge.second);
-		constructed_set.insert(selected_edge.second);
+	// Order by (name, table_index). The table_index tiebreaker guarantees a
+	// total order even when multiple operators share the same displayed name
+	// (e.g. two scans of the same physical table).
+	auto LessByName = [&](idx_t a, idx_t b) {
+		auto *op_a = table_operator_manager.GetTableOperator(a);
+		auto *op_b = table_operator_manager.GetTableOperator(b);
+		auto name_a = GetName(op_a);
+		auto name_b = GetName(op_b);
+		if (name_a != name_b) {
+			return name_a < name_b;
+		}
+		return a < b;
+	};
+
+	// This decreasing counter is used to hand out distinct cardinality_order
+	// values to each GraphNode. The meaning of cardinality_order is "which
+	// end of this edge is the parent in the spanning tree". "Parent" means
+	// "added to the tree earlier" and "child" means "added to the tree later".
+	// Every time we add a table as a child, we overwrite its node's
+	// cardinality_order with `prior_flag--`. The init loop below uses the
+	// same counter, so child values always end up strictly smaller than any
+	// initial value that survives (i.e. roots of connected components).
+	int prior_flag = static_cast<int>(table_operator_manager.table_operators.size()) - 1;
+
+	// 1. Initialize GraphNodes for all tables. Each node starts with a
+	//    distinct `prior_flag` value; children added later will overwrite
+	//    this to a smaller value. Roots of any connected component never
+	//    have their value overwritten.
+	vector<idx_t> all_ids;
+	all_ids.reserve(table_operator_manager.table_operators.size());
+	for (auto &entry : table_operator_manager.table_operators) {
+		all_ids.push_back(entry.first);
+		auto node = make_uniq<GraphNode>(entry.first, prior_flag--);
+		transfer_graph[entry.first] = std::move(node);
 	}
+
+	// Table indices that have been attached to the spanning tree
+	unordered_set<idx_t> constructed_set;
+	// Table indices that have not been attached to the spanning tree yet
+	unordered_set<idx_t> unconstructed_set(all_ids.begin(), all_ids.end());
+
+	DEBUG_LOG("[CreateTransferPlan] seeded_root=%d seeded_growth=%d seed=%llu num_tables=%zu\n",
+	          seeded_root ? 1 : 0, seeded_growth ? 1 : 0,
+	          static_cast<unsigned long long>(seed),
+	          table_operator_manager.table_operators.size());
+
+	// PickRoot returns the next root (called for the initial root and for
+	// every disconnected-component continuation). Both strategies pick
+	// strictly out of `unconstructed_set` so they keep returning fresh ids.
+	auto PickRoot = [&]() -> idx_t {
+		D_ASSERT(!unconstructed_set.empty());
+		if (seeded_root) {
+			// Seed-driven pick over a deterministic name-sorted snapshot of
+			// the unconstructed candidates. Any table is a valid root,
+			// including unfiltered ones. Note: combining seeded_root=true
+			// with skip_unfiltered_tables_graph_creation=true can root the
+			// tree at a table whose outgoing edges were pruned by
+			// SkipUnfilteredTable, which yields a degenerate spanning tree
+			// for that component.
+			vector<idx_t> remaining(unconstructed_set.begin(), unconstructed_set.end());
+			std::sort(remaining.begin(), remaining.end(), LessByName);
+			size_t idx = PickMod(remaining.size());
+			return remaining[idx];
+		}
+		// RPT+ behavior: walk the cardinality-sorted list in reverse and
+		// return the largest filtered/intermediate table that is still
+		// unconstructed. Restricting to filtered/intermediate keeps the
+		// backward pass meaningful when SkipUnfilteredTable has run.
+		for (auto it = sorted_nodes.rbegin(); it != sorted_nodes.rend(); ++it) {
+			idx_t id = TableOperatorManager::GetScalarTableIndex(*it);
+			if (!unconstructed_set.count(id)) {
+				continue;
+			}
+			if (filtered_table.count(id) || intermediate_table.count(id)) {
+				return id;
+			}
+		}
+		// Fallback: no filtered/intermediate table left, fall back to the
+		// largest unconstructed table.
+		for (auto it = sorted_nodes.rbegin(); it != sorted_nodes.rend(); ++it) {
+			idx_t id = TableOperatorManager::GetScalarTableIndex(*it);
+			if (unconstructed_set.count(id)) {
+				return id;
+			}
+		}
+		// unconstructed_set is non-empty (asserted above) but no entry was
+		// reachable through sorted_nodes -- should not happen because every
+		// initialized table is in sorted_table_operators.
+		return *unconstructed_set.begin();
+	};
+
+	// PickEdge returns (parent, child); (max, max) signals "no edge into the
+	// constructed set", which the outer loop treats as a disconnected
+	// component and resolves via PickRoot().
+	auto PickEdge = [&]() -> pair<idx_t, idx_t> {
+		if (seeded_growth) {
+			// Collect unconstructed tables that are reachable from the
+			// current spanning tree via at least one surviving edge.
+			vector<idx_t> neighbors;
+			neighbors.reserve(unconstructed_set.size());
+			for (auto &t : unconstructed_set) {
+				bool has_edge = false;
+				for (auto &j : constructed_set) {
+					auto row_it = neighbor_matrix.find(j);
+					if (row_it == neighbor_matrix.end()) {
+						continue;
+					}
+					auto col_it = row_it->second.find(t);
+					if (col_it != row_it->second.end() && col_it->second) {
+						has_edge = true;
+						break;
+					}
+				}
+				if (has_edge) {
+					neighbors.push_back(t);
+				}
+			}
+			if (neighbors.empty()) {
+				return {std::numeric_limits<idx_t>::max(), std::numeric_limits<idx_t>::max()};
+			}
+			std::sort(neighbors.begin(), neighbors.end(), LessByName);
+			size_t idx = PickMod(neighbors.size());
+			idx_t t = neighbors[idx];
+
+			// Enumerate all valid parents (constructed tables with an edge
+			// to t) in a deterministic order and let the seed pick among
+			// them.
+			vector<idx_t> parents;
+			for (auto &j : constructed_set) {
+				auto row_it = neighbor_matrix.find(j);
+				if (row_it == neighbor_matrix.end()) {
+					continue;
+				}
+				auto col_it = row_it->second.find(t);
+				if (col_it != row_it->second.end() && col_it->second) {
+					parents.push_back(j);
+				}
+			}
+			std::sort(parents.begin(), parents.end(), LessByName);
+			D_ASSERT(!parents.empty());
+			size_t p_idx = PickMod(parents.size());
+			idx_t parent = parents[p_idx];
+
+			DEBUG_LOG("[CreateTransferPlan] step=%zu seeded-growth attach child=%s (table_index=%zu, "
+			          "neighbor_idx=%zu/%zu) <- parent=%s (table_index=%zu, parent_idx=%zu/%zu)\n",
+			          constructed_set.size(),
+			          GetName(table_operator_manager.GetTableOperator(t)).c_str(),
+			          static_cast<size_t>(t), idx, neighbors.size(),
+			          GetName(table_operator_manager.GetTableOperator(parent)).c_str(),
+			          static_cast<size_t>(parent), p_idx, parents.size());
+
+			return {parent, t};
+		}
+		// RPT+ greedy growth: FindEdge already takes constructed/unconstructed
+		// sets and picks the highest-cardinality unconstructed neighbor with
+		// any qualifying edge into the constructed set. Returns max/max when
+		// no such edge exists.
+		auto picked = FindEdge(constructed_set, unconstructed_set);
+		if (picked.first != std::numeric_limits<idx_t>::max()) {
+			DEBUG_LOG("[CreateTransferPlan] step=%zu greedy-growth attach child=%s (table_index=%zu) <- "
+			          "parent=%s (table_index=%zu)\n",
+			          constructed_set.size(),
+			          GetName(table_operator_manager.GetTableOperator(picked.second)).c_str(),
+			          static_cast<size_t>(picked.second),
+			          GetName(table_operator_manager.GetTableOperator(picked.first)).c_str(),
+			          static_cast<size_t>(picked.first));
+		}
+		return picked;
+	};
+
+	// 2. Place the initial root.
+	idx_t root = PickRoot();
+	DEBUG_LOG("[CreateTransferPlan] root=%s (table_index=%zu)\n",
+	          GetName(table_operator_manager.GetTableOperator(root)).c_str(),
+	          static_cast<size_t>(root));
+	transfer_order.push_back(table_operator_manager.GetTableOperator(root));
+	constructed_set.insert(root);
+	unconstructed_set.erase(root);
+	RegisterLeaders(root);
+
+	// 3. Grow the spanning tree. On "no edge" the leftovers form a
+	//    disconnected component; pick a fresh root using the same root
+	//    strategy and continue.
+	while (!unconstructed_set.empty()) {
+		auto picked = PickEdge();
+		if (picked.first == std::numeric_limits<idx_t>::max()) {
+			idx_t new_root = PickRoot();
+			DEBUG_LOG("[CreateTransferPlan] step=%zu disconnected-component new_root=%s (table_index=%zu)\n",
+			          constructed_set.size(),
+			          GetName(table_operator_manager.GetTableOperator(new_root)).c_str(),
+			          static_cast<size_t>(new_root));
+			// No edge is recorded because by definition there is no
+			// connection back to the existing tree. The new root keeps its
+			// initial `cardinality_order` from the init loop.
+			transfer_order.push_back(table_operator_manager.GetTableOperator(new_root));
+			constructed_set.insert(new_root);
+			unconstructed_set.erase(new_root);
+			RegisterLeaders(new_root);
+			continue;
+		}
+
+		idx_t parent = picked.first;
+		idx_t child = picked.second;
+		auto &edge = neighbor_matrix[parent][child];
+		selected_edges.emplace_back(std::move(edge));
+
+		auto node = transfer_graph[child].get();
+		node->cardinality_order = prior_flag--;
+
+		transfer_order.push_back(table_operator_manager.GetTableOperator(child));
+		RegisterLeaders(child);
+
+		constructed_set.insert(child);
+		unconstructed_set.erase(child);
+	}
+
+	// Final summary so the full order is visible in one block without
+	// having to stitch the per-step lines back together.
+	DEBUG_LOG("[CreateTransferPlan] done. transfer_order size=%zu\n", transfer_order.size());
+	for (size_t i = 0; i < transfer_order.size(); ++i) {
+		auto *op = transfer_order[i];
+		idx_t tid = TableOperatorManager::GetScalarTableIndex(op);
+		DEBUG_LOG("[CreateTransferPlan]   [%zu] %s (table_index=%zu)\n",
+		          i, op ? GetName(op).c_str() : "<null>", static_cast<size_t>(tid));
+	}
+
+	// 4. Wire forward/backward edges. This pass is identical for every
+	//    strategy combo because it only consumes selected_edges,
+	//    transfer_graph (with a populated cardinality_order on every node)
+	//    and table_groups.
+	WireTransferGraph();
 }
 
 void TransferGraphManager::CreateOriginTransferPlan() {
@@ -674,14 +937,12 @@ void TransferGraphManager::CreateOriginTransferPlan() {
 	}
 }
 
-void TransferGraphManager::CreateTransferPlanUpdated() {
-	auto saved_nodes = table_operator_manager.table_operators;
-	while (!table_operator_manager.table_operators.empty()) {
-		LargestRootUpdated(table_operator_manager.sorted_table_operators);
-		table_operator_manager.SortTableOperators();
-	}
-	table_operator_manager.table_operators = saved_nodes;
-
+//! Wire forward/backward Bloom-filter edges for every selected spanning-tree
+//! edge. Shared by all four strategy combinations because it only consumes
+//! `selected_edges`, `transfer_graph` (with a populated `cardinality_order`
+//! on every node) and `table_groups` -- none of which depend on how the
+//! spanning tree itself was picked.
+void TransferGraphManager::WireTransferGraph() {
 	for (auto &edge : selected_edges) {
 		if (!edge) {
 			continue;
@@ -703,6 +964,8 @@ void TransferGraphManager::CreateTransferPlanUpdated() {
 		auto protect_right = edge->protect_right;
 
 		// smaller table is in the left
+		// This is not an actual cardinality swap. It maintains the parent-child
+		// order relationship. See swap_in_transfer_graph_build.md
 		if (left_node->cardinality_order > right_node->cardinality_order) {
 			std::swap(left_node, right_node);
 			std::swap(left_cols, right_cols);

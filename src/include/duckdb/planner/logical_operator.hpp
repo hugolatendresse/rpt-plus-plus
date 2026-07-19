@@ -24,7 +24,7 @@
 namespace duckdb {
 
 //! LogicalOperator is the base class of the logical operators present in the
-//! logical query tree
+//! logical query tree (ie I think that's the join tree?)
 class LogicalOperator {
 public:
 	explicit LogicalOperator(LogicalOperatorType type);

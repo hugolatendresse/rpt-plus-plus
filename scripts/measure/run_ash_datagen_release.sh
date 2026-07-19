@@ -201,6 +201,13 @@ drop_os_page_cache() {
     sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
 }
 
+# DuckDB resource failures are per-query benchmark misses for sweep CSVs: record
+# them explicitly and keep later cases/queries/seeds running.
+is_recoverable_duckdb_resource_error() {
+    local error_file="$1"
+    grep -Eiq 'Out of Memory Error|failed to offload data block|max_temp_directory_size' "$error_file"
+}
+
 # --- Single-shot mode (one case, one query, no CSV requested) -------------
 # Preserves the legacy behavior of run_benchmark.sh, including EXPLAIN ANALYZE
 # at the end of the run, so users invoking this script the old way see the
@@ -306,6 +313,17 @@ for c in "${CASES[@]}"; do
             drop_os_page_cache
             if ! printf '%s\n' "$sql" | "${DUCKDB_CMD[@]}" >"$tmp_out" 2>&1; then
                 cat "$tmp_out" >&2
+                if is_recoverable_duckdb_resource_error "$tmp_out"; then
+                    echo "Warning: query ${q} hit DuckDB OOM/temp-spill limit (case ${c}, seed ${seed_disp}); recording runtime 8888888" >&2
+                    if [[ -n "$CSV_PATH" ]]; then
+                        for ((i = 1; i <= RUNS; i++)); do
+                            printf '%s,%s,%s,%s\n' "$q" "$c" "$s" "8888888" >>"$CSV_PATH"
+                        done
+                    fi
+                    TOTAL_RUNS=$((TOTAL_RUNS + RUNS))
+                    rm -f "$tmp_out"
+                    continue
+                fi
                 rm -f "$tmp_out"
                 echo "Error: query ${q} failed (case ${c}, seed ${seed_disp})" >&2
                 exit 1
@@ -334,8 +352,23 @@ for c in "${CASES[@]}"; do
             TOTAL_RUNS=$((TOTAL_RUNS + run_count))
             rm -f "$tmp_out"
             if $USE_DUCKDB_PROFILING; then
+                tmp_profile="$(mktemp)"
                 drop_os_page_cache
-                build_profile_sql "$c" "$s" "$q" | "${DUCKDB_CMD[@]}"
+                if ! build_profile_sql "$c" "$s" "$q" | "${DUCKDB_CMD[@]}" >"$tmp_profile" 2>&1; then
+                    cat "$tmp_profile" >&2
+                    if is_recoverable_duckdb_resource_error "$tmp_profile"; then
+                        echo "Warning: profiling query ${q} hit DuckDB OOM/temp-spill limit (case ${c}, seed ${seed_disp}); continuing sweep" >&2
+                        rm -f "$tmp_profile"
+                        continue
+                    fi
+                    rm -f "$tmp_profile"
+                    echo "Error: profiling query ${q} failed (case ${c}, seed ${seed_disp})" >&2
+                    exit 1
+                fi
+                if [[ -s "$tmp_profile" ]]; then
+                    cat "$tmp_profile"
+                fi
+                rm -f "$tmp_profile"
             fi
         done
     done
@@ -347,4 +380,11 @@ if [[ -n "$CSV_PATH" ]]; then
 fi
 if $USE_DUCKDB_PROFILING; then
     echo "DuckDB profiling output written to: $PROFILING_OUTPUT"
+fi
+# Condense the runtime CSV to one (median) row per (query, case), matching the
+# postprocessing performed by the JOB, Appian, and TPC benchmark drivers.
+MEDIAN_SCRIPT="$SCRIPT_DIR/median_runtime_csv.py"
+if [[ -n "$CSV_PATH" ]] && [[ -f "$MEDIAN_SCRIPT" ]] && command -v python3 >/dev/null; then
+    python3 "$MEDIAN_SCRIPT" --csv "$CSV_PATH" || \
+        echo "warning: median_runtime_csv failed for $CSV_PATH" >&2
 fi

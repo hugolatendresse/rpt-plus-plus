@@ -81,6 +81,65 @@ struct ClientConfig {
 	bool disable_rpt = false;
 	//! When true, skip initializing the tiered hash cache
 	bool disable_tiered_hash_cache = false;
+	//! When false, PhysicalCreateBF never gives up constructing a bloom filter based on
+	//! observed selectivity or estimated/actual memory pressure. All three give-up
+	//! branches in PhysicalCreateBF::GiveUpBFCreation (OOM against the temp-memory
+	//! reservation, unselective base-table pipeline, and projected OOM) are bypassed,
+	//! so every BF scheduled by RPT+ is built to completion. Intended for
+	//! benchmarking / A-B comparisons where we want the BF set to be independent of
+	//! the runtime heuristics; may increase memory use and slow queries when the
+	//! heuristics would otherwise have correctly discarded a useless BF.
+	bool drop_bf_at_runtime = true;
+	//! When false, `CreateBloomFilterPlan` creates a Bloom Filter for every base
+	//! table that participates in the transfer graph, bypassing the
+	//! `HasAnyFilter` gate that normally suppresses BF creation on tables that
+	//! have neither a local filter nor an incoming BF to use. This lets
+	//! otherwise "useless" full-column BFs still be built -- useful for
+	//! benchmarking / THC experiments where we want a BF attached to every
+	//! base table independent of local predicates or transfer-order position.
+	//! Default true matches the RPT+ paper behavior.
+	bool skip_unfiltered_tables_create_bf_plan = true;
+	//! Whether SkipUnfilteredTable is executed during transfer-graph
+	//! construction. True matches the RPT+ paper / current behavior.
+	bool skip_unfiltered_tables_graph_creation = true;
+	//! Controls how the ROOT of the predicate-transfer spanning tree is picked.
+	//! False (default): RPT+ behavior -- the root is the largest filtered or
+	//!                  intermediate table (LargestRootUpdated path), falling
+	//!                  back to the largest table if none qualifies.
+	//! True:            seed-driven pick over a deterministic name-sorted list
+	//!                  of all candidate tables (any table can be the root,
+	//!                  including unfiltered ones).
+	//! Independent of `use_seeded_transfer_order`; both flags can be combined.
+	bool use_seeded_root = false;
+	//! Controls how every NON-ROOT node of the predicate-transfer spanning tree
+	//! is picked.
+	//! False (default): RPT+ behavior -- greedy cardinality-driven pick via
+	//!                  FindEdge (the unconstructed table with the highest
+	//!                  estimated cardinality reachable from the constructed
+	//!                  set).
+	//! True:            seed-driven pick over a deterministic name-sorted list
+	//!                  of reachable unconstructed tables; the parent inside
+	//!                  the constructed set is also picked via the seed.
+	//! Independent of `use_seeded_root`; both flags can be combined.
+	bool use_seeded_transfer_order = false;
+	//! Seed used for any seed-driven pick during transfer-graph construction.
+	//! Consulted whenever `use_seeded_root` or `use_seeded_transfer_order` is
+	//! true (otherwise ignored). Seed = 0 is a valid value and will
+	//! deterministically pick the first option at each step. The seed is
+	//! advanced via MurmurHash64 after every pick that consumes it. // TODO shouldn't we use a hash at each step???
+	idx_t transfer_graph_seed = 0;
+	//! Controls the cost-based build/probe side swap performed by
+	//! BuildProbeSideOptimizer::TryFlipJoinChildren. When false, that
+	//! optimizer leaves the (left=probe, right=build) assignment that
+	//! comes out of the join-order optimizer untouched. The semantic
+	//! flipping paths (DELIM join delim_flipped bookkeeping, RIGHT->LEFT
+	//! conversion in the binder) are not affected by this flag -- those
+	//! are required for correctness, not a performance swap.
+	//!
+	//! Default true matches the upstream DuckDB behavior. Set to false
+	//! together with `join_order_mode = 'seeded_left_deep'` to guarantee
+	//! the left-deep shape survives all of the optimizer pipeline.
+	bool allow_build_probe_side_swap = true;
 	//! When true, never use perfect hash join
 	bool disable_perfect_hashing = false;
 	//! When true, populate fine-grained hash-join timing counters
@@ -107,6 +166,14 @@ struct ClientConfig {
 	//! THC miss rate threshold (0.0–1.0). If the miss rate in a READ_ONLY
 	//! segment is below this, we skip the next collect phase.
 	double thc_miss_below_which_skip_collect = 0.10;
+	//! THC miss rate threshold (0.0–1.0). If the miss rate in a READ_ONLY
+	//! segment is strictly above this value, THC is abandoned.
+	//! Another setting, thc_abandonc_consecutive_misses, can require the event 
+	//! described above happening several times before we abandon.
+	double thc_miss_above_which_abandon = 1.00;
+	//! Number of consecutive READ_ONLY checkpoints with miss rate strictly
+	//! above thc_miss_above_which_abandon before THC is abandoned.
+	idx_t thc_abandon_consecutive_misses = 1;
 	//! Minimum HT capacity (in entries) to activate the THC.
 	//! Hash tables smaller than this are assumed to fit in L3 naturally.
 	idx_t thc_activation_threshold = 10ULL * 1024 * 1024 / sizeof(uint64_t);
@@ -120,7 +187,9 @@ struct ClientConfig {
 	//! "build_count" is during hash table build
 	//! "probe_sample" is during the first cycle of probing
 	//! "ht_sample" is between building and probing
-	std::string thc_mu_s_method = "build_count"; // TODO we are now incurring a cost on every single build. Other methods are less precise but could be done only if we are to use a THC
+	std::string thc_mu_s_method =
+	    "build_count"; // TODO we are now incurring a cost on every single build. Other methods are less precise but
+	                   // could be done only if we are to use a THC
 	//! When true, log mu_s estimates to stderr (works in both debug and release builds).
 	bool thc_log_mu_s = false;
 	//! Minimum estimated mu_{S->R} to keep THC active after the first cycle.
@@ -129,9 +198,19 @@ struct ClientConfig {
 	double thc_max_estimated_perc_hot = 0.5;
 	//! Minimum coverage factor: THC is abandoned when thc_size < thc_size_needed * this.
 	double thc_min_coverage_of_build_side = 0.1;
+	//! Toggle the one-time first-cycle multiplicity/hotness/coverage abandon check.
+	bool thc_enable_first_cycle_check = true;
 	//! Number of COLLECT+EVAL cycles that must complete before the cost-based
 	//! decision rule (drop/freeze/continue) activates.
 	idx_t thc_warmup_cycles = 4;
+	//! Toggle the cost-rule abandon check `delta_t >= 0`, which drops THC
+	//! when the current READ_ONLY probe cost is no better than the baseline
+	//! hash-table probe cost.
+	bool thc_enable_delta_check = true;
+	//! Toggle the cost-rule freeze check `shrinkage < gamma_t`, which stops
+	//! further collection when the marginal evaluation improvement no longer
+	//! pays for the previous collection cost.
+	bool thc_enable_shrinkage_check = true;
 	//! Enable caching operators
 	bool enable_caching_operators = true;
 	//! Force parallelism of small tables, used for testing

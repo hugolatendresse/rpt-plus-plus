@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+
+CAREFUL, THIS SCRIPT IS DUPLICATED ACROSS THE spy AND results-spy REPOS!!!!!
+
+
 Plot per-query runtime box plots from a CSV produced by run_job.sh
 (or any CSV with columns: query, case, seed, runtime_seconds).
 
@@ -23,7 +27,7 @@ CASE_NAMES = {
     "1": "DuckDB",
     "2": "Forward-Only",
     "3": "THC",
-    "4": "RPT",
+    "4": "RPT+",
 }
 
 

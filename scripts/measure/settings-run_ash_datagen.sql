@@ -5,10 +5,6 @@
 -- statistics propagation removes the cold portion 
 SET disabled_optimizers = 'join_order,build_side_probe_side,statistics_propagation';
 
--- TODO ASH-datagen needs those those things once they exist
--- SET skip_unfiltered_tables_graph_creation = true;
--- SET thc_mu_s_method = 'none';
-
 SET VARIABLE scale_factor = 40_000;
 
 SET VARIABLE base_row_count_R = 100; -- the MAX number of rows. Count of rows = min(hot entries in S * probe_mmultiplicity_in_R, base_row_count_R)

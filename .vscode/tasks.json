@@ -18,7 +18,7 @@
     {
       "label": "Build Debug",
       "type": "shell",
-      "command": "TMPDIR=/mnt/local_ssd/tmp GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' make debug -j $(nproc)",
+      "command": "TMPDIR=/mnt/local_ssd/tmp DISABLE_SANITIZER=1 GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' make debug -j $(nproc)",
       "group": {
         "kind": "build",
         "isDefault": true
@@ -34,6 +34,18 @@
       "command": "TMPDIR=/mnt/local_ssd/tmp GEN=ninja BUILD_BENCHMARK=1 BUILD_TPCH=1 BUILD_TPCDS=1 BUILD_HTTPFS=1 CORE_EXTENSIONS='tpch' make release -j $(nproc)",
       "group": {
         "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "hide": false
+    },
+    {
+      "label": "Move results/ to results-spy",
+      "type": "shell",
+      "command": "cd /mnt/local_ssd/spy; rsync -a results/ ../results-spy/results/; rm results/ -rf; cd ../results-spy/; git add . ; git commit -m 'more results'; git push",
+      "group": {
         "isDefault": true
       },
       "problemMatcher": [

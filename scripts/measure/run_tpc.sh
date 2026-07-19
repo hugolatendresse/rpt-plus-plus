@@ -9,6 +9,7 @@ RUN_TPCH=1
 RUN_TPCDS=1
 DB_BASE_PATH="../benchmark_data"
 TPCH_QUERY=""
+TPCDS_QUERY=""
 RUNS=1
 CASE=""
 CASES_LIST=""
@@ -17,6 +18,9 @@ SEEDS_COUNT=""
 USE_PERF=false
 USE_DEBUG=false
 USE_DUCKDB_PROFILING=false
+CREATE_BOXPLOTS=false
+DROP_OS_CACHE=false
+TIMEOUT_SECONDS=""
 COMMON_SETTINGS_SQL="scripts/measure/settings-common.sql"
 RUN_SETTINGS_SQL="scripts/measure/settings-run_tpc.sql"
 PERF_EVENTS="cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,mem_access,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd,branch-instructions,branch-misses,br_retired,br_mis_pred_retired"
@@ -34,6 +38,7 @@ Options:
   --tpch-only            Run only TPC-H
   --tpcds-only           Run only TPC-DS
   --tpch-query <1..22>   Run one TPC-H query (implies --tpch-only)
+  --tpcds-query <1..99>  Run one TPC-DS query (implies --tpcds-only)
   --runs <N>             Number of benchmark runs per (case, seed) tuple (default: 1)
   --case <1|2|3|4>       Optimizer case (mutually exclusive with --cases)
   --cases <list>         Comma-separated case list, e.g. 2,3,4
@@ -45,6 +50,13 @@ Options:
                          under <out-dir>/profiling_<timestamp>/, plus an
                          augmented runtime CSV with per-join THC telemetry
                          columns Join1..JoinN (via thc_csv_postprocess.py).
+  --create-boxplots      Create runtime boxplot PNGs from each final runtime CSV
+  --drop-os-cache        Run sync + drop Linux page cache before each measured
+                         DuckDB query. Requires sudo and affects the whole host.
+  --timeout <seconds>    Per-query wall-clock cap; on timeout DuckDB is killed
+                         and the run records a runtime of 9999999 in the CSV.
+                         DuckDB OOM/temp-spill-limit failures record 8888888
+                         so long sweeps can continue.
   -h, --help             Show this help
 
 Sweep example (box plots):
@@ -62,6 +74,7 @@ while [[ $# -gt 0 ]]; do
         --tpch-only) RUN_TPCH=1; RUN_TPCDS=0; shift ;;
         --tpcds-only) RUN_TPCH=0; RUN_TPCDS=1; shift ;;
         --tpch-query) TPCH_QUERY="$2"; RUN_TPCH=1; RUN_TPCDS=0; shift 2 ;;
+        --tpcds-query) TPCDS_QUERY="$2"; RUN_TPCH=0; RUN_TPCDS=1; shift 2 ;;
         --runs) RUNS="$2"; shift 2 ;;
         --case) CASE="$2"; shift 2 ;;
         --cases) CASES_LIST="$2"; shift 2 ;;
@@ -70,6 +83,9 @@ while [[ $# -gt 0 ]]; do
         --perf) USE_PERF=true; shift ;;
         --debug) USE_DEBUG=true; shift ;;
         --duckdb-profiling) USE_DUCKDB_PROFILING=true; shift ;;
+        --create-boxplots) CREATE_BOXPLOTS=true; shift ;;
+        --drop-os-cache) DROP_OS_CACHE=true; shift ;;
+        --timeout) TIMEOUT_SECONDS="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
@@ -78,6 +94,12 @@ done
 if ! [[ "$RUNS" =~ ^[0-9]+$ ]] || [[ "$RUNS" -lt 1 ]]; then
     echo "Error: --runs must be a positive integer" >&2
     exit 1
+fi
+if [[ -n "$TIMEOUT_SECONDS" ]]; then
+    if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TIMEOUT_SECONDS" -lt 1 ]]; then
+        echo "Error: --timeout must be a positive integer number of seconds (got: $TIMEOUT_SECONDS)" >&2
+        exit 1
+    fi
 fi
 
 if [[ -n "$CASE" && -n "$CASES_LIST" ]]; then
@@ -198,6 +220,109 @@ build_sql() {
     printf '%s\n' "$query_stmt"
 }
 
+drop_os_page_cache() {
+    if ! $DROP_OS_CACHE; then
+        return
+    fi
+    # Linux page cache survives across DuckDB CLI processes. Keep cold-cache
+    # measurements explicit because this sudo operation affects the whole host.
+    echo "Dropping Linux page cache before measured DuckDB query..." >&2
+    sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+}
+
+# DuckDB can reject a query because it cannot allocate memory or because the
+# configured temp directory limit prevents spilling. Treat those as per-query
+# benchmark misses, just like timeouts, rather than losing a long sweep.
+is_recoverable_duckdb_resource_error() {
+    local error_file="$1"
+    grep -Eiq 'Out of Memory Error|failed to offload data block|max_temp_directory_size' "$error_file"
+}
+
+process_group_alive() {
+    local pid="$1"
+    kill -0 -- "-$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null
+}
+
+terminate_process_group() {
+    local pid="$1"
+    local grace_seconds=5
+    local waited=0
+
+    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    while process_group_alive "$pid" && [[ "$waited" -lt "$grace_seconds" ]]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if process_group_alive "$pid"; then
+        kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    fi
+}
+
+# Runs one query in its own process group (optionally perf-wrapped, optionally
+# wall-clock capped). Sets the global RUNTIME to the measured seconds, to 9999999
+# if the query timed out, or to 8888888 if DuckDB hit an OOM/temp-spill-limit
+# failure. Aborts the whole sweep on any other failure.
+#
+# The process-group wrapper matters because a shell pipeline like
+# `printf SQL | timeout duckdb` can leave the DuckDB child alive after timeout
+# escalation. A leaked child keeps the database lock and breaks the next query.
+run_timed_query() {
+    local sql="$1"
+    local db_path="$2"
+    local label="$3"
+    local sql_file error_file cmd_pid rc timed_out start_time end_time deadline
+    sql_file=$(mktemp)
+    error_file=$(mktemp)
+    rc=0
+    timed_out=0
+    printf '%s\n' "$sql" > "$sql_file"
+    drop_os_page_cache
+    start_time=$(date +%s.%N)
+    if $USE_PERF; then
+        setsid bash -c 'exec sudo perf stat -e "$1" -- "$2" "$3" < "$4" >/dev/null 2>"$5"' \
+            _ "$PERF_EVENTS" "$DUCKDB_BIN" "$db_path" "$sql_file" "$error_file" &
+    else
+        setsid bash -c 'exec "$1" "$2" < "$3" >/dev/null 2>"$4"' \
+            _ "$DUCKDB_BIN" "$db_path" "$sql_file" "$error_file" &
+    fi
+    cmd_pid=$!
+    if [[ -n "$TIMEOUT_SECONDS" ]]; then
+        deadline=$(($(date +%s) + TIMEOUT_SECONDS))
+        while process_group_alive "$cmd_pid"; do
+            if [[ "$(date +%s)" -ge "$deadline" ]]; then
+                timed_out=1
+                break
+            fi
+            sleep 0.1
+        done
+    fi
+    if [[ "$timed_out" -eq 1 ]]; then
+        terminate_process_group "$cmd_pid"
+        wait "$cmd_pid" 2>/dev/null || true
+        rc=124
+    else
+        wait "$cmd_pid" || rc=$?
+    fi
+    end_time=$(date +%s.%N)
+    if [[ -s "$error_file" ]]; then
+        cat "$error_file" >&2
+    fi
+    if [[ "$rc" -eq 0 ]]; then
+        RUNTIME=$(awk -v s="$start_time" -v e="$end_time" 'BEGIN{printf "%.2f", e - s}')
+    elif [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+        echo "Warning: ${label} timed out after ${TIMEOUT_SECONDS}s; recording runtime 9999999" >&2
+        RUNTIME=9999999
+    elif is_recoverable_duckdb_resource_error "$error_file"; then
+        echo "Warning: ${label} hit DuckDB OOM/temp-spill limit; recording runtime 8888888" >&2
+        RUNTIME=8888888
+    else
+        rm -f "$sql_file" "$error_file"
+        echo "Error: ${label} failed" >&2
+        exit 1
+    fi
+    rm -f "$sql_file" "$error_file"
+}
+
 if [[ $RUN_TPCH -eq 1 ]] && [[ $GENERATE_DATA -eq 1 ]]; then
     mkdir -p "$(dirname "$TPCH_DB_PATH")"
     if ! "$DUCKDB_BIN" "$TPCH_DB_PATH" -c "LOAD tpch;" > "$DBGEN_LOG" 2>&1; then
@@ -252,6 +377,16 @@ else
     TPCH_QUERY_RANGE=$(seq 1 22)
 fi
 
+if [[ -n "$TPCDS_QUERY" ]]; then
+    if ! [[ "$TPCDS_QUERY" =~ ^[0-9]+$ ]] || [[ "$TPCDS_QUERY" -lt 1 ]] || [[ "$TPCDS_QUERY" -gt 99 ]]; then
+        echo "Error: --tpcds-query must be between 1 and 99" >&2
+        exit 1
+    fi
+    TPCDS_QUERY_RANGE="$TPCDS_QUERY"
+else
+    TPCDS_QUERY_RANGE=$(seq 1 99)
+fi
+
 if [[ $RUN_TPCH -eq 1 ]]; then
     printf "query,case,seed,run_idx,runtime_seconds\n" > "$TPCH_CSV_PATH"
 fi
@@ -281,7 +416,6 @@ for c in "${CASES[@]}"; do
             if [[ $RUN_TPCH -eq 1 ]]; then
                 for Q in $TPCH_QUERY_RANGE; do
                     echo "Running TPC-H query ${Q}..."
-                    TIME_FILE=$(mktemp)
                     seed_for_path="${s:-default}"
                     if $USE_DUCKDB_PROFILING; then
                         PROFILING_OUTPUT="$PROFILING_DIR/tpch_q${Q}_case${c}_seed${seed_for_path}_run${RUN_IDX}.json"
@@ -289,34 +423,15 @@ for c in "${CASES[@]}"; do
                         PROFILING_OUTPUT=""
                     fi
                     SQL="$(build_sql tpch "PRAGMA tpch(${Q});" "$c" "$s")"
-                    if $USE_PERF; then
-                        if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
-                            RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                            printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCH_CSV_PATH"
-                        else
-                            rm -f "$TIME_FILE"
-                            echo "Error: TPC-H query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
-                            exit 1
-                        fi
-                    else
-                        if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCH_DB_PATH"; then
-                            RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                            printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCH_CSV_PATH"
-                        else
-                            rm -f "$TIME_FILE"
-                            echo "Error: TPC-H query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
-                            exit 1
-                        fi
-                    fi
-                    rm -f "$TIME_FILE"
+                    run_timed_query "$SQL" "$TPCH_DB_PATH" "TPC-H query ${Q} (case ${c}, seed ${seed_disp})"
+                    printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCH_CSV_PATH"
                     TOTAL_ROWS=$((TOTAL_ROWS + 1))
                 done
             fi
 
             if [[ $RUN_TPCDS -eq 1 ]]; then
-                for Q in $(seq 1 99); do
+                for Q in $TPCDS_QUERY_RANGE; do
                     echo "Running TPC-DS query ${Q}..."
-                    TIME_FILE=$(mktemp)
                     seed_for_path="${s:-default}"
                     if $USE_DUCKDB_PROFILING; then
                         PROFILING_OUTPUT="$PROFILING_DIR/tpcds_q${Q}_case${c}_seed${seed_for_path}_run${RUN_IDX}.json"
@@ -324,26 +439,8 @@ for c in "${CASES[@]}"; do
                         PROFILING_OUTPUT=""
                     fi
                     SQL="$(build_sql tpcds "PRAGMA tpcds(${Q});" "$c" "$s")"
-                    if $USE_PERF; then
-                        if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4" >/dev/null' _ "$SQL" "$PERF_EVENTS" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
-                            RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                            printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCDS_CSV_PATH"
-                        else
-                            rm -f "$TIME_FILE"
-                            echo "Error: TPC-DS query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
-                            exit 1
-                        fi
-                    else
-                        if /usr/bin/time -f "%e" -o "$TIME_FILE" bash -c 'printf "%s\n" "$1" | "$2" "$3" >/dev/null' _ "$SQL" "$DUCKDB_BIN" "$TPCDS_DB_PATH"; then
-                            RUNTIME=$(awk 'NR==1{print $1}' "$TIME_FILE")
-                            printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCDS_CSV_PATH"
-                        else
-                            rm -f "$TIME_FILE"
-                            echo "Error: TPC-DS query ${Q} failed (case ${c}, seed ${seed_disp})" >&2
-                            exit 1
-                        fi
-                    fi
-                    rm -f "$TIME_FILE"
+                    run_timed_query "$SQL" "$TPCDS_DB_PATH" "TPC-DS query ${Q} (case ${c}, seed ${seed_disp})"
+                    printf "Q%02d,%s,%s,%s,%s\n" "$Q" "$c" "$s" "$RUN_IDX" "$RUNTIME" >> "$TPCDS_CSV_PATH"
                     TOTAL_ROWS=$((TOTAL_ROWS + 1))
                 done
             fi
@@ -384,5 +481,33 @@ if $USE_DUCKDB_PROFILING; then
             python3 "$POSTPROCESS" --csv "$TPCDS_CSV_PATH" --profiling-dir "$PROFILING_DIR" --prefix tpcds || \
                 echo "warning: thc_csv_postprocess failed for $TPCDS_CSV_PATH" >&2
         fi
+    fi
+fi
+# Condense each runtime CSV to one (median) row per (query, case). Runs after the
+# THC postprocess above so the median CSV also carries any Join*-* columns.
+MEDIAN_SCRIPT="$SCRIPT_DIR/median_runtime_csv.py"
+if [[ -f "$MEDIAN_SCRIPT" ]] && command -v python3 >/dev/null; then
+    if [[ $RUN_TPCH -eq 1 ]]; then
+        python3 "$MEDIAN_SCRIPT" --csv "$TPCH_CSV_PATH" || \
+            echo "warning: median_runtime_csv failed for $TPCH_CSV_PATH" >&2
+    fi
+    if [[ $RUN_TPCDS -eq 1 ]]; then
+        python3 "$MEDIAN_SCRIPT" --csv "$TPCDS_CSV_PATH" || \
+            echo "warning: median_runtime_csv failed for $TPCDS_CSV_PATH" >&2
+    fi
+fi
+BOXPLOT_SCRIPT="$SCRIPT_DIR/plot_runtime_boxplots.py"
+if $CREATE_BOXPLOTS; then
+    if [[ -f "$BOXPLOT_SCRIPT" ]] && command -v python3 >/dev/null; then
+        if [[ $RUN_TPCH -eq 1 ]]; then
+            python3 "$BOXPLOT_SCRIPT" --csv "$TPCH_CSV_PATH" || \
+                echo "warning: plot_runtime_boxplots failed for $TPCH_CSV_PATH" >&2
+        fi
+        if [[ $RUN_TPCDS -eq 1 ]]; then
+            python3 "$BOXPLOT_SCRIPT" --csv "$TPCDS_CSV_PATH" || \
+                echo "warning: plot_runtime_boxplots failed for $TPCDS_CSV_PATH" >&2
+        fi
+    else
+        echo "warning: cannot create boxplots because $BOXPLOT_SCRIPT or python3 is missing" >&2
     fi
 fi

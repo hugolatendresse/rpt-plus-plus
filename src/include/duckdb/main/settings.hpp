@@ -559,7 +559,8 @@ struct EnableHTTPLoggingSetting {
 struct JoinOrderModeSetting {
 	using RETURN_TYPE = string;
 	static constexpr const char *Name = "join_order_mode";
-	static constexpr const char *Description = "Join order enumeration strategy: duckdb, exact_left_deep, random_bushy, random_left_deep";
+	static constexpr const char *Description =
+	    "Join order enumeration strategy: duckdb, best_left_deep, random_bushy, random_left_deep, seeded_left_deep";
 	static constexpr const char *InputType = "VARCHAR";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
@@ -569,7 +570,8 @@ struct JoinOrderModeSetting {
 struct RptForwardOnlySetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "rpt_forward_only";
-	static constexpr const char *Description = "When enabled, only the forward pass of RPT+ is executed (backward pass is skipped)";
+	static constexpr const char *Description =
+	    "When enabled, only the forward pass of RPT+ is executed (backward pass is skipped)";
 	static constexpr const char *InputType = "BOOLEAN";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
@@ -579,7 +581,33 @@ struct RptForwardOnlySetting {
 struct DisableRptSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "disable_rpt";
-	static constexpr const char *Description = "When enabled, neither the forward pass nor the backward pass of RPT+ are executed (both are skipped)";
+	static constexpr const char *Description =
+	    "When enabled, neither the forward pass nor the backward pass of RPT+ are executed (both are skipped)";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct DisableBfDroppingSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "drop_bf_at_runtime";
+	static constexpr const char *Description =
+	    "When enabled, PhysicalCreateBF gives up building a bloom filter based on observed "
+	    "selectivity or memory-pressure heuristics (all three give-up branches are bypassed)";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct CreateBfForAllTablesSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "skip_unfiltered_tables_create_bf_plan";
+	static constexpr const char *Description =
+	    "When disabled, RPT+ CreateBloomFilterPlan builds a Bloom Filter for every base table in the "
+	    "transfer graph, even when the table has no local filter and no incoming BF to use (bypasses "
+	    "the HasAnyFilter gate).";
 	static constexpr const char *InputType = "BOOLEAN";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
@@ -600,6 +628,63 @@ struct DisableTieredHashCacheSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "disable_tiered_hash_cache";
 	static constexpr const char *Description = "When enabled, skip initializing the tiered hash cache";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct UseSeededRootSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "use_seeded_root";
+	static constexpr const char *Description =
+	    "When enabled, the predicate-transfer spanning tree's root is picked via the seed instead of "
+	    "the RPT+ largest filtered/intermediate heuristic";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct UseSeededTransferOrderSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "use_seeded_transfer_order";
+	static constexpr const char *Description =
+	    "When enabled, every non-root node of the predicate-transfer spanning tree is picked via the "
+	    "seed instead of the RPT+ greedy cardinality-driven FindEdge heuristic";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcTransferGraphSeedSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "transfer_graph_seed";
+	static constexpr const char *Description = "Seed used for deterministic THC transfer-order enumeration";
+	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct SkipUnfilteredTablesSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "skip_unfiltered_tables_graph_creation";
+	static constexpr const char *Description = "When enabled, skip transfer-graph generation from unfiltered tables";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct AllowBuildProbeSideSwapSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "allow_build_probe_side_swap";
+	static constexpr const char *Description =
+	    "When disabled, BuildProbeSideOptimizer will not swap a join's build and probe children "
+	    "based on estimated build cost (the (left=probe, right=build) ordering from the join-order "
+	    "optimizer is preserved instead)";
 	static constexpr const char *InputType = "BOOLEAN";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
@@ -640,7 +725,8 @@ struct ThcCollectPhaseRowsSetting {
 struct ThcFirstReadOnlyPhaseRowsSetting {
 	using RETURN_TYPE = int64_t;
 	static constexpr const char *Name = "thc_first_read_only_phase_rows";
-	static constexpr const char *Description = "Base length (in probe rows) of the first THC READ_ONLY phase (default: 200000)";
+	static constexpr const char *Description =
+	    "Base length (in probe rows) of the first THC READ_ONLY phase (default: 200000)";
 	static constexpr const char *InputType = "BIGINT";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
@@ -661,8 +747,32 @@ struct ThcCollectBudgetFractionSetting {
 struct ThcMissThresholdSetting {
 	using RETURN_TYPE = double;
 	static constexpr const char *Name = "thc_miss_below_which_skip_collect";
-	static constexpr const char *Description = "THC miss rate threshold below which collect phases are skipped (default: 0.10)";
+	static constexpr const char *Description =
+	    "THC miss rate threshold below which collect phases are skipped (default: 0.10)";
 	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcMissAbandonThresholdSetting {
+	using RETURN_TYPE = double;
+	static constexpr const char *Name = "thc_miss_above_which_abandon";
+	static constexpr const char *Description =
+	    "THC miss rate threshold strictly above which THC is abandoned (default: 1.00)";
+	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcAbandonConsecutiveMissesSetting {
+	using RETURN_TYPE = int64_t;
+	static constexpr const char *Name = "thc_abandon_consecutive_misses";
+	static constexpr const char *Description =
+	    "Consecutive checkpoints with miss rate above thc_miss_above_which_abandon required to abandon THC "
+	    "(default: 1)";
+	static constexpr const char *InputType = "BIGINT";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
 	static Value GetSetting(const ClientContext &context);
@@ -691,7 +801,8 @@ struct ThcMaxLoadFactorSetting {
 struct ThcMuSMethodSetting {
 	using RETURN_TYPE = string;
 	static constexpr const char *Name = "thc_mu_s_method";
-	static constexpr const char *Description = "Which mu_s estimation method to use: none, build_count, probe_sample, ht_sample, all";
+	static constexpr const char *Description =
+	    "Which mu_s estimation method to use: none, build_count, probe_sample, ht_sample, all";
 	static constexpr const char *InputType = "VARCHAR";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
@@ -711,7 +822,8 @@ struct ThcLogMuSSetting {
 struct ThcMinEstimatedMuSToRSetting {
 	using RETURN_TYPE = double;
 	static constexpr const char *Name = "thc_min_estimated_mu_s_to_r";
-	static constexpr const char *Description = "Minimum estimated mu_{S->R} to keep THC active after the first cycle (default: 4.0)";
+	static constexpr const char *Description =
+	    "Minimum estimated mu_{S->R} to keep THC active after the first cycle (default: 4.0)";
 	static constexpr const char *InputType = "DOUBLE";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
@@ -721,7 +833,8 @@ struct ThcMinEstimatedMuSToRSetting {
 struct ThcMaxEstimatedPercHotSetting {
 	using RETURN_TYPE = double;
 	static constexpr const char *Name = "thc_max_estimated_perc_hot";
-	static constexpr const char *Description = "Maximum estimated fraction of hot build-side rows before abandoning THC (default: 0.5)";
+	static constexpr const char *Description =
+	    "Maximum estimated fraction of hot build-side rows before abandoning THC (default: 0.5)";
 	static constexpr const char *InputType = "DOUBLE";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
@@ -731,8 +844,20 @@ struct ThcMaxEstimatedPercHotSetting {
 struct ThcMinCoverageOfBuildSideSetting {
 	using RETURN_TYPE = double;
 	static constexpr const char *Name = "thc_min_coverage_of_build_side";
-	static constexpr const char *Description = "Minimum coverage factor: THC is abandoned when thc_size_needed * this > thc_size (default: 5.0)";
+	static constexpr const char *Description =
+	    "Minimum coverage factor: THC is abandoned when thc_size_needed * this > thc_size (default: 5.0)";
 	static constexpr const char *InputType = "DOUBLE";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcEnableFirstCycleCheckSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "thc_enable_first_cycle_check";
+	static constexpr const char *Description =
+	    "Enable one-time first-cycle multiplicity/hotness/coverage THC abandon check (default: true)";
+	static constexpr const char *InputType = "BOOLEAN";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
 	static Value GetSetting(const ClientContext &context);
@@ -741,8 +866,31 @@ struct ThcMinCoverageOfBuildSideSetting {
 struct ThcWarmupCyclesSetting {
 	using RETURN_TYPE = int64_t;
 	static constexpr const char *Name = "thc_warmup_cycles";
-	static constexpr const char *Description = "Number of collect+eval cycles before the cost-based decision rule activates (default: 2)";
+	static constexpr const char *Description =
+	    "Number of collect+eval cycles before the cost-based decision rule activates (default: 2)";
 	static constexpr const char *InputType = "BIGINT";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcEnableDeltaCheckSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "thc_enable_delta_check";
+	static constexpr const char *Description =
+	    "Enable THC cost-rule abandon check delta_t >= 0 (default: true)";
+	static constexpr const char *InputType = "BOOLEAN";
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static Value GetSetting(const ClientContext &context);
+};
+
+struct ThcEnableShrinkageCheckSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "thc_enable_shrinkage_check";
+	static constexpr const char *Description =
+	    "Enable THC cost-rule freeze check shrinkage < gamma_t (default: true)";
+	static constexpr const char *InputType = "BOOLEAN";
 	static void SetLocal(ClientContext &context, const Value &parameter);
 	static void ResetLocal(ClientContext &context);
 	static Value GetSetting(const ClientContext &context);

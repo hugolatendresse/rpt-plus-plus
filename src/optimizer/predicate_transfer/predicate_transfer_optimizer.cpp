@@ -138,7 +138,16 @@ vector<pair<idx_t, shared_ptr<FilterPlan>>> PredicateTransferOptimizer::CreateBl
 		auto last_use_bf = BuildUseBFOperator(node, bfs_to_use_plan);
 		replace_map[&node] = std::move(last_use_bf);
 	} else if (!bfs_to_create_plan.empty()) {
-		if (!HasAnyFilter(node, reverse)) {
+		// Normally, a table that has outgoing BF edges but no local filter and
+		// no incoming BFs to apply is skipped: the resulting BF would encode
+		// the entire column and carry no useful filtering information. When
+		// `skip_unfiltered_tables_create_bf_plan` is false we override that and build the BF
+		// anyway, so every base table in the transfer graph gets a CREATE_BF
+		// attached in the forward pass (useful for A/B benchmarking and THC
+		// experiments where we want the set of BFs to be independent of local
+		// predicates and transfer-order position).
+		auto &config = ClientConfig::GetConfig(graph_manager.context);
+		if (config.skip_unfiltered_tables_create_bf_plan && !HasAnyFilter(node, reverse)) {
 			return result;
 		}
 

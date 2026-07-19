@@ -38,6 +38,28 @@ public:
 	void AddDelimScanStats(RelationStats &stats);
 	RelationStats GetDelimScanStats();
 
+	//! Installs a forced base-table ordering used by
+	//! JoinOrderMode::SEEDED_LEFT_DEEP. Each entry is a scalar table index
+	//! (as returned by TableOperatorManager::GetScalarTableIndex) for a
+	//! LogicalOperator in the query plan. The corresponding PlanEnumerator
+	//! will translate these to internal relation ids and build a strictly
+	//! left-deep plan where entry 0 is the probe side of the bottom join,
+	//! entry 1 is its build side, entry 2 is the build side of the next
+	//! join up, etc.
+	//!
+	//! This order IS propagated through CreateChildOptimizer(): when the
+	//! query plan has non-reorderable operators (e.g. ORDER BY, GROUP BY,
+	//! PROJECTION) sitting above the actual join block, the top-level
+	//! Optimize() call descends through a chain of child optimizers before
+	//! it reaches the reorderable join subtree. Every child along that
+	//! chain needs to know about the forced order, so we copy it on the
+	//! way down. PlanEnumerator::SolveJoinOrderFromTransferOrder only
+	//! consumes the subset of forced entries that the child's own
+	//! RelationManager knows about (missing ones are silently skipped) and
+	//! appends any leftover local relations at the end, so unconditional
+	//! propagation is safe even for partial / disjoint subtrees.
+	void SetForcedTableOrder(vector<idx_t> order);
+
 private:
 	ClientContext &context;
 
@@ -60,6 +82,12 @@ private:
 	unordered_map<idx_t, RelationStats> materialized_cte_stats;
 	//! Stats of Delim Scans of the Delim Join that is currently being optimized
 	optional_ptr<RelationStats> delim_scan_stats;
+
+	//! Forced base-table ordering for JoinOrderMode::SEEDED_LEFT_DEEP. Empty
+	//! when no forced order is set -- in that case SEEDED_LEFT_DEEP falls
+	//! back to the cost-based SolveJoinOrderLeftDeep enumeration so we still
+	//! produce a left-deep shape instead of crashing.
+	vector<idx_t> forced_table_order;
 };
 
 } // namespace duckdb

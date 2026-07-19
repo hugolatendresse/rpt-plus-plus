@@ -39,8 +39,13 @@ private:
 	//! which column(s) involved in this expression?
 	static void GetColumnBindingExpression(Expression &expr, vector<BoundColumnRefExpression *> &expressions);
 
-private:
+public:
+	//! Exposed so the pipeline driver (optimizer.cpp) can read
+	//! `graph_manager.transfer_order` after PreOptimize() and feed it to the
+	//! JoinOrderOptimizer when JoinOrderMode::SEEDED_LEFT_DEEP is selected.
 	TransferGraphManager graph_manager;
+
+private:
 
 	//! we use a map to record how to modify/update the operators in the query plan.
 	std::unordered_map<LogicalOperator *, unique_ptr<LogicalOperator>> forward_stage_modification;

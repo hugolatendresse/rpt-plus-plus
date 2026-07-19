@@ -568,6 +568,41 @@ Value DisableRptSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// Disable BF Dropping
+//===----------------------------------------------------------------------===//
+void DisableBfDroppingSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.drop_bf_at_runtime = input.GetValue<bool>();
+}
+
+void DisableBfDroppingSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).drop_bf_at_runtime = ClientConfig().drop_bf_at_runtime;
+}
+
+Value DisableBfDroppingSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.drop_bf_at_runtime);
+}
+
+//===----------------------------------------------------------------------===//
+// Create BF For All Tables
+//===----------------------------------------------------------------------===//
+void CreateBfForAllTablesSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.skip_unfiltered_tables_create_bf_plan = input.GetValue<bool>();
+}
+
+void CreateBfForAllTablesSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).skip_unfiltered_tables_create_bf_plan =
+	    ClientConfig().skip_unfiltered_tables_create_bf_plan;
+}
+
+Value CreateBfForAllTablesSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.skip_unfiltered_tables_create_bf_plan);
+}
+
+//===----------------------------------------------------------------------===//
 // Disable Perfect Hashing
 //===----------------------------------------------------------------------===//
 void DisablePerfectHashingSetting::SetLocal(ClientContext &context, const Value &input) {
@@ -602,6 +637,91 @@ Value DisableTieredHashCacheSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// Use Seeded Root
+//===----------------------------------------------------------------------===//
+void UseSeededRootSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.use_seeded_root = input.GetValue<bool>();
+}
+
+void UseSeededRootSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).use_seeded_root = ClientConfig().use_seeded_root;
+}
+
+Value UseSeededRootSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.use_seeded_root);
+}
+
+//===----------------------------------------------------------------------===//
+// Use Seeded Transfer Order
+//===----------------------------------------------------------------------===//
+void UseSeededTransferOrderSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.use_seeded_transfer_order = input.GetValue<bool>();
+}
+
+void UseSeededTransferOrderSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).use_seeded_transfer_order = ClientConfig().use_seeded_transfer_order;
+}
+
+Value UseSeededTransferOrderSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.use_seeded_transfer_order);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Transfer Graph Seed
+//===----------------------------------------------------------------------===//
+void ThcTransferGraphSeedSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.transfer_graph_seed = static_cast<idx_t>(input.GetValue<int64_t>());
+}
+
+void ThcTransferGraphSeedSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).transfer_graph_seed = ClientConfig().transfer_graph_seed;
+}
+
+Value ThcTransferGraphSeedSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BIGINT(static_cast<int64_t>(config.transfer_graph_seed));
+}
+
+//===----------------------------------------------------------------------===//
+// Skip Unfiltered Tables
+//===----------------------------------------------------------------------===//
+void SkipUnfilteredTablesSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.skip_unfiltered_tables_graph_creation = input.GetValue<bool>();
+}
+
+void SkipUnfilteredTablesSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).skip_unfiltered_tables_graph_creation =
+	    ClientConfig().skip_unfiltered_tables_graph_creation;
+}
+
+Value SkipUnfilteredTablesSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.skip_unfiltered_tables_graph_creation);
+}
+
+//===----------------------------------------------------------------------===//
+// Allow Build Probe Side Swap
+//===----------------------------------------------------------------------===//
+void AllowBuildProbeSideSwapSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.allow_build_probe_side_swap = input.GetValue<bool>();
+}
+
+void AllowBuildProbeSideSwapSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).allow_build_probe_side_swap = ClientConfig().allow_build_probe_side_swap;
+}
+
+Value AllowBuildProbeSideSwapSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.allow_build_probe_side_swap);
+}
+
 // Enable Hash Join Timers
 //===----------------------------------------------------------------------===//
 void EnableHashJoinTimersSetting::SetLocal(ClientContext &context, const Value &input) {
@@ -702,6 +822,40 @@ void ThcMissThresholdSetting::ResetLocal(ClientContext &context) {
 Value ThcMissThresholdSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
 	return Value::DOUBLE(config.thc_miss_below_which_skip_collect);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Miss Abandon Threshold
+//===----------------------------------------------------------------------===//
+void ThcMissAbandonThresholdSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_miss_above_which_abandon = input.GetValue<double>();
+}
+
+void ThcMissAbandonThresholdSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_miss_above_which_abandon = ClientConfig().thc_miss_above_which_abandon;
+}
+
+Value ThcMissAbandonThresholdSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::DOUBLE(config.thc_miss_above_which_abandon);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Abandon Consecutive Misses
+//===----------------------------------------------------------------------===//
+void ThcAbandonConsecutiveMissesSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_abandon_consecutive_misses = static_cast<idx_t>(input.GetValue<int64_t>());
+}
+
+void ThcAbandonConsecutiveMissesSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_abandon_consecutive_misses = ClientConfig().thc_abandon_consecutive_misses;
+}
+
+Value ThcAbandonConsecutiveMissesSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BIGINT(static_cast<int64_t>(config.thc_abandon_consecutive_misses));
 }
 
 //===----------------------------------------------------------------------===//
@@ -824,6 +978,23 @@ Value ThcMinCoverageOfBuildSideSetting::GetSetting(const ClientContext &context)
 }
 
 //===----------------------------------------------------------------------===//
+// THC Enable First Cycle Check
+//===----------------------------------------------------------------------===//
+void ThcEnableFirstCycleCheckSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_enable_first_cycle_check = input.GetValue<bool>();
+}
+
+void ThcEnableFirstCycleCheckSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_enable_first_cycle_check = ClientConfig().thc_enable_first_cycle_check;
+}
+
+Value ThcEnableFirstCycleCheckSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.thc_enable_first_cycle_check);
+}
+
+//===----------------------------------------------------------------------===//
 // THC Warmup Cycles
 //===----------------------------------------------------------------------===//
 void ThcWarmupCyclesSetting::SetLocal(ClientContext &context, const Value &input) {
@@ -838,6 +1009,40 @@ void ThcWarmupCyclesSetting::ResetLocal(ClientContext &context) {
 Value ThcWarmupCyclesSetting::GetSetting(const ClientContext &context) {
 	auto &config = ClientConfig::GetConfig(context);
 	return Value::BIGINT(static_cast<int64_t>(config.thc_warmup_cycles));
+}
+
+//===----------------------------------------------------------------------===//
+// THC Enable Delta Check
+//===----------------------------------------------------------------------===//
+void ThcEnableDeltaCheckSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_enable_delta_check = input.GetValue<bool>();
+}
+
+void ThcEnableDeltaCheckSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_enable_delta_check = ClientConfig().thc_enable_delta_check;
+}
+
+Value ThcEnableDeltaCheckSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.thc_enable_delta_check);
+}
+
+//===----------------------------------------------------------------------===//
+// THC Enable Shrinkage Check
+//===----------------------------------------------------------------------===//
+void ThcEnableShrinkageCheckSetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.thc_enable_shrinkage_check = input.GetValue<bool>();
+}
+
+void ThcEnableShrinkageCheckSetting::ResetLocal(ClientContext &context) {
+	ClientConfig::GetConfig(context).thc_enable_shrinkage_check = ClientConfig().thc_enable_shrinkage_check;
+}
+
+Value ThcEnableShrinkageCheckSetting::GetSetting(const ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value::BOOLEAN(config.thc_enable_shrinkage_check);
 }
 
 //===----------------------------------------------------------------------===//

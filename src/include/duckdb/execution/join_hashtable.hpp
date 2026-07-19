@@ -167,7 +167,7 @@ public:
 		LowCrossMultiplicity,    // first-cycle mu_{S->R} below thc_min_estimated_mu_s_to_r
 		HighHotness,        // first-cycle estimated_perc_hot above thc_max_estimated_perc_hot
 		THCTooSmallForBuildSide,   // THC capacity insufficient to cover thc_min_coverage_of_build_side hot entries
-		HighMissRate,       // miss rate stayed >= THC_ABANDON_MISS_THRESHOLD for THC_ABANDON_CONSECUTIVE_MISSES checkpoints
+		HighMissRate,       // miss rate stayed > thc_miss_above_which_abandon for thc_abandon_consecutive_misses checkpoints
 		THCIncreasesProbeCost            // cost-based decision rule: delta_t >= 0 (THC made probes slower)
 	};
 
@@ -213,44 +213,6 @@ public:
 	}
 
 // TODO most items below should be config params. Some might already be duplicates of config params
-
-	//! Number of probe-side rows each thread processes during a single collect phase.
-	//! Each collect phase has a fixed row budget. The number of collect phases is
-	//! controlled by the adaptive logic so that the row count across all collect phases
-	//! stays within thc_collect_budget_fraction of total probe rows.
-	static constexpr idx_t COLLECT_PHASE_PROBE_ROWS = 200000;
-
-	//! Initial length of the first READ_ONLY segment (in probe rows).
-	//! Subsequent READ_ONLY segments double in length (exponential backoff)
-	//! so that collection overhead decreases over time.
-	static constexpr idx_t READ_ONLY_BASE_ROWS = COLLECT_PHASE_PROBE_ROWS;
-
-	//! Default maximum fraction of total probe rows that may be spent in collect
-	//! phases. The runtime value is configurable per session through
-	//! `thc_collect_budget_fraction`.
-	static constexpr double DEFAULT_COLLECT_BUDGET_FRACTION = 0.02;
-
-	//! If the THC miss rate during a READ_ONLY phase is below this threshold,
-	//! we skip the next collect phase. The THC is already serving most probe
-	//! rows effectively and refreshing it would waste CPU time.
-	static constexpr double THC_MISS_SKIP_THRESHOLD = 0.10;
-
-	//! If the miss rate is above this threshold, the THC is clearly not
-	//! helping and we count it toward abandonment. Once we see this many
-	//! consecutive high-miss checkpoints, the thread permanently stops
-	//! probing the THC.
-	//! Set to 95% — the THC can still save net time even at 90%+ miss rates
-	//! because each hit completely avoids data_collection access (expensive
-	//! LLC misses). Only abandon when nearly every probe misses.
-	//! 1.00 means 100% (only abandon if all misses)
-	static constexpr double THC_ABANDON_MISS_THRESHOLD = 1.00;
-	//! Set to 1 — abandon at the very first checkpoint where miss rate exceeds
-	//! the threshold. This minimises the overhead of the initial COLLECT +
-	//! READ_ONLY phases for joins where the THC is clearly too small.
-	//! A value of 1 (rather than 2) is safe because the 95% threshold already
-	//! provides sufficient margin for joins that truly benefit from the THC
-	//! (those typically have 80-94% miss rates).
-	static constexpr idx_t THC_ABANDON_CONSECUTIVE_MISSES = 1;
 
 	struct CollectedEntry {
 		hash_t hash;
@@ -390,9 +352,10 @@ public:
 		//! c_grow_current. Written only inside `transition_mutex`.
 		idx_t current_collect_phase_number = 0;
 		//! Phase index of the most recently evaluated RO segment. Set at
-		//! every RO checkpoint, after computing the cycle's metrics. Read
-		//! at the NEXT RO checkpoint to compute c_eval_prev for the
-		//! shrinkage formula. Written only inside `transition_mutex`.
+		//! every RO checkpoint while the shrinkage check is enabled, after
+		//! computing the cycle's metrics. Read at the NEXT RO checkpoint to
+		//! compute c_eval_prev for the shrinkage formula. Written only
+		//! inside `transition_mutex`.
 		idx_t prev_eval_phase_number = 0;
 
 		// ---- Lifetime counters (never reset; just keep growing) ----
@@ -499,6 +462,10 @@ public:
 
 	//! Increment unique key counter during build (Build-phase approach of mu_s estimation)
 	void CountOneUniqueBuildKey();
+	//! Whether this join needs the build phase to populate build_unique_keys_cnt.
+	bool ShouldCountUniqueBuildKeys() const {
+		return thc_count_unique_build_keys;
+	}
 
 	idx_t Count() const {
 		return data_collection->Count();
@@ -531,6 +498,12 @@ public:
 	bool NullValuesAreEqual(idx_t col_idx) const {
 		return null_values_are_equal[col_idx];
 	}
+
+	//! Base-table names of the probe/build inputs, resolved by
+	//! PhysicalHashJoin::InitializeHashTable. Empty when the input is not a
+	//! plain base-table scan. Used only for DEBUG logging.
+	string probe_table_name;
+	string build_table_name;
 
 	ClientContext &context;
 	//! BufferManager
@@ -698,6 +671,10 @@ private:
 	double thc_collect_budget_fraction;
 	//! Miss rate threshold for skipping collect phases.
 	double thc_miss_below_which_skip_collect;
+	//! Miss rate threshold above which THC is abandoned.
+	double thc_miss_above_which_abandon;
+	//! Consecutive high-miss checkpoints required before abandoning THC.
+	idx_t thc_abandon_consecutive_misses;
 	//! Minimum HT capacity to activate the THC.
 	idx_t thc_activation_threshold;
 	//! Maximum THC load factor; inserts stop beyond this fill ratio.
@@ -706,10 +683,16 @@ private:
 	double thc_max_estimated_perc_hot;
 	//! Minimum coverage factor: THC is abandoned when thc_size_needed * this > thc_size.
 	double thc_min_coverage_of_build_side;
+	//! Toggle for the one-shot first-cycle multiplicity/hotness/coverage abandon check.
+	bool thc_enable_first_cycle_check;
 	//! Number of COLLECT+EVAL cycles that must complete before the cost-based
 	//! decision rule (drop/freeze/continue) activates. During warmup, every
 	//! evaluation checkpoint unconditionally proceeds to the next COLLECT phase.
 	idx_t thc_warmup_cycles;
+	//! Toggle for abandoning THC when current eval cost is no better than baseline.
+	bool thc_enable_delta_check;
+	//! Toggle for freezing THC when marginal gain is lower than collect cost.
+	bool thc_enable_shrinkage_check;
 	//! If the estimated probe multiplicity mu_{S->R} after the first
 	//! COLLECT+READ_ONLY cycle is below this threshold, THC is skipped
 	//! entirely and probing falls back to the regular hash table path.
@@ -729,6 +712,8 @@ private:
 	bool thc_log_mu_s = false;
 	//! Build-phase approach: count of unique keys inserted during build (Finalize). Atomic for parallel Finalize.
 	std::atomic<idx_t> build_unique_keys_cnt {0};
+	//! Avoid paying the build-count estimator cost when no enabled THC decision will use it.
+	bool thc_count_unique_build_keys = false;
 	//! Build phase approach result: mu_s computed after Finalize as Count() / build_unique_keys.
 	double mu_s_build_estimate = 0.0;
 	//! Hash table sampling approach: mu_s from post-finalize HT sampling.

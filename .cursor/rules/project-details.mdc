@@ -15,6 +15,43 @@ TieredHashCache copies the accessed rows to a new buffer, and we can hope that t
 
 THC tries to adaptively see if it's bringing any benefits. It sometimes stops the COLLECT phase for example. See details in the implementation.
 
+# Optimizer
+
+In this project, we compare the performance of four multi-joins implementations:
+- Case 1: DuckDB as-is.
+- Case 2: Forward-pass only of RPT+.
+- Case 3: Forward-pass only + a new data structured called THC. See src/include/duckdb/execution/tiered_hash_cache.hpp 
+- Case 4: Full RPT+ (forward and backward pass).
+
+The hope was that the THC could reproduce the performance of RPT+ since, on left-join queries, the backward pass only removes unproductive tuples from the hash table (that is, tuples to be entered in the hash table that would never get probed). All the backward pass brings is that the hash table is smaller, meaning it's faster to build and has better locality. 
+
+The hope was that THC could bring better locality by rearranging hot entries.
+
+To make sure we test on left-join queries, we modified the optimizer such that it simply enumerates different left-join orderings (started from a random root). This is to model the fact that the optimizer won't be always right, so in a way, any ordering could come out of it.
+View settings in /home/hugo/code/spy-local/scripts/measure/settings-common.sql.
+
+The benchmarks were ran using this script /home/hugo/code/spy-local/scripts/measure/run_rptplus_paper_benchmarks.sh
+
+
+# Results
+
+The experimental results are summarized here: /home/hugo/code/spy-local/results_summary.csv
+
+The corresponding files are in ../results-spy (most likely ~/code/results-spy).
+
+Each *.csv result file under results-spy/results/ is accompanied by a *_median.csv file. This can be useful to compare only median results across the four cases (DuckDB, forward-only, THC, RPT+).
+
+
+# Paper
+
+We want to write a paper to describe our findings, and understand better the role of the optimizer and of the backward pass and whether or not it can be avoided.
+
+
+# Documentation 
+
+RPT+ paper: https://yimingqiao.github.io/files/rpt_plus.pdf
+
+
 ## Build Command
 
 ```bash

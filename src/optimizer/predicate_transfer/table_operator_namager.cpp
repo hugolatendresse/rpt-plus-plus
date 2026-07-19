@@ -182,7 +182,7 @@ void TableOperatorManager::ExtractOperatorsInternal(LogicalOperator &plan, vecto
 	}
 	case LogicalOperatorType::LOGICAL_DUMMY_SCAN:
 	case LogicalOperatorType::LOGICAL_EXPRESSION_GET:
-	case LogicalOperatorType::LOGICAL_GET:
+	case LogicalOperatorType::LOGICAL_GET: // This is a scan
 	case LogicalOperatorType::LOGICAL_EMPTY_RESULT:
 	case LogicalOperatorType::LOGICAL_CHUNK_GET:
 		AddTableOperator(op);

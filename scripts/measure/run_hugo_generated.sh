@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+ #!/usr/bin/env bash
 # Run THC benchmark: generate data (optionally) then run the join query under perf (optionally).
 #
 # Usage:
@@ -236,6 +236,13 @@ drop_os_page_cache() {
     sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
 }
 
+# DuckDB resource failures are per-query benchmark misses for sweep CSVs: record
+# them explicitly and keep later cases/seeds running.
+is_recoverable_duckdb_resource_error() {
+    local error_file="$1"
+    grep -Eiq 'Out of Memory Error|failed to offload data block|max_temp_directory_size' "$error_file"
+}
+
 # Sweep mode: any time we span more than a single (case, seed) tuple,
 # or whenever the user explicitly asks for a CSV.
 SWEEPING=false
@@ -243,8 +250,8 @@ if $SWEEPING_SEEDS || [[ ${#CASES[@]} -gt 1 ]]; then
     SWEEPING=true
 fi
 if $SWEEPING && [[ -z "$CSV_PATH" ]]; then
-    mkdir -p "$REPO_ROOT/hugo_generated_results"
-    CSV_PATH="$REPO_ROOT/hugo_generated_results/hugo_generated_runtimes_$(date +%Y%m%d_%H%M%S).csv"
+    mkdir -p "$REPO_ROOT/results/hugo_generated"
+    CSV_PATH="$REPO_ROOT/results/hugo_generated/hugo_generated_runtimes_$(date +%Y%m%d_%H%M%S).csv"
 fi
 if [[ -n "$CSV_PATH" ]]; then
     mkdir -p "$(dirname "$CSV_PATH")"
@@ -383,6 +390,17 @@ for c in "${CASES[@]}"; do
         drop_os_page_cache
         if ! printf '%s\n' "$sql" | "${CMD[@]}" >"$tmp_out" 2>&1; then
             cat "$tmp_out" >&2
+            if is_recoverable_duckdb_resource_error "$tmp_out"; then
+                echo "Warning: query hit DuckDB OOM/temp-spill limit (case ${c}, seed ${seed_disp}); recording runtime 8888888" >&2
+                if [[ -n "$CSV_PATH" ]]; then
+                    for ((i = 1; i <= RUNS; i++)); do
+                        printf '%s,%s,%s,%s\n' "$DB_NAME" "$c" "$s" "8888888" >>"$CSV_PATH"
+                    done
+                fi
+                TOTAL_RUNS=$((TOTAL_RUNS + RUNS))
+                rm -f "$tmp_out"
+                continue
+            fi
             rm -f "$tmp_out"
             echo "Error: query failed (case ${c}, seed ${seed_disp})" >&2
             exit 1
@@ -411,8 +429,23 @@ for c in "${CASES[@]}"; do
         TOTAL_RUNS=$((TOTAL_RUNS + run_count))
         rm -f "$tmp_out"
         if $PROFILE; then
+            tmp_profile="$(mktemp)"
             drop_os_page_cache
-            build_profile_sql "$c" "$s" | "${CMD[@]}"
+            if ! build_profile_sql "$c" "$s" | "${CMD[@]}" >"$tmp_profile" 2>&1; then
+                cat "$tmp_profile" >&2
+                if is_recoverable_duckdb_resource_error "$tmp_profile"; then
+                    echo "Warning: profiling hit DuckDB OOM/temp-spill limit (case ${c}, seed ${seed_disp}); continuing sweep" >&2
+                    rm -f "$tmp_profile"
+                    continue
+                fi
+                rm -f "$tmp_profile"
+                echo "Error: profiling failed (case ${c}, seed ${seed_disp})" >&2
+                exit 1
+            fi
+            if [[ -s "$tmp_profile" ]]; then
+                cat "$tmp_profile"
+            fi
+            rm -f "$tmp_profile"
         fi
     done
 done
@@ -423,4 +456,11 @@ if [[ -n "$CSV_PATH" ]]; then
 fi
 if $PROFILE; then
     echo "DuckDB profiling output written to: $PROFILE_JSON"
+fi
+# Condense the runtime CSV to one (median) row per (query, case), matching the
+# postprocessing performed by the JOB, Appian, and TPC benchmark drivers.
+MEDIAN_SCRIPT="$SCRIPT_DIR/median_runtime_csv.py"
+if [[ -n "$CSV_PATH" ]] && [[ -f "$MEDIAN_SCRIPT" ]] && command -v python3 >/dev/null; then
+    python3 "$MEDIAN_SCRIPT" --csv "$CSV_PATH" || \
+        echo "warning: median_runtime_csv failed for $CSV_PATH" >&2
 fi

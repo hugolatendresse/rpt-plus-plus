@@ -16,7 +16,10 @@ CSV_PATH=""
 USE_PERF=false
 USE_DEBUG=false
 USE_DUCKDB_PROFILING=false
+CREATE_BOXPLOTS=false
 GENERATE_DATA=false
+DROP_OS_CACHE=false
+TIMEOUT_SECONDS=""
 PERF_EVENTS="cpu-cycles,instructions,bus_access,bus_access_rd,bus_access_wr,mem_access,l3d_cache,l3d_cache_refill,ll_cache_rd,ll_cache_miss_rd,branch-instructions,branch-misses,br_retired,br_mis_pred_retired"
 
 usage() {
@@ -37,7 +40,14 @@ Options:
                         under results/appian/profiling_<timestamp>/, plus an
                         augmented runtime CSV with per-join THC telemetry
                         columns Join1-*..JoinN-* (via thc_csv_postprocess.py).
+  --create-boxplots     Create runtime boxplot PNGs from the final runtime CSV
   --generate            Force (re)download of the Appian database
+  --drop-os-cache       Run sync + drop Linux page cache before each measured
+                        DuckDB query. Requires sudo and affects the whole host.
+  --timeout <seconds>   Per-query wall-clock cap; on timeout DuckDB is killed
+                        and the run records a runtime of 9999999 in the CSV.
+                        DuckDB OOM/temp-spill-limit failures record 8888888
+                        so long sweeps can continue.
   -h, --help            Show this help
 USAGE
 }
@@ -84,9 +94,21 @@ while [[ $# -gt 0 ]]; do
 		USE_DUCKDB_PROFILING=true
 		shift
 		;;
+	--create-boxplots)
+		CREATE_BOXPLOTS=true
+		shift
+		;;
 	--generate)
 		GENERATE_DATA=true
 		shift
+		;;
+	--drop-os-cache)
+		DROP_OS_CACHE=true
+		shift
+		;;
+	--timeout)
+		TIMEOUT_SECONDS="$2"
+		shift 2
 		;;
 	-h | --help)
 		usage
@@ -115,6 +137,12 @@ fi
 if [[ -z "$CASE" && -z "$CASES_LIST" ]]; then
 	echo "Error: --case or --cases is required." >&2
 	exit 1
+fi
+if [[ -n "$TIMEOUT_SECONDS" ]]; then
+	if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TIMEOUT_SECONDS" -lt 1 ]]; then
+		echo "Error: --timeout must be a positive integer number of seconds (got: $TIMEOUT_SECONDS)" >&2
+		exit 1
+	fi
 fi
 
 CASES=()
@@ -293,6 +321,10 @@ if $SWEEPING && [[ -z "$CSV_PATH" ]]; then
 	CSV_PATH="$REPO_ROOT/results/appian/appian_runtimes_$(date +%Y%m%d_%H%M%S).csv"
 fi
 if [[ -n "$CSV_PATH" ]]; then
+	case "$CSV_PATH" in
+	/*) ;;
+	*) CSV_PATH="$(pwd)/$CSV_PATH" ;;
+	esac
 	mkdir -p "$(dirname "$CSV_PATH")"
 	printf "query,case,seed,run_idx,runtime_seconds\n" >"$CSV_PATH"
 fi
@@ -315,38 +347,106 @@ build_sql() {
 	cat "$query_file"
 }
 
+drop_os_page_cache() {
+	if ! $DROP_OS_CACHE; then
+		return
+	fi
+	# Linux page cache is process-external, so a fresh DuckDB process is not
+	# enough for cold I/O measurements. This is opt-in because it requires sudo
+	# and disrupts every workload on the host.
+	echo "Dropping Linux page cache before measured DuckDB query..." >&2
+	sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+}
+
 # Match run_job.sh: cd into the benchmark dir so relative query paths resolve.
 cd "$REPO_ROOT/benchmark/appian_benchmarks"
+
+# DuckDB can reject a query because it cannot allocate memory or because the
+# configured temp directory limit prevents spilling. Treat those as per-query
+# benchmark misses, distinct from timeout misses, rather than losing a sweep.
+is_recoverable_duckdb_resource_error() {
+	local error_file="$1"
+	grep -Eiq 'Out of Memory Error|failed to offload data block|max_temp_directory_size' "$error_file"
+}
+
+process_group_alive() {
+	local pid="$1"
+	kill -0 -- "-$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null
+}
+
+terminate_process_group() {
+	local pid="$1"
+	local grace_seconds=5
+	local waited=0
+
+	kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+	while process_group_alive "$pid" && [[ "$waited" -lt "$grace_seconds" ]]; do
+		sleep 1
+		waited=$((waited + 1))
+	done
+	if process_group_alive "$pid"; then
+		kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+	fi
+}
 
 run_query() {
 	local case_num="$1"
 	local seed_val="$2"
 	local query_file="$3"
-	local sql time_file runtime
+	local sql sql_file error_file cmd_pid runtime rc timed_out start_time end_time deadline
 	sql="$(build_sql "$case_num" "$seed_val" "$query_file")"
-	time_file=$(mktemp)
+	sql_file=$(mktemp)
+	error_file=$(mktemp)
+	rc=0
+	timed_out=0
+	printf '%s\n' "$sql" >"$sql_file"
+	drop_os_page_cache
+	start_time=$(date +%s.%N)
+	# Run DuckDB in its own process group so timeout cleanup also kills any
+	# DuckDB child that would otherwise keep the database lock alive.
 	if $USE_PERF; then
-		if /usr/bin/time -f "%e" -o "$time_file" bash -c \
-			'printf "%s\n" "$1" | sudo perf stat -e "$2" -- "$3" "$4"' \
-			_ "$sql" "$PERF_EVENTS" "$DUCKDB_BIN" "$DB_FILE"; then
-			runtime=$(awk 'NR==1{print $1}' "$time_file")
-		else
-			rm -f "$time_file"
-			echo "Error: query ${query_file} failed (case ${case_num}, seed ${seed_val:-default})" >&2
-			exit 1
-		fi
+		setsid bash -c 'exec sudo perf stat -e "$1" -- "$2" "$3" < "$4" 2>"$5"' \
+			_ "$PERF_EVENTS" "$DUCKDB_BIN" "$DB_FILE" "$sql_file" "$error_file" &
 	else
-		if /usr/bin/time -f "%e" -o "$time_file" bash -c \
-			'printf "%s\n" "$1" | "$2" "$3"' \
-			_ "$sql" "$DUCKDB_BIN" "$DB_FILE"; then
-			runtime=$(awk 'NR==1{print $1}' "$time_file")
-		else
-			rm -f "$time_file"
-			echo "Error: query ${query_file} failed (case ${case_num}, seed ${seed_val:-default})" >&2
-			exit 1
-		fi
+		setsid bash -c 'exec "$1" "$2" < "$3" 2>"$4"' \
+			_ "$DUCKDB_BIN" "$DB_FILE" "$sql_file" "$error_file" &
 	fi
-	rm -f "$time_file"
+	cmd_pid=$!
+	if [[ -n "$TIMEOUT_SECONDS" ]]; then
+		deadline=$(($(date +%s) + TIMEOUT_SECONDS))
+		while process_group_alive "$cmd_pid"; do
+			if [[ "$(date +%s)" -ge "$deadline" ]]; then
+				timed_out=1
+				break
+			fi
+			sleep 0.1
+		done
+	fi
+	if [[ "$timed_out" -eq 1 ]]; then
+		terminate_process_group "$cmd_pid"
+		wait "$cmd_pid" 2>/dev/null || true
+		rc=124
+	else
+		wait "$cmd_pid" || rc=$?
+	fi
+	end_time=$(date +%s.%N)
+	if [[ -s "$error_file" ]]; then
+		cat "$error_file" >&2
+	fi
+	if [[ "$rc" -eq 0 ]]; then
+		runtime=$(awk -v s="$start_time" -v e="$end_time" 'BEGIN{printf "%.2f", e - s}')
+	elif [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+		echo "Warning: query ${query_file} timed out after ${TIMEOUT_SECONDS}s (case ${case_num}, seed ${seed_val:-default}); recording runtime 9999999" >&2
+		runtime=9999999
+	elif is_recoverable_duckdb_resource_error "$error_file"; then
+		echo "Warning: query ${query_file} hit DuckDB OOM/temp-spill limit (case ${case_num}, seed ${seed_val:-default}); recording runtime 8888888" >&2
+		runtime=8888888
+	else
+		rm -f "$sql_file" "$error_file"
+		echo "Error: query ${query_file} failed (case ${case_num}, seed ${seed_val:-default})" >&2
+		exit 1
+	fi
+	rm -f "$sql_file" "$error_file"
 	LAST_RUNTIME="$runtime"
 }
 
@@ -406,5 +506,23 @@ if $USE_DUCKDB_PROFILING; then
 	if [[ -n "$CSV_PATH" ]] && [[ -f "$POSTPROCESS" ]] && command -v python3 >/dev/null; then
 		python3 "$POSTPROCESS" --csv "$CSV_PATH" --profiling-dir "$PROFILING_DIR" --prefix appian || \
 			echo "warning: thc_csv_postprocess failed for $CSV_PATH" >&2
+	fi
+fi
+# Condense the runtime CSV to one (median) row per (query, case). Runs after the
+# THC postprocess above so the median CSV also carries any Join*-* columns.
+MEDIAN_SCRIPT="$SCRIPT_DIR/median_runtime_csv.py"
+if [[ -n "$CSV_PATH" ]] && [[ -f "$MEDIAN_SCRIPT" ]] && command -v python3 >/dev/null; then
+	python3 "$MEDIAN_SCRIPT" --csv "$CSV_PATH" || \
+		echo "warning: median_runtime_csv failed for $CSV_PATH" >&2
+fi
+BOXPLOT_SCRIPT="$SCRIPT_DIR/plot_runtime_boxplots.py"
+if $CREATE_BOXPLOTS; then
+	if [[ -z "$CSV_PATH" ]]; then
+		echo "warning: --create-boxplots requested, but no runtime CSV was written" >&2
+	elif [[ -f "$BOXPLOT_SCRIPT" ]] && command -v python3 >/dev/null; then
+		python3 "$BOXPLOT_SCRIPT" --csv "$CSV_PATH" || \
+			echo "warning: plot_runtime_boxplots failed for $CSV_PATH" >&2
+	else
+		echo "warning: cannot create boxplots because $BOXPLOT_SCRIPT or python3 is missing" >&2
 	fi
 fi
