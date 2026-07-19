@@ -1,0 +1,181 @@
+dataset_id,benchmark,suite,scale_factor,threads,comparison,query_count,queries_with_paired_success,query_geomean_of_median_speedup,query_median_of_median_speedup,queries_treatment_faster,queries_treatment_slower,queries_tied,queries_at_least_10pct_faster,queries_at_least_2x_faster
+appian_t1,appian,appian,,1,backward_vs_forward,8,8,1.00231049,1.00260586,6,2,0,0,0
+appian_t1,appian,appian,,1,forward_vs_baseline,8,8,1.00025015,0.995397818,2,5,1,0,0
+appian_t1,appian,appian,,1,full_vs_baseline,8,8,1.00496758,1.00026375,4,3,1,0,0
+appian_t1,appian,appian,,1,full_vs_thc,8,8,1.08396589,1.06108025,8,0,0,3,0
+appian_t1,appian,appian,,1,thc_vs_baseline,8,8,0.926321098,0.94309864,0,8,0,0,0
+appian_t1,appian,appian,,1,thc_vs_forward,8,8,0.925789896,0.94597449,0,8,0,0,0
+appian_t64,appian,appian,,64,backward_vs_forward,8,8,0.992501703,0.995225248,0,5,3,0,0
+appian_t64,appian,appian,,64,forward_vs_baseline,8,8,0.996690863,1,1,3,4,0,0
+appian_t64,appian,appian,,64,full_vs_baseline,8,8,0.995193753,0.996774194,0,4,4,0,0
+appian_t64,appian,appian,,64,full_vs_thc,8,8,1.17519242,1.12873131,8,0,0,6,0
+appian_t64,appian,appian,,64,thc_vs_baseline,8,8,0.845530604,0.878768513,0,8,0,0,0
+appian_t64,appian,appian,,64,thc_vs_forward,8,8,0.848733828,0.88568686,0,8,0,0,0
+appian_t8,appian,appian,,8,backward_vs_forward,8,8,0.991043662,1,0,1,7,0,0
+appian_t8,appian,appian,,8,forward_vs_baseline,8,8,1.00520094,1,1,1,6,0,0
+appian_t8,appian,appian,,8,full_vs_baseline,8,8,0.996198025,1,1,2,5,0,0
+appian_t8,appian,appian,,8,full_vs_thc,8,8,1.16033293,1.11422166,7,0,1,4,0
+appian_t8,appian,appian,,8,thc_vs_baseline,8,8,0.854495091,0.862148268,0,7,1,0,0
+appian_t8,appian,appian,,8,thc_vs_forward,8,8,0.850073903,0.877012501,0,7,1,0,0
+job_t1,job,job,,1,backward_vs_forward,113,113,1.0934825,1.05852319,86,7,20,39,0
+job_t1,job,job,,1,forward_vs_baseline,113,113,2.45287768,1.97727273,103,7,3,100,55
+job_t1,job,job,,1,full_vs_baseline,113,113,2.76562953,2.22533987,107,6,0,107,71
+job_t1,job,job,,1,full_vs_thc,113,113,1.09962464,1.05882353,93,2,18,44,0
+job_t1,job,job,,1,thc_vs_baseline,113,113,2.43762425,2,102,9,2,100,57
+job_t1,job,job,,1,thc_vs_forward,113,113,0.994728678,1,5,27,81,0,0
+job_t64,job,job,,64,backward_vs_forward,113,113,1.0048163,1,51,47,15,6,0
+job_t64,job,job,,64,forward_vs_baseline,113,113,1.56156332,1.43303571,109,2,2,95,23
+job_t64,job,job,,64,full_vs_baseline,113,113,1.58769534,1.5,109,4,0,97,25
+job_t64,job,job,,64,full_vs_thc,113,113,1.01110372,1.01282051,57,41,15,6,0
+job_t64,job,job,,64,thc_vs_baseline,113,113,1.55526905,1.42572464,106,5,2,94,24
+job_t64,job,job,,64,thc_vs_forward,113,113,0.994398934,1,5,12,96,0,0
+job_t8,job,job,,8,backward_vs_forward,113,113,1.07042864,1,23,0,90,22,0
+job_t8,job,job,,8,forward_vs_baseline,113,113,1.88950005,1.69264069,86,0,27,86,35
+job_t8,job,job,,8,full_vs_baseline,113,113,2.09239246,1.90909091,94,0,19,94,43
+job_t8,job,job,,8,full_vs_thc,113,113,1.07866241,1,26,0,87,25,0
+job_t8,job,job,,8,thc_vs_baseline,113,113,1.89188726,1.71428571,86,2,25,86,35
+job_t8,job,job,,8,thc_vs_forward,113,113,0.993688718,1,0,5,108,0,0
+tpcds_sf100_t1,TPCDS SF100,tpcds,100,1,backward_vs_forward,99,97,1.11303988,1.00125313,51,29,17,19,4
+tpcds_sf100_t1,TPCDS SF100,tpcds,100,1,forward_vs_baseline,99,97,1.38399801,1.32756643,67,27,3,58,10
+tpcds_sf100_t1,TPCDS SF100,tpcds,100,1,full_vs_baseline,99,97,1.54180771,1.50235604,73,22,2,68,18
+tpcds_sf100_t1,TPCDS SF100,tpcds,100,1,full_vs_thc,99,97,1.13548163,1.00340759,55,23,19,22,4
+tpcds_sf100_t1,TPCDS SF100,tpcds,100,1,thc_vs_baseline,99,97,1.35794868,1.28597797,65,30,2,55,10
+tpcds_sf100_t1,TPCDS SF100,tpcds,100,1,thc_vs_forward,99,97,0.981653006,1,16,40,41,0,0
+tpcds_sf100_t64,TPCDS SF100,tpcds,100,64,backward_vs_forward,99,98,0.971677892,1,9,38,51,4,1
+tpcds_sf100_t64,TPCDS SF100,tpcds,100,64,forward_vs_baseline,99,98,1.05271806,1,16,16,66,6,2
+tpcds_sf100_t64,TPCDS SF100,tpcds,100,64,full_vs_baseline,99,98,1.02661464,1,22,36,40,9,3
+tpcds_sf100_t64,TPCDS SF100,tpcds,100,64,full_vs_thc,99,98,0.987799617,1,15,41,42,6,1
+tpcds_sf100_t64,TPCDS SF100,tpcds,100,64,thc_vs_baseline,99,98,1.03483723,1,21,21,56,6,2
+tpcds_sf100_t64,TPCDS SF100,tpcds,100,64,thc_vs_forward,99,98,0.983249764,1,5,19,74,0,0
+tpcds_sf100_t8,TPCDS SF100,tpcds,100,8,backward_vs_forward,99,98,1.05534357,1,24,29,45,18,2
+tpcds_sf100_t8,TPCDS SF100,tpcds,100,8,forward_vs_baseline,99,98,1.27996423,1.17679901,60,15,23,54,8
+tpcds_sf100_t8,TPCDS SF100,tpcds,100,8,full_vs_baseline,99,98,1.35682971,1.31155885,70,17,11,61,11
+tpcds_sf100_t8,TPCDS SF100,tpcds,100,8,full_vs_thc,99,98,1.08543614,1,32,24,42,23,2
+tpcds_sf100_t8,TPCDS SF100,tpcds,100,8,thc_vs_baseline,99,98,1.24841075,1.2132967,58,23,17,53,8
+tpcds_sf100_t8,TPCDS SF100,tpcds,100,8,thc_vs_forward,99,98,0.972809266,1,4,21,73,0,0
+tpcds_sf10_t1,TPCDS SF10,tpcds,10,1,backward_vs_forward,99,98,1.08615026,1,32,16,50,20,1
+tpcds_sf10_t1,TPCDS SF10,tpcds,10,1,forward_vs_baseline,99,98,1.40744792,1.25609756,60,12,26,51,11
+tpcds_sf10_t1,TPCDS SF10,tpcds,10,1,full_vs_baseline,99,98,1.55421638,1.35908293,68,12,18,61,14
+tpcds_sf10_t1,TPCDS SF10,tpcds,10,1,full_vs_thc,99,98,1.09236763,1,33,14,51,21,1
+tpcds_sf10_t1,TPCDS SF10,tpcds,10,1,thc_vs_baseline,99,98,1.40138071,1.21044679,61,14,23,51,10
+tpcds_sf10_t1,TPCDS SF10,tpcds,10,1,thc_vs_forward,99,98,0.992910373,1,9,10,79,0,0
+tpcds_sf10_t64,TPCDS SF10,tpcds,10,64,backward_vs_forward,99,98,0.970774484,1,3,19,76,2,0
+tpcds_sf10_t64,TPCDS SF10,tpcds,10,64,forward_vs_baseline,99,98,1.04315563,1,11,5,82,10,2
+tpcds_sf10_t64,TPCDS SF10,tpcds,10,64,full_vs_baseline,99,98,1.02230625,1,14,21,63,11,3
+tpcds_sf10_t64,TPCDS SF10,tpcds,10,64,full_vs_thc,99,98,0.979722349,1,7,21,70,5,1
+tpcds_sf10_t64,TPCDS SF10,tpcds,10,64,thc_vs_baseline,99,98,1.03721092,1,13,9,76,11,2
+tpcds_sf10_t64,TPCDS SF10,tpcds,10,64,thc_vs_forward,99,98,0.993019047,1,2,5,91,0,0
+tpcds_sf10_t8,TPCDS SF10,tpcds,10,8,backward_vs_forward,99,98,1.01273219,1,11,8,79,7,1
+tpcds_sf10_t8,TPCDS SF10,tpcds,10,8,forward_vs_baseline,99,98,1.25824573,1,41,1,56,39,5
+tpcds_sf10_t8,TPCDS SF10,tpcds,10,8,full_vs_baseline,99,98,1.28738975,1,43,5,50,39,6
+tpcds_sf10_t8,TPCDS SF10,tpcds,10,8,full_vs_thc,99,98,1.02536696,1,11,8,79,8,1
+tpcds_sf10_t8,TPCDS SF10,tpcds,10,8,thc_vs_baseline,99,98,1.23723205,1,40,8,50,38,5
+tpcds_sf10_t8,TPCDS SF10,tpcds,10,8,thc_vs_forward,99,98,0.989007587,1,2,5,91,0,0
+tpcds_sf20_t1,TPCDS SF20,tpcds,20,1,backward_vs_forward,99,98,1.10571389,1,31,23,44,22,3
+tpcds_sf20_t1,TPCDS SF20,tpcds,20,1,forward_vs_baseline,99,98,1.34212668,1.26219512,58,19,21,53,9
+tpcds_sf20_t1,TPCDS SF20,tpcds,20,1,full_vs_baseline,99,98,1.4832042,1.43339757,69,20,9,64,15
+tpcds_sf20_t1,TPCDS SF20,tpcds,20,1,full_vs_thc,99,98,1.11362627,1,33,20,45,24,3
+tpcds_sf20_t1,TPCDS SF20,tpcds,20,1,thc_vs_baseline,99,98,1.33614629,1.26219512,59,22,17,54,9
+tpcds_sf20_t1,TPCDS SF20,tpcds,20,1,thc_vs_forward,99,98,0.991574547,1,3,16,79,0,0
+tpcds_sf20_t64,TPCDS SF20,tpcds,20,64,backward_vs_forward,99,98,0.935612958,0.98935864,2,51,45,1,0
+tpcds_sf20_t64,TPCDS SF20,tpcds,20,64,forward_vs_baseline,99,98,1.02687036,1,11,11,76,8,2
+tpcds_sf20_t64,TPCDS SF20,tpcds,20,64,full_vs_baseline,99,98,0.904180146,0.890347136,6,67,25,5,2
+tpcds_sf20_t64,TPCDS SF20,tpcds,20,64,full_vs_thc,99,98,0.968926153,1,4,33,61,3,1
+tpcds_sf20_t64,TPCDS SF20,tpcds,20,64,thc_vs_baseline,99,98,0.934220277,0.96875,6,56,36,4,1
+tpcds_sf20_t64,TPCDS SF20,tpcds,20,64,thc_vs_forward,99,98,0.989258181,1,0,13,85,0,0
+tpcds_sf20_t8,TPCDS SF20,tpcds,20,8,backward_vs_forward,99,98,1.02462055,1,15,18,65,11,1
+tpcds_sf20_t8,TPCDS SF20,tpcds,20,8,forward_vs_baseline,99,98,1.2539415,1,46,9,43,44,3
+tpcds_sf20_t8,TPCDS SF20,tpcds,20,8,full_vs_baseline,99,98,1.27925046,1.12685578,53,12,33,50,5
+tpcds_sf20_t8,TPCDS SF20,tpcds,20,8,full_vs_thc,99,98,1.03848423,1,17,18,63,13,1
+tpcds_sf20_t8,TPCDS SF20,tpcds,20,8,thc_vs_baseline,99,98,1.22670429,1,45,11,42,43,3
+tpcds_sf20_t8,TPCDS SF20,tpcds,20,8,thc_vs_forward,99,98,0.985480702,1,2,5,91,0,0
+tpcds_sf50_t1,TPCDS SF50,tpcds,50,1,backward_vs_forward,99,98,1.09824121,1,40,29,29,19,4
+tpcds_sf50_t1,TPCDS SF50,tpcds,50,1,forward_vs_baseline,99,98,1.39051702,1.37355188,64,23,11,56,11
+tpcds_sf50_t1,TPCDS SF50,tpcds,50,1,full_vs_baseline,99,98,1.53003409,1.47802118,71,21,6,62,14
+tpcds_sf50_t1,TPCDS SF50,tpcds,50,1,full_vs_thc,99,98,1.11805792,1,45,23,30,22,4
+tpcds_sf50_t1,TPCDS SF50,tpcds,50,1,thc_vs_baseline,99,98,1.37083699,1.37288931,63,28,7,55,11
+tpcds_sf50_t1,TPCDS SF50,tpcds,50,1,thc_vs_forward,99,98,0.986787971,1,5,33,60,0,0
+tpcds_sf50_t64,TPCDS SF50,tpcds,50,64,backward_vs_forward,99,98,0.970332462,1,6,39,53,3,1
+tpcds_sf50_t64,TPCDS SF50,tpcds,50,64,forward_vs_baseline,99,98,1.04263535,1,16,9,73,7,3
+tpcds_sf50_t64,TPCDS SF50,tpcds,50,64,full_vs_baseline,99,98,1.01000312,1,18,36,44,9,4
+tpcds_sf50_t64,TPCDS SF50,tpcds,50,64,full_vs_thc,99,98,0.973618093,1,6,41,51,3,1
+tpcds_sf50_t64,TPCDS SF50,tpcds,50,64,thc_vs_baseline,99,98,1.037965,1,17,19,62,7,3
+tpcds_sf50_t64,TPCDS SF50,tpcds,50,64,thc_vs_forward,99,98,0.995248073,1,3,5,90,0,0
+tpcds_sf50_t8,TPCDS SF50,tpcds,50,8,backward_vs_forward,99,98,1.03965447,1,20,21,57,11,2
+tpcds_sf50_t8,TPCDS SF50,tpcds,50,8,forward_vs_baseline,99,98,1.29935243,1.21537002,57,9,32,51,5
+tpcds_sf50_t8,TPCDS SF50,tpcds,50,8,full_vs_baseline,99,98,1.34869083,1.29973917,65,13,20,59,8
+tpcds_sf50_t8,TPCDS SF50,tpcds,50,8,full_vs_thc,99,98,1.0598942,1,24,21,53,15,2
+tpcds_sf50_t8,TPCDS SF50,tpcds,50,8,thc_vs_baseline,99,98,1.28078638,1.20368073,54,16,28,50,5
+tpcds_sf50_t8,TPCDS SF50,tpcds,50,8,thc_vs_forward,99,98,0.98357514,1,0,14,84,0,0
+tpch_sf100_t1,TPCH SF100,tpch,100,1,backward_vs_forward,22,22,1.1346985,1.00451939,16,5,1,7,1
+tpch_sf100_t1,TPCH SF100,tpch,100,1,forward_vs_baseline,22,22,1.23812019,1.00386865,14,8,0,8,3
+tpch_sf100_t1,TPCH SF100,tpch,100,1,full_vs_baseline,22,22,1.42332422,1.4282637,19,3,0,13,4
+tpch_sf100_t1,TPCH SF100,tpch,100,1,full_vs_thc,22,22,1.24896995,1.17464286,18,4,0,14,1
+tpch_sf100_t1,TPCH SF100,tpch,100,1,thc_vs_baseline,22,22,1.12760426,1.00053422,11,11,0,6,2
+tpch_sf100_t1,TPCH SF100,tpch,100,1,thc_vs_forward,22,22,0.910165044,0.969809232,5,17,0,0,0
+tpch_sf100_t64,TPCH SF100,tpch,100,64,backward_vs_forward,22,22,0.999176563,1,4,9,9,0,0
+tpch_sf100_t64,TPCH SF100,tpch,100,64,forward_vs_baseline,22,22,1.01620125,1,7,6,9,3,0
+tpch_sf100_t64,TPCH SF100,tpch,100,64,full_vs_baseline,22,22,1.01527923,1,8,8,6,1,0
+tpch_sf100_t64,TPCH SF100,tpch,100,64,full_vs_thc,22,22,1.05283114,1.01000019,13,7,2,4,0
+tpch_sf100_t64,TPCH SF100,tpch,100,64,thc_vs_baseline,22,22,0.964860718,0.999506903,8,11,3,3,0
+tpch_sf100_t64,TPCH SF100,tpch,100,64,thc_vs_forward,22,22,0.949348159,0.99789916,3,11,8,0,0
+tpch_sf100_t8,TPCH SF100,tpch,100,8,backward_vs_forward,22,22,1.11537409,1.01736164,11,3,8,7,0
+tpch_sf100_t8,TPCH SF100,tpch,100,8,forward_vs_baseline,22,22,1.26240375,1,9,4,9,9,2
+tpch_sf100_t8,TPCH SF100,tpch,100,8,full_vs_baseline,22,22,1.39951708,1.34692665,15,2,5,14,4
+tpch_sf100_t8,TPCH SF100,tpch,100,8,full_vs_thc,22,22,1.21817983,1.19735586,17,1,4,12,1
+tpch_sf100_t8,TPCH SF100,tpch,100,8,thc_vs_baseline,22,22,1.15706203,1,9,8,5,8,2
+tpch_sf100_t8,TPCH SF100,tpch,100,8,thc_vs_forward,22,22,0.917339739,0.970793272,1,13,8,0,0
+tpch_sf10_t1,TPCH SF10,tpch,10,1,backward_vs_forward,22,22,1.1430001,1.00764464,13,7,2,8,1
+tpch_sf10_t1,TPCH SF10,tpch,10,1,forward_vs_baseline,22,22,1.23660758,1.00383824,14,2,6,8,3
+tpch_sf10_t1,TPCH SF10,tpch,10,1,full_vs_baseline,22,22,1.4245531,1.34762722,17,3,2,13,4
+tpch_sf10_t1,TPCH SF10,tpch,10,1,full_vs_thc,22,22,1.19829905,1.12830092,16,2,4,11,1
+tpch_sf10_t1,TPCH SF10,tpch,10,1,thc_vs_baseline,22,22,1.18222738,1.00110867,11,6,5,7,3
+tpch_sf10_t1,TPCH SF10,tpch,10,1,thc_vs_forward,22,22,0.955918721,0.995024909,2,12,8,0,0
+tpch_sf10_t64,TPCH SF10,tpch,10,64,backward_vs_forward,22,22,0.989585425,1,5,7,10,0,0
+tpch_sf10_t64,TPCH SF10,tpch,10,64,forward_vs_baseline,22,22,1.00851267,1,5,3,14,1,0
+tpch_sf10_t64,TPCH SF10,tpch,10,64,full_vs_baseline,22,22,0.997352677,1,8,6,8,1,0
+tpch_sf10_t64,TPCH SF10,tpch,10,64,full_vs_thc,22,22,1.04094376,1.0115123,12,4,6,3,0
+tpch_sf10_t64,TPCH SF10,tpch,10,64,thc_vs_baseline,22,22,0.960578979,0.996031746,4,11,7,1,0
+tpch_sf10_t64,TPCH SF10,tpch,10,64,thc_vs_forward,22,22,0.959642658,0.996031746,0,11,11,0,0
+tpch_sf10_t8,TPCH SF10,tpch,10,8,backward_vs_forward,22,22,1.08826928,1,8,0,14,7,0
+tpch_sf10_t8,TPCH SF10,tpch,10,8,forward_vs_baseline,22,22,1.21692328,1,9,0,13,9,2
+tpch_sf10_t8,TPCH SF10,tpch,10,8,full_vs_baseline,22,22,1.31170733,1.25744417,12,0,10,12,4
+tpch_sf10_t8,TPCH SF10,tpch,10,8,full_vs_thc,22,22,1.1816732,1.16322702,13,0,9,13,0
+tpch_sf10_t8,TPCH SF10,tpch,10,8,thc_vs_baseline,22,22,1.11486986,1,8,6,8,8,1
+tpch_sf10_t8,TPCH SF10,tpch,10,8,thc_vs_forward,22,22,0.920761885,1,0,9,13,0,0
+tpch_sf20_t1,TPCH SF20,tpch,20,1,backward_vs_forward,22,22,1.13576487,1.00097656,11,10,1,7,1
+tpch_sf20_t1,TPCH SF20,tpch,20,1,forward_vs_baseline,22,22,1.2350788,1.00408379,19,3,0,8,3
+tpch_sf20_t1,TPCH SF20,tpch,20,1,full_vs_baseline,22,22,1.41412939,1.34264427,18,4,0,13,4
+tpch_sf20_t1,TPCH SF20,tpch,20,1,full_vs_thc,22,22,1.20506766,1.1502842,17,4,1,13,1
+tpch_sf20_t1,TPCH SF20,tpch,20,1,thc_vs_baseline,22,22,1.16536399,1.00336053,14,8,0,7,3
+tpch_sf20_t1,TPCH SF20,tpch,20,1,thc_vs_forward,22,22,0.943932458,0.988677295,2,16,4,0,0
+tpch_sf20_t64,TPCH SF20,tpch,20,64,backward_vs_forward,22,22,0.984251563,1,4,7,11,0,0
+tpch_sf20_t64,TPCH SF20,tpch,20,64,forward_vs_baseline,22,22,1.01263966,1,6,1,15,1,0
+tpch_sf20_t64,TPCH SF20,tpch,20,64,full_vs_baseline,22,22,0.998420279,1,9,4,9,1,0
+tpch_sf20_t64,TPCH SF20,tpch,20,64,full_vs_thc,22,22,1.03444807,1,9,6,7,3,0
+tpch_sf20_t64,TPCH SF20,tpch,20,64,thc_vs_baseline,22,22,0.964553026,1,6,9,7,1,0
+tpch_sf20_t64,TPCH SF20,tpch,20,64,thc_vs_forward,22,22,0.953971933,1,0,10,12,0,0
+tpch_sf20_t8,TPCH SF20,tpch,20,8,backward_vs_forward,22,22,1.10315319,1,9,1,12,8,0
+tpch_sf20_t8,TPCH SF20,tpch,20,8,forward_vs_baseline,22,22,1.24014098,1,10,0,12,9,2
+tpch_sf20_t8,TPCH SF20,tpch,20,8,full_vs_baseline,22,22,1.37350754,1.31177576,14,0,8,14,3
+tpch_sf20_t8,TPCH SF20,tpch,20,8,full_vs_thc,22,22,1.18717239,1.12986275,13,0,9,13,0
+tpch_sf20_t8,TPCH SF20,tpch,20,8,thc_vs_baseline,22,22,1.15929972,1,8,6,8,8,2
+tpch_sf20_t8,TPCH SF20,tpch,20,8,thc_vs_forward,22,22,0.935247313,1,0,10,12,0,0
+tpch_sf50_t1,TPCH SF50,tpch,50,1,backward_vs_forward,22,22,1.135502,1.00325199,12,10,0,7,1
+tpch_sf50_t1,TPCH SF50,tpch,50,1,forward_vs_baseline,22,22,1.23789239,1.00881461,19,3,0,8,3
+tpch_sf50_t1,TPCH SF50,tpch,50,1,full_vs_baseline,22,22,1.41984465,1.4075762,17,5,0,13,4
+tpch_sf50_t1,TPCH SF50,tpch,50,1,full_vs_thc,22,22,1.23356411,1.1598797,17,5,0,14,1
+tpch_sf50_t1,TPCH SF50,tpch,50,1,thc_vs_baseline,22,22,1.13840187,1.00219281,12,10,0,6,2
+tpch_sf50_t1,TPCH SF50,tpch,50,1,thc_vs_forward,22,22,0.920463289,0.968413619,2,19,1,0,0
+tpch_sf50_t64,TPCH SF50,tpch,50,64,backward_vs_forward,22,22,0.99385507,1,7,8,7,0,0
+tpch_sf50_t64,TPCH SF50,tpch,50,64,forward_vs_baseline,22,22,1.01341786,1,7,4,11,1,0
+tpch_sf50_t64,TPCH SF50,tpch,50,64,full_vs_baseline,22,22,1.00909771,1,8,6,8,2,0
+tpch_sf50_t64,TPCH SF50,tpch,50,64,full_vs_thc,22,22,1.04821763,1.00106383,11,8,3,5,0
+tpch_sf50_t64,TPCH SF50,tpch,50,64,thc_vs_baseline,22,22,0.966181764,1,9,9,4,1,0
+tpch_sf50_t64,TPCH SF50,tpch,50,64,thc_vs_forward,22,22,0.948564168,0.997916667,2,11,9,0,0
+tpch_sf50_t8,TPCH SF50,tpch,50,8,backward_vs_forward,22,22,1.10348161,1.01282051,11,2,9,7,0
+tpch_sf50_t8,TPCH SF50,tpch,50,8,forward_vs_baseline,22,22,1.25476194,1,9,1,12,9,2
+tpch_sf50_t8,TPCH SF50,tpch,50,8,full_vs_baseline,22,22,1.3934787,1.28125,14,0,8,14,5
+tpch_sf50_t8,TPCH SF50,tpch,50,8,full_vs_thc,22,22,1.20388966,1.1844419,16,1,5,12,1
+tpch_sf50_t8,TPCH SF50,tpch,50,8,thc_vs_baseline,22,22,1.15105736,1,8,8,6,8,2
+tpch_sf50_t8,TPCH SF50,tpch,50,8,thc_vs_forward,22,22,0.917725576,0.969768361,0,11,11,0,0
