@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <type_traits>
 
 namespace duckdb {
 
@@ -302,37 +303,44 @@ public:
 	//! TODO try to unroll/optimize this
 	template <bool SingleThreaded, typename EntryT>
 	idx_t InsertBatch(const EntryT *entries, idx_t count) {
+		return InsertBatchImpl(entries, count, std::integral_constant<bool, SingleThreaded> {});
+	}
+
+	template <typename EntryT>
+	idx_t InsertBatchImpl(const EntryT *entries, idx_t count, std::true_type) {
 		idx_t new_entries = 0;
 		idx_t i = 0;
-
-		idx_t free_slots;
-		if constexpr (SingleThreaded) {
-			free_slots = GetFreeSlotsUntilMaxFilledUnsafe();
-		} else {
-			free_slots = GetFreeSlotsUntilMaxFilled();
-		}
+		idx_t free_slots = GetFreeSlotsUntilMaxFilledUnsafe();
 
 		while (i < count && free_slots > 0) {
 			const idx_t batch_end = i + MinValue<idx_t>(free_slots, count - i);
 			for (; i < batch_end; i++) {
-				if constexpr (SingleThreaded) {
-					new_entries += static_cast<idx_t>(InsertUnsafe(entries[i].hash, entries[i].row_ptr));
-				} else {
-					new_entries += static_cast<idx_t>(InsertSafe(entries[i].hash, entries[i].row_ptr));
-				}
+				new_entries += static_cast<idx_t>(InsertUnsafe(entries[i].hash, entries[i].row_ptr));
 			}
 			if (i < count) {
-				if constexpr (SingleThreaded) {
-					free_slots = GetFreeSlotsUntilMaxFilledUnsafe();
-				} else {
-					free_slots = GetFreeSlotsUntilMaxFilled();
-				}
+				free_slots = GetFreeSlotsUntilMaxFilledUnsafe();
+			}
+		}
+		SyncCountersFromUnsafe();
+		return new_entries;
+	}
+
+	template <typename EntryT>
+	idx_t InsertBatchImpl(const EntryT *entries, idx_t count, std::false_type) {
+		idx_t new_entries = 0;
+		idx_t i = 0;
+		idx_t free_slots = GetFreeSlotsUntilMaxFilled();
+
+		while (i < count && free_slots > 0) {
+			const idx_t batch_end = i + MinValue<idx_t>(free_slots, count - i);
+			for (; i < batch_end; i++) {
+				new_entries += static_cast<idx_t>(InsertSafe(entries[i].hash, entries[i].row_ptr));
+			}
+			if (i < count) {
+				free_slots = GetFreeSlotsUntilMaxFilled();
 			}
 		}
 
-		if constexpr (SingleThreaded) {
-			SyncCountersFromUnsafe();
-		}
 		return new_entries;
 	}
 
